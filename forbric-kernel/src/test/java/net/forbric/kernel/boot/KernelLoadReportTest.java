@@ -242,10 +242,37 @@ class KernelLoadReportTest {
 		String report = java.nio.file.Files.readString(text);
 		// The reader troubleshooting alpha is the reader these notes are for; beta is named, and not called broken.
 		assertTrue(report.contains("one of its deferred setup tasks threw"), report);
-		assertTrue(report.contains("not confirmed") && report.contains("1/2 anchors resolve")
+		// This reads a file `writeTo` wrote, and that file is in the system language. The two wordings below are
+		// therefore accepted in either one, exactly as the dependant line above is: pinning the English words on
+		// a file the machine chose the language for is a test that passes in London and fails in Shenzhen
+		// (DependencyDialogTest states the rule where it explains the same trap). The wording itself is pinned
+		// by the render tests below, which name the language instead of asking the system for it.
+		assertTrue((report.contains("not confirmed") || report.contains("未确认"))
+				&& report.contains("1/2 anchors resolve")
 				&& report.contains("mixin:beta.mixins.json:beta.mixin.BetaMixin"), report);
-		assertEquals(1, report.lines().filter(line -> line.contains("partly did not run")).count(), report);
+		assertEquals(1, report.lines().filter(line -> line.contains("partly did not run")
+				|| line.contains("有一部分没有跑起来")).count(), report);
 		assertTrue(said.contains("1 mod(s) did not finish loading: alpha"), said);
+	}
+
+	@Test
+	void theSuspicionNotesAreWordedInBothLanguages() {
+		// The test above reads a file `writeTo` wrote, so it accepts the words in either language. What each
+		// language actually says is pinned here, where the language is named rather than asked for.
+		ModCatalog.publish(List.of(entry("alpha"), entry("beta")));
+		ModCatalog.mark("alpha", ModCatalog.Status.DEGRADED, "one of its deferred setup tasks threw");
+		net.forbric.api.CompatibilityFinding suspected = new net.forbric.api.CompatibilityFinding(
+				"mixin:beta.mixins.json:beta.mixin.BetaMixin", "beta", "Mixin beta.mixin.BetaMixin", "mixin:beta.mixins.json",
+				net.forbric.api.CompatibilityFinding.Confidence.SUSPECTED, true, "1/2 anchors resolve", List.of("anchor absent"));
+
+		String en = KernelLoadReport.render(false, ModCatalog.failures(), List.of(), List.of(suspected));
+		String zh = KernelLoadReport.render(true, ModCatalog.failures(), List.of(), List.of(suspected));
+
+		assertTrue(en.contains("Possible problems (not confirmed)"), en);
+		assertTrue(en.contains("partly did not run"), en);
+		assertTrue(zh.contains("可能的问题（未确认）"), zh);
+		assertTrue(zh.contains("有一部分没有跑起来"), zh);
+		assertFalse(zh.contains("not confirmed") || en.contains("未确认"), "the two renderings must not bleed into each other");
 	}
 
 	@Test
