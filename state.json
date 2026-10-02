@@ -1,0 +1,249 @@
+{
+ "issues": {
+  "1": {
+   "body": "f98054bb30af",
+   "state": "closed",
+   "title": "Incorrect handling of module \"continuity\"",
+   "updated_at": "2026-09-30T14:25:53Z"
+  },
+  "10": {
+   "body": "5b2da317a104",
+   "state": "closed",
+   "title": "Let a prepared clone run every base-game test on any platform",
+   "updated_at": "2026-10-02T05:53:28Z"
+  },
+  "11": {
+   "body": "ec009a6dc555",
+   "state": "closed",
+   "title": "Spelling mistake in README.md",
+   "updated_at": "2026-10-01T13:56:49Z"
+  },
+  "12": {
+   "body": "91284854b82c",
+   "state": "closed",
+   "title": "GGEZ",
+   "updated_at": "2026-10-01T13:28:54Z"
+  },
+  "13": {
+   "body": "1d83cf334dce",
+   "state": "closed",
+   "title": "\u600e\u4e48\u4f7f\u7528\uff1f",
+   "updated_at": "2026-10-01T15:27:31Z"
+  },
+  "14": {
+   "body": "dbee292c5bf8",
+   "state": "closed",
+   "title": "GGEZ",
+   "updated_at": "2026-10-01T14:35:27Z"
+  },
+  "15": {
+   "body": "4cbb7678d68e",
+   "state": "closed",
+   "title": "\u4e0d\u540cloader\u95f4\u7684bootstrap\u7279\u6027\u517c\u5bb9",
+   "updated_at": "2026-10-01T16:26:12Z"
+  },
+  "16": {
+   "body": "145cce4d6f1c",
+   "state": "closed",
+   "title": "\u7cbe\u5999\u80cc\u5305\u65e0\u6cd5\u6b63\u5e38\u6e32\u67d3",
+   "updated_at": "2026-10-02T04:16:34Z"
+  },
+  "17": {
+   "body": "00d73462c97f",
+   "state": "closed",
+   "title": "Correct the player README for 0.3.0 and add Chinese docs",
+   "updated_at": "2026-10-02T05:53:29Z"
+  },
+  "18": {
+   "body": "806cf9aebfeb",
+   "state": "open",
+   "title": "[Suggestion] Create a centralized Mod compatibility database",
+   "updated_at": "2026-10-02T12:06:39Z"
+  },
+  "19": {
+   "body": "0ad23478a6c3",
+   "state": "closed",
+   "title": "\u60f3\u786e\u8ba4\u4e00\u4e0b\uff0cREADME \u91cc\u8bf4\u7684\u201c\u539f\u751f\u540c\u65f6\u8fd0\u884c\u4e09\u4e2a Loader\u201d\uff0c\u5177\u4f53\u5230\u5e95\u662f\u4ec0\u4e48\u610f\u601d\uff1f",
+   "updated_at": "2026-10-01T16:23:38Z"
+  },
+  "2": {
+   "body": "6a04daf9f562",
+   "state": "closed",
+   "title": "Fix Continuity connected textures on the merged renderer",
+   "updated_at": "2026-10-02T05:53:30Z"
+  },
+  "20": {
+   "body": "26a1a0a49863",
+   "state": "closed",
+   "title": "README: say Forbric is one new loader, and what the 0.3.0 numbers test",
+   "updated_at": "2026-10-01T16:17:01Z"
+  },
+  "21": {
+   "body": "0cccfc2d495b",
+   "state": "closed",
+   "title": "Refuse wrong game files at install, and stop a broken install at boot with the reason in latest.log",
+   "updated_at": "2026-10-02T05:53:29Z"
+  },
+  "22": {
+   "body": "cbdfbbfb0980",
+   "state": "closed",
+   "title": "\u5173\u4e8eMOD\u6d4b\u8bd5\u95ee\u9898",
+   "updated_at": "2026-10-02T11:04:42Z"
+  },
+  "23": {
+   "body": "a23ee9678fae",
+   "state": "closed",
+   "title": "Restore vanilla lava/water reactions on placement, and run Scarpet's callbacks where Fabric runs them",
+   "updated_at": "2026-10-02T05:53:28Z"
+  },
+  "24": {
+   "body": "52563a9b559e",
+   "state": "open",
+   "title": "\u62ffai\u9010\u884creview\u4e86\u4e00\u4e0b",
+   "updated_at": "2026-10-02T12:22:06Z"
+  },
+  "25": {
+   "body": "5b43242653dd",
+   "state": "closed",
+   "title": "Merge the release line (v0.3.1-beta and later) into main",
+   "updated_at": "2026-10-02T05:53:29Z"
+  },
+  "26": {
+   "body": "9de828eacbcd",
+   "state": "closed",
+   "title": "\u5173\u4e8e\u6b64\u6a21\u7ec4\u4e89\u8bae\u95ee\u9898",
+   "updated_at": "2026-10-02T09:53:38Z"
+  },
+  "27": {
+   "body": "de04f8e58ab4",
+   "state": "closed",
+   "title": "Keep NeoForge's custom block-state models when fabric-api is installed",
+   "updated_at": "2026-10-02T05:53:29Z"
+  },
+  "28": {
+   "body": "d620e44e7d9d",
+   "state": "closed",
+   "title": "Return the computed value from MinecraftForge's ClearableLazy to a waiting thread",
+   "updated_at": "2026-10-02T05:53:28Z"
+  },
+  "29": {
+   "body": "baabde6999bd",
+   "state": "closed",
+   "title": "Let Do a Barrel Roll roll the camera, and keep C2ME's worldgen threading fixes",
+   "updated_at": "2026-10-02T05:53:28Z"
+  },
+  "3": {
+   "body": "042a5549ecc9",
+   "state": "closed",
+   "title": "Fix Carpet rules and Scarpet event injections on the merged game",
+   "updated_at": "2026-10-02T05:53:29Z"
+  },
+  "30": {
+   "body": "ffa394859da3",
+   "state": "closed",
+   "title": "GGs",
+   "updated_at": "2026-10-02T08:38:21Z"
+  },
+  "31": {
+   "body": "af2a3939a81d",
+   "state": "closed",
+   "title": "\u8ddf[UNOFFICIAL]TaCZ Refabricated\u4e0d\u517c\u5bb9",
+   "updated_at": "2026-10-02T11:07:16Z"
+  },
+  "33": {
+   "body": "83bd74f1c5f0",
+   "state": "closed",
+   "title": "Fix TaCZ's title-screen crash (#31) and three mixed-pack failures",
+   "updated_at": "2026-10-02T10:28:36Z"
+  },
+  "34": {
+   "body": "00cb5e681dea",
+   "state": "open",
+   "title": "Branding, TaCZ damage, and four mixed-pack crash fixes (Carpet, Forge mob attributes, WTHIT-Forge, LPLM)",
+   "updated_at": "2026-10-02T11:55:25Z"
+  },
+  "35": {
+   "body": "6f73cd9ea448",
+   "state": "open",
+   "title": "claude\u7528\u4e0d\u5b8c\u53ef\u4ee5\u9001\u6211",
+   "updated_at": "2026-10-02T12:23:31Z"
+  },
+  "36": {
+   "body": "da39a3ee5e6b",
+   "state": "open",
+   "title": "clean: \u522a\u9664\u72d7\u5c4e\u4ee3\u78bc",
+   "updated_at": "2026-10-02T12:24:19Z"
+  },
+  "4": {
+   "body": "600345487502",
+   "state": "closed",
+   "title": "\u8fdb\u5165\u5355\u4eba\u6e38\u620f\u4e00\u6bb5\u65f6\u95f4\u540e\u62a5\u7f51\u7edc\u534f\u8bae\u9519\u8bef/After playing the singleplayer game for a while, I get a network protocol error",
+   "updated_at": "2026-10-01T08:47:49Z"
+  },
+  "5": {
+   "body": "790fe72fe504",
+   "state": "closed",
+   "title": "\u592a\u4e71\u4e86",
+   "updated_at": "2026-10-01T09:41:47Z"
+  },
+  "6": {
+   "body": "5787b95dba3d",
+   "state": "closed",
+   "title": "Fix NeoForge multipart entities disconnecting the client on the merged game",
+   "updated_at": "2026-10-01T08:47:48Z"
+  },
+  "7": {
+   "body": "cdc94a8a89cb",
+   "state": "closed",
+   "title": "Add portable kernel development workflow and strict integration checks",
+   "updated_at": "2026-10-02T05:53:30Z"
+  },
+  "8": {
+   "body": "7444714c93a9",
+   "state": "closed",
+   "title": "Fix MinecraftForge multipart entities throwing on the merged game",
+   "updated_at": "2026-10-02T05:53:29Z"
+  },
+  "9": {
+   "body": "42d38cbe853a",
+   "state": "closed",
+   "title": "Fix Farmer's Delight's cooking pot failing to open on the merged game",
+   "updated_at": "2026-10-02T05:53:29Z"
+  }
+ },
+ "releases": {
+  "v0.1.0": {
+   "assets": [
+    "Forbric-Installer.bat",
+    "Forbric-Installer.command",
+    "forbric-kernel-installer-0.1.0.jar"
+   ],
+   "updated_at": "2026-09-11T14:35:04Z"
+  },
+  "v0.2.0": {
+   "assets": [
+    "Forbric-Installer.bat",
+    "Forbric-Installer.command",
+    "forbric-kernel-installer-0.2.0.jar"
+   ],
+   "updated_at": "2026-09-15T14:24:32Z"
+  },
+  "v0.3.0": {
+   "assets": [
+    "Forbric-Installer.bat",
+    "Forbric-Installer.command",
+    "forbric-kernel-installer-0.3.0.jar"
+   ],
+   "updated_at": "2026-09-28T03:38:04Z"
+  },
+  "v0.3.1-beta": {
+   "assets": [
+    "Forbric-Installer.bat",
+    "Forbric-Installer.command",
+    "forbric-kernel-installer-0.3.1-beta.jar",
+    "forbric-kernel-installer-0.3.1-beta.zip"
+   ],
+   "updated_at": "2026-09-30T15:58:17Z"
+  }
+ }
+}
