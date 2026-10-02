@@ -360,9 +360,46 @@ def main():
 
     state = load_state()
     known = state.setdefault("issues", {})
+    rel_state = state.setdefault("releases", {})
     mirrored = existing_mirrors()
     tags_done = existing_release_tags()
     dirty = False
+
+    # A watermark can be missing for something that is already archived: the first run after
+    # this script learned to keep watermarks, or a state branch that was lost. Adopt what
+    # upstream currently shows as the watermark rather than archiving it a second time -- a
+    # duplicate is not a backup, and the archive issue itself already records that the item
+    # was mirrored. Nothing is reported as a change here: there is no earlier watermark to
+    # have changed from, and inventing one would put a false event in the log.
+    for issue in upstream_issues:
+        n = str(issue["number"])
+        if issue["number"] in mirrored and n not in known:
+            print("adopting the archive of upstream #%d as its watermark" % issue["number"])
+            known[n] = fingerprint(issue)
+            dirty = True
+    for rel in upstream_releases:
+        if rel["tag_name"] in tags_done and rel["tag_name"] not in rel_state:
+            rel_state[rel["tag_name"]] = {
+                "assets": sorted(a["name"] for a in rel.get("assets", [])),
+                "updated_at": rel.get("updated_at")}
+            dirty = True
+    for number in sorted(mirrored):
+        n = str(number)
+        if n in known or number in by_number:
+            continue
+        # Archived, but upstream does not list it and no watermark exists: gone before the
+        # watermarks started. Say so once, without pretending to know when.
+        if api("/repos/%s/issues/%d" % (UPSTREAM_REPO, number)) is None:
+            post_event(mirrored[number], [
+                "**Upstream no longer serves this item: deleted, or moved somewhere a plain "
+                "lookup cannot follow.**",
+                "The copy above is the last snapshot taken while it still existed. "
+                "(Noted after this fork began keeping watermarks, so the date it went is "
+                "unknown.)",
+            ])
+            known[n] = {"state": None, "title": None, "body": None, "updated_at": None,
+                        "deleted": True}
+            dirty = True
 
     # ---- new issues, and any archive that has gone missing from this fork
     for issue in upstream_issues:
@@ -427,7 +464,6 @@ def main():
         dirty = True
 
     # ---- releases: mirrored already, but upstream can withdraw them
-    rel_state = state.setdefault("releases", {})
     upstream_tags = {r["tag_name"]: r for r in upstream_releases}
     for rel in upstream_releases:
         tag = rel["tag_name"]
