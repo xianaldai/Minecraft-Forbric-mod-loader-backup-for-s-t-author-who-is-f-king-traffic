@@ -593,7 +593,7 @@
    "updated_at": "2026-10-02T13:32:59Z"
   },
   "39": {
-   "body": "703b4b7cf3cf",
+   "body": "221305f7ad9c",
    "comments": {
     "5954390976": {
      "a": "MarbleGateKeeper",
@@ -609,11 +609,22 @@
      "a": "GongSunFangYun",
      "d": "859024518989",
      "t": "2026-10-02T14:42:23Z"
+    },
+    "5955002687": {
+     "a": "GongSunFangYun",
+     "d": "0a9d471bee27",
+     "t": "2026-10-02T14:50:26Z"
+    },
+    "5955082938": {
+     "a": "NitroFeSH",
+     "d": "5eb99d0e5815",
+     "t": "2026-10-02T14:54:44Z"
     }
    },
+   "comments_through": "2026-10-02T14:54:44Z",
    "state": "open",
    "title": "\u5bf9\u4e8e\u672c\u9879\u76ee\u7684\u4e2a\u4eba\u89c2\u70b9",
-   "updated_at": "2026-10-02T14:44:43Z"
+   "updated_at": "2026-10-02T14:54:44Z"
   },
   "4": {
    "body": "600345487502",
@@ -626,18 +637,24 @@
   "40": {
    "body": "ac96a4872f84",
    "comments": {},
-   "comments_through": "",
-   "state": "open",
+   "state": "closed",
    "title": "\u4fee\u590d\uff1a\u4e2d\u6587\u8bed\u8a00\u73af\u5883\u4e0b ./gradlew test \u5fc5\u7ea2\uff08KernelLoadReportTest \u628a\u82f1\u6587\u63aa\u8f9e\u65ad\u8a00\u5728\u7cfb\u7edf\u8bed\u8a00\u6587\u4ef6\u4e0a\uff09",
-   "updated_at": "2026-10-02T14:05:28Z"
+   "updated_at": "2026-10-02T14:47:52Z"
   },
   "41": {
    "body": "e8d19aa3c296",
    "comments": {},
+   "state": "closed",
+   "title": "\u8fd9\u73a9\u610f\u53ebAI\u5f04\u51fa\u6765\u6709\u5565\u7528\u5462",
+   "updated_at": "2026-10-02T14:49:44Z"
+  },
+  "42": {
+   "body": "ecbd73d46435",
+   "comments": {},
    "comments_through": "",
    "state": "open",
-   "title": "\u8fd9\u73a9\u610f\u53ebAI\u5f04\u51fa\u6765\u6709\u5565\u7528\u5462",
-   "updated_at": "2026-10-02T14:32:29Z"
+   "title": "Pin that load-report.txt follows the system language; let gate-m24 read it in Chinese",
+   "updated_at": "2026-10-02T14:55:32Z"
   },
   "5": {
    "body": "790fe72fe504",
