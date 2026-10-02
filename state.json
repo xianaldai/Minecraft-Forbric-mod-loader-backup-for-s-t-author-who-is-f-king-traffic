@@ -2,211 +2,626 @@
  "issues": {
   "1": {
    "body": "f98054bb30af",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Incorrect handling of module \"continuity\"",
    "updated_at": "2026-09-30T14:25:53Z"
   },
   "10": {
    "body": "5b2da317a104",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Let a prepared clone run every base-game test on any platform",
    "updated_at": "2026-10-02T05:53:28Z"
   },
   "11": {
    "body": "ec009a6dc555",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Spelling mistake in README.md",
    "updated_at": "2026-10-01T13:56:49Z"
   },
   "12": {
    "body": "91284854b82c",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "GGEZ",
    "updated_at": "2026-10-01T13:28:54Z"
   },
   "13": {
    "body": "1d83cf334dce",
+   "comments": {
+    "5934487286": {
+     "a": "Ray-T-r",
+     "d": "2d3d85333bdc",
+     "t": "2026-10-01T15:20:12Z"
+    }
+   },
+   "comments_through": "2026-10-01T15:20:12Z",
    "state": "closed",
    "title": "\u600e\u4e48\u4f7f\u7528\uff1f",
    "updated_at": "2026-10-01T15:27:31Z"
   },
   "14": {
    "body": "dbee292c5bf8",
+   "comments": {
+    "5932635419": {
+     "a": "Xuanji1220-cell",
+     "d": "34ddc753fc99",
+     "t": "2026-10-01T13:39:21Z"
+    },
+    "5932681445": {
+     "a": "Ray-T-r",
+     "d": "8489690e1a59",
+     "t": "2026-10-01T13:42:00Z"
+    },
+    "5933042668": {
+     "a": "Autotto",
+     "d": "57af9526680b",
+     "t": "2026-10-01T14:01:46Z"
+    },
+    "5933306084": {
+     "a": "crx97220130101-dotcom",
+     "d": "b67d8615afbc",
+     "t": "2026-10-01T14:15:39Z"
+    },
+    "5933354736": {
+     "a": "Xuanji1220-cell",
+     "d": "220d06373b6c",
+     "t": "2026-10-01T14:18:20Z"
+    },
+    "5933413515": {
+     "a": "Autotto",
+     "d": "38e2b9a6d703",
+     "t": "2026-10-01T14:21:33Z"
+    },
+    "5933451582": {
+     "a": "Autotto",
+     "d": "ec6a6b6c636b",
+     "t": "2026-10-01T14:23:43Z"
+    },
+    "5933459229": {
+     "a": "Xuanji1220-cell",
+     "d": "deae6877274c",
+     "t": "2026-10-01T14:24:10Z"
+    },
+    "5933481684": {
+     "a": "Autotto",
+     "d": "1e73892926cd",
+     "t": "2026-10-01T14:25:27Z"
+    },
+    "5933540147": {
+     "a": "Xuanji1220-cell",
+     "d": "97bcf941fcec",
+     "t": "2026-10-01T14:28:46Z"
+    },
+    "5933576835": {
+     "a": "Autotto",
+     "d": "0defe537393b",
+     "t": "2026-10-01T14:30:52Z"
+    }
+   },
+   "comments_through": "2026-10-01T14:30:52Z",
    "state": "closed",
    "title": "GGEZ",
    "updated_at": "2026-10-01T14:35:27Z"
   },
   "15": {
    "body": "4cbb7678d68e",
+   "comments": {
+    "5933163711": {
+     "a": "Autotto",
+     "d": "b001cc875db1",
+     "t": "2026-10-01T14:08:04Z"
+    },
+    "5933392876": {
+     "a": "Autotto",
+     "d": "126c36f869b8",
+     "t": "2026-10-01T14:20:23Z"
+    },
+    "5933902644": {
+     "a": "crx97220130101-dotcom",
+     "d": "5bae2ba35dbd",
+     "t": "2026-10-01T14:48:32Z"
+    },
+    "5933957977": {
+     "a": "Xuanji1220-cell",
+     "d": "8a0db43e0457",
+     "t": "2026-10-01T14:51:33Z"
+    },
+    "5934204117": {
+     "a": "3ea0x",
+     "d": "607e92f0869a",
+     "t": "2026-10-01T15:05:01Z"
+    }
+   },
+   "comments_through": "2026-10-01T15:05:01Z",
    "state": "closed",
    "title": "\u4e0d\u540cloader\u95f4\u7684bootstrap\u7279\u6027\u517c\u5bb9",
    "updated_at": "2026-10-01T16:26:12Z"
   },
   "16": {
    "body": "145cce4d6f1c",
+   "comments": {
+    "5935908688": {
+     "a": "Lorypage",
+     "d": "a295507784b3",
+     "t": "2026-10-01T16:35:37Z"
+    }
+   },
+   "comments_through": "2026-10-01T16:35:37Z",
    "state": "closed",
    "title": "\u7cbe\u5999\u80cc\u5305\u65e0\u6cd5\u6b63\u5e38\u6e32\u67d3",
    "updated_at": "2026-10-02T04:16:34Z"
   },
   "17": {
    "body": "00d73462c97f",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Correct the player README for 0.3.0 and add Chinese docs",
    "updated_at": "2026-10-02T05:53:29Z"
   },
   "18": {
    "body": "806cf9aebfeb",
+   "comments": {
+    "5951921494": {
+     "a": "StarWindv",
+     "d": "9a71a1ea7ec0",
+     "t": "2026-10-02T12:03:55Z"
+    },
+    "5951955142": {
+     "a": "EricDasha",
+     "d": "8690c9969e1b",
+     "t": "2026-10-02T12:06:39Z"
+    }
+   },
+   "comments_through": "2026-10-02T12:06:39Z",
    "state": "open",
    "title": "[Suggestion] Create a centralized Mod compatibility database",
    "updated_at": "2026-10-02T12:06:39Z"
   },
   "19": {
    "body": "0ad23478a6c3",
+   "comments": {
+    "5935503146": {
+     "a": "Ray-T-r",
+     "d": "60eb2b73b97c",
+     "t": "2026-10-01T16:12:54Z"
+    }
+   },
+   "comments_through": "2026-10-01T16:12:54Z",
    "state": "closed",
    "title": "\u60f3\u786e\u8ba4\u4e00\u4e0b\uff0cREADME \u91cc\u8bf4\u7684\u201c\u539f\u751f\u540c\u65f6\u8fd0\u884c\u4e09\u4e2a Loader\u201d\uff0c\u5177\u4f53\u5230\u5e95\u662f\u4ec0\u4e48\u610f\u601d\uff1f",
    "updated_at": "2026-10-01T16:23:38Z"
   },
   "2": {
    "body": "6a04daf9f562",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Fix Continuity connected textures on the merged renderer",
    "updated_at": "2026-10-02T05:53:30Z"
   },
   "20": {
    "body": "26a1a0a49863",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "README: say Forbric is one new loader, and what the 0.3.0 numbers test",
    "updated_at": "2026-10-01T16:17:01Z"
   },
   "21": {
    "body": "0cccfc2d495b",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Refuse wrong game files at install, and stop a broken install at boot with the reason in latest.log",
    "updated_at": "2026-10-02T05:53:29Z"
   },
   "22": {
    "body": "cbdfbbfb0980",
+   "comments": {
+    "5943563344": {
+     "a": "SakuraNiroku",
+     "d": "f6bdb8f7011e",
+     "t": "2026-10-02T00:56:36Z"
+    },
+    "5944870346": {
+     "a": "Chiloven945",
+     "d": "ee3feb0a8868",
+     "t": "2026-10-02T03:06:06Z"
+    },
+    "5944991062": {
+     "a": "Huangjiang-a11y",
+     "d": "f83525984361",
+     "t": "2026-10-02T03:18:54Z"
+    },
+    "5945018087": {
+     "a": "Lorypage",
+     "d": "9b9b0a4f4cc0",
+     "t": "2026-10-02T03:21:57Z"
+    },
+    "5945826838": {
+     "a": "Lorypage",
+     "d": "671f43ccfeef",
+     "t": "2026-10-02T04:53:11Z"
+    },
+    "5945951323": {
+     "a": "Ray-T-r",
+     "d": "80c833325d2f",
+     "t": "2026-10-02T05:07:29Z"
+    },
+    "5945971158": {
+     "a": "Lorypage",
+     "d": "9dff9693f1a0",
+     "t": "2026-10-02T05:09:37Z"
+    },
+    "5946006900": {
+     "a": "Ray-T-r",
+     "d": "6ace5928eddf",
+     "t": "2026-10-02T05:13:35Z"
+    },
+    "5946021951": {
+     "a": "Lorypage",
+     "d": "1639112591db",
+     "t": "2026-10-02T05:15:16Z"
+    },
+    "5946099477": {
+     "a": "Ray-T-r",
+     "d": "32b4094c5f51",
+     "t": "2026-10-02T05:23:50Z"
+    },
+    "5946122355": {
+     "a": "Lorypage",
+     "d": "066d2303e312",
+     "t": "2026-10-02T05:26:14Z"
+    },
+    "5946323863": {
+     "a": "Chiloven945",
+     "d": "b1cafeecefa8",
+     "t": "2026-10-02T05:47:43Z"
+    }
+   },
+   "comments_through": "2026-10-02T05:47:43Z",
    "state": "closed",
    "title": "\u5173\u4e8eMOD\u6d4b\u8bd5\u95ee\u9898",
    "updated_at": "2026-10-02T11:04:42Z"
   },
   "23": {
    "body": "a23ee9678fae",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Restore vanilla lava/water reactions on placement, and run Scarpet's callbacks where Fabric runs them",
    "updated_at": "2026-10-02T05:53:28Z"
   },
   "24": {
    "body": "52563a9b559e",
+   "comments": {
+    "5945587593": {
+     "a": "micheleqaq",
+     "d": "dfeaa64caa5e",
+     "t": "2026-10-02T04:25:58Z"
+    },
+    "5952247483": {
+     "a": "ksGachaAxie",
+     "d": "418599289319",
+     "t": "2026-10-02T12:22:06Z"
+    },
+    "5952617099": {
+     "a": "NitroFeSH",
+     "d": "ea0a914f904a",
+     "t": "2026-10-02T12:45:01Z"
+    }
+   },
+   "comments_through": "2026-10-02T12:45:01Z",
    "state": "open",
    "title": "\u62ffai\u9010\u884creview\u4e86\u4e00\u4e0b",
    "updated_at": "2026-10-02T12:45:01Z"
   },
   "25": {
    "body": "5b43242653dd",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Merge the release line (v0.3.1-beta and later) into main",
    "updated_at": "2026-10-02T05:53:29Z"
   },
   "26": {
    "body": "9de828eacbcd",
+   "comments": {
+    "5945473540": {
+     "a": "Lorypage",
+     "d": "d65f90a5225d",
+     "t": "2026-10-02T04:13:15Z"
+    },
+    "5945581126": {
+     "a": "micheleqaq",
+     "d": "c4ddf61c9a62",
+     "t": "2026-10-02T04:25:14Z"
+    },
+    "5945634853": {
+     "a": "Octopus058",
+     "d": "74fac4ab17e2",
+     "t": "2026-10-02T04:31:17Z"
+    },
+    "5945639036": {
+     "a": "Huangjiang-a11y",
+     "d": "4e78728fc41d",
+     "t": "2026-10-02T04:31:45Z"
+    },
+    "5945703416": {
+     "a": "Huangjiang-a11y",
+     "d": "9485b5cc1fff",
+     "t": "2026-10-02T04:39:05Z"
+    },
+    "5945729882": {
+     "a": "Octopus058",
+     "d": "95b2af24e8c3",
+     "t": "2026-10-02T04:42:10Z"
+    },
+    "5945749785": {
+     "a": "micheleqaq",
+     "d": "276a5ae5eb05",
+     "t": "2026-10-02T04:44:25Z"
+    },
+    "5945754417": {
+     "a": "Huangjiang-a11y",
+     "d": "1b5321e38577",
+     "t": "2026-10-02T04:44:57Z"
+    },
+    "5945775755": {
+     "a": "Lorypage",
+     "d": "3a8125df6ae4",
+     "t": "2026-10-02T04:47:18Z"
+    },
+    "5945790724": {
+     "a": "Lorypage",
+     "d": "a84e479e77b4",
+     "t": "2026-10-02T04:48:58Z"
+    },
+    "5945917109": {
+     "a": "Octopus058",
+     "d": "57b79ef57110",
+     "t": "2026-10-02T05:03:38Z"
+    },
+    "5945946616": {
+     "a": "Lorypage",
+     "d": "8758757e4f80",
+     "t": "2026-10-02T05:06:58Z"
+    },
+    "5946350874": {
+     "a": "Chiloven945",
+     "d": "a64a1556eaf7",
+     "t": "2026-10-02T05:50:45Z"
+    },
+    "5947183394": {
+     "a": "lu69159",
+     "d": "91c33e479c5f",
+     "t": "2026-10-02T07:11:46Z"
+    },
+    "5949665061": {
+     "a": "NitroFeSH",
+     "d": "ac86a26c292c",
+     "t": "2026-10-02T09:53:38Z"
+    }
+   },
+   "comments_through": "2026-10-02T09:53:38Z",
    "state": "closed",
    "title": "\u5173\u4e8e\u6b64\u6a21\u7ec4\u4e89\u8bae\u95ee\u9898",
    "updated_at": "2026-10-02T09:53:38Z"
   },
   "27": {
    "body": "de04f8e58ab4",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Keep NeoForge's custom block-state models when fabric-api is installed",
    "updated_at": "2026-10-02T05:53:29Z"
   },
   "28": {
    "body": "d620e44e7d9d",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Return the computed value from MinecraftForge's ClearableLazy to a waiting thread",
    "updated_at": "2026-10-02T05:53:28Z"
   },
   "29": {
    "body": "baabde6999bd",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Let Do a Barrel Roll roll the camera, and keep C2ME's worldgen threading fixes",
    "updated_at": "2026-10-02T05:53:28Z"
   },
   "3": {
    "body": "042a5549ecc9",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Fix Carpet rules and Scarpet event injections on the merged game",
    "updated_at": "2026-10-02T05:53:29Z"
   },
   "30": {
    "body": "ffa394859da3",
-   "comments_through": "2026-10-02T13:05:52Z",
+   "comments": {
+    "5948333450": {
+     "a": "Ray-T-r",
+     "d": "41771615c890",
+     "t": "2026-10-02T08:38:11Z"
+    },
+    "5952900784": {
+     "a": "yiyuyan",
+     "d": "45fab5861f18",
+     "t": "2026-10-02T12:59:14Z"
+    },
+    "5953040197": {
+     "a": "yiyuyan",
+     "d": "c58f28596707",
+     "t": "2026-10-02T13:05:52Z"
+    }
+   },
    "state": "closed",
    "title": "GGs",
    "updated_at": "2026-10-02T13:12:34Z"
   },
   "31": {
    "body": "af2a3939a81d",
+   "comments": {
+    "5948483616": {
+     "a": "Lorypage",
+     "d": "dc455348b665",
+     "t": "2026-10-02T08:48:57Z"
+    },
+    "5948664322": {
+     "a": "Xuanjiba-Ray",
+     "d": "9d18136a3830",
+     "t": "2026-10-02T08:59:44Z"
+    },
+    "5950270975": {
+     "a": "5hsk2",
+     "d": "c8cffadb9bf0",
+     "t": "2026-10-02T10:22:53Z"
+    },
+    "5950691498": {
+     "a": "Xuanjiba-Ray",
+     "d": "17596ccde4a3",
+     "t": "2026-10-02T10:46:40Z"
+    },
+    "5950846269": {
+     "a": "5hsk2",
+     "d": "5ee3e34a6a5d",
+     "t": "2026-10-02T10:55:11Z"
+    }
+   },
+   "comments_through": "2026-10-02T10:55:11Z",
    "state": "closed",
    "title": "\u8ddf[UNOFFICIAL]TaCZ Refabricated\u4e0d\u517c\u5bb9",
    "updated_at": "2026-10-02T11:07:16Z"
   },
   "33": {
    "body": "83bd74f1c5f0",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Fix TaCZ's title-screen crash (#31) and three mixed-pack failures",
    "updated_at": "2026-10-02T10:28:36Z"
   },
   "34": {
    "body": "00cb5e681dea",
+   "comments": {
+    "5952427899": {
+     "a": "Hun1Bk",
+     "d": "03dd5fedef17",
+     "t": "2026-10-02T12:34:06Z"
+    },
+    "5953431046": {
+     "a": "llsgllsg",
+     "d": "2a5a2ba7a864",
+     "t": "2026-10-02T13:29:17Z"
+    }
+   },
+   "comments_through": "2026-10-02T13:29:17Z",
    "state": "open",
    "title": "Branding, TaCZ damage, and four mixed-pack crash fixes (Carpet, Forge mob attributes, WTHIT-Forge, LPLM)",
-   "updated_at": "2026-10-02T12:40:45Z"
+   "updated_at": "2026-10-02T13:29:17Z"
   },
   "35": {
    "body": "6f73cd9ea448",
+   "comments": {
+    "5952198644": {
+     "a": "HereWakaba",
+     "d": "76d16fb4692e",
+     "t": "2026-10-02T12:19:37Z"
+    },
+    "5952267319": {
+     "a": "ksGachaAxie",
+     "d": "ae5f2e49d002",
+     "t": "2026-10-02T12:23:31Z"
+    },
+    "5952354823": {
+     "a": "SecretHacker123a",
+     "d": "31e42012bb6d",
+     "t": "2026-10-02T12:29:50Z"
+    }
+   },
+   "comments_through": "2026-10-02T12:29:50Z",
    "state": "closed",
    "title": "claude\u7528\u4e0d\u5b8c\u53ef\u4ee5\u9001\u6211",
    "updated_at": "2026-10-02T12:47:39Z"
   },
   "36": {
    "body": "da39a3ee5e6b",
+   "comments": {
+    "5953419516": {
+     "a": "llsgllsg",
+     "d": "08e5ba8ab2c1",
+     "t": "2026-10-02T13:28:40Z"
+    }
+   },
+   "comments_through": "2026-10-02T13:28:40Z",
    "state": "closed",
    "title": "clean: \u522a\u9664\u72d7\u5c4e\u4ee3\u78bc",
-   "updated_at": "2026-10-02T12:47:03Z"
+   "updated_at": "2026-10-02T13:28:40Z"
+  },
+  "37": {
+   "body": "da39a3ee5e6b",
+   "comments": {},
+   "comments_through": "",
+   "state": "open",
+   "title": "\u4fee\u590d\u4e86\u72d7\u5c4e\u4ee3\u7801\u7684\u95ee\u9898",
+   "updated_at": "2026-10-02T13:27:32Z"
   },
   "4": {
    "body": "600345487502",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "\u8fdb\u5165\u5355\u4eba\u6e38\u620f\u4e00\u6bb5\u65f6\u95f4\u540e\u62a5\u7f51\u7edc\u534f\u8bae\u9519\u8bef/After playing the singleplayer game for a while, I get a network protocol error",
    "updated_at": "2026-10-01T08:47:49Z"
   },
   "5": {
    "body": "790fe72fe504",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "\u592a\u4e71\u4e86",
    "updated_at": "2026-10-01T09:41:47Z"
   },
   "6": {
    "body": "5787b95dba3d",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Fix NeoForge multipart entities disconnecting the client on the merged game",
    "updated_at": "2026-10-01T08:47:48Z"
   },
   "7": {
    "body": "cdc94a8a89cb",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Add portable kernel development workflow and strict integration checks",
    "updated_at": "2026-10-02T05:53:30Z"
   },
   "8": {
    "body": "7444714c93a9",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Fix MinecraftForge multipart entities throwing on the merged game",
    "updated_at": "2026-10-02T05:53:29Z"
   },
   "9": {
    "body": "42d38cbe853a",
+   "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Fix Farmer's Delight's cooking pot failing to open on the merged game",
    "updated_at": "2026-10-02T05:53:29Z"
