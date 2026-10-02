@@ -80,11 +80,19 @@ jobs:
 
   # Verify the new portable entry point and packaged merge link gate on each OS, without game downloads.
   # Legacy Bash gate contracts remain covered by the Linux kernel job above.
+  #
+  # Fork-local change: upstream runs this matrix on ubuntu, windows and macos; this fork runs it on
+  # ubuntu and macos only. On windows the job never reached a test: actions/checkout died with
+  # "Filename too long" because the canary fixtures under forbric-kernel/canary/ sit deeper than the
+  # 260-character MAX_PATH permits once the checkout directory is that long, so the leg was red on
+  # every run while testing nothing. Fixing it would mean carrying a core.longpaths workaround in a
+  # file upstream also owns; dropping the leg is the smaller divergence. Add windows-latest back when
+  # the fixtures stop being that deep.
   development-tools:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
