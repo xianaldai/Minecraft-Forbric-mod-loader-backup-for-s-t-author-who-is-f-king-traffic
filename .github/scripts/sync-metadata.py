@@ -292,6 +292,24 @@ def mirror_issue(issue, comments):
     return create_issue(title, "\n".join(lines), labels)
 
 
+def upstream_tag_commit(tag):
+    """The commit an upstream tag names, peeling annotated tags. None if it is not a tag of
+    commits, or upstream will not say."""
+    ref = api("/repos/%s/git/ref/tags/%s"
+              % (UPSTREAM_REPO, urllib.parse.quote(tag, safe="")))
+    obj = (ref or {}).get("object") or {}
+    # A tag of a tag of a commit is legal, so peel in a loop -- bounded, so a cycle upstream
+    # somehow managed to create cannot hang the run forever.
+    for _ in range(5):
+        if obj.get("type") == "commit":
+            return obj.get("sha")
+        if obj.get("type") != "tag":
+            return None
+        parent = api("/repos/%s/git/tags/%s" % (UPSTREAM_REPO, obj.get("sha")))
+        obj = (parent or {}).get("object") or {}
+    return None
+
+
 def mirror_release(rel):
     """Re-publish one upstream release on this fork, assets included."""
     tag = rel["tag_name"]
@@ -301,13 +319,23 @@ def mirror_release(rel):
         "Assets re-uploaded verbatim."
         % (MARKER, rel["id"], UPSTREAM_REPO, UPSTREAM_REPO,
            urllib.parse.quote(tag, safe="")))
-    created = api("/repos/%s/releases" % FORK_REPO, method="POST", body={
+    payload = {
         "tag_name": tag,
         "name": rel.get("name") or tag,
         "body": body,
         "draft": False,
         "prerelease": bool(rel.get("prerelease")),
-    })
+    }
+    # Creating a release without this makes GitHub mint the tag at whatever this fork's
+    # default branch happens to point at that minute: a tag carrying an upstream release's
+    # name, marking a commit with nothing to do with that release. All four of the first
+    # mirrored releases came out that way. Named only when this fork actually has the commit,
+    # since GitHub rejects a target it cannot see, and a release with a merely wrong tag beats
+    # no release at all.
+    target = upstream_tag_commit(tag)
+    if target and api("/repos/%s/git/commit/%s" % (FORK_REPO, target)) is not None:
+        payload["target_commitish"] = target
+    created = api("/repos/%s/releases" % FORK_REPO, method="POST", body=payload)
     print("  mirrored release %s -> fork release id %d" % (tag, created["id"]))
     for asset in rel.get("assets", []):
         req = urllib.request.Request(asset["url"])
