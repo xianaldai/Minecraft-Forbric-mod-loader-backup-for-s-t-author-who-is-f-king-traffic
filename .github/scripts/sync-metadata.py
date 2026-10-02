@@ -9,9 +9,7 @@ issues or releases, the already-mirrored copy here stays exactly as it was.
 Shape of the mirror:
 
   * Releases -> real GitHub releases on this fork (same tag, title, notes,
-    asset files). The tags themselves arrive via the git sync. An upstream
-    edit to release notes after mirroring is NOT picked up: append-only
-    beats fresher-notes.
+    asset files). The tags themselves arrive via the git sync.
   * Issues   -> one read-only archive issue per upstream issue, titled with
     a [mirrored] prefix, body carrying the original author, text, state, and
     a link back to the source. Comments are folded into the same body so each
@@ -21,24 +19,36 @@ Shape of the mirror:
   * Labels   -> created on this fork when first needed, so mirrored issues
     can wear their original labels.
 
-State lives in the archive itself: before writing anything we list this
-repo's issues and releases looking for the mirror marker; whatever is already
-there tells us what upstream objects have been mirrored. No upstream changes
-and everything already mirrored makes a run a no-op.
+Once an archive exists, upstream's later behaviour is recorded rather than
+followed. Nothing already written is ever rewritten; instead a new comment is
+added to the archive issue:
 
-Things upstream can do that this deliberately does not chase:
-  * bodies and comments edited after the mirroring run (the archive keeps
-    the text as first seen)
-  * issues deleted upstream (our copy survives; GitHub itself makes deleted
-    ones unreachable)
-  * reactions, review threads, cross-reference events (kept out on purpose,
-    so each archive stays a single readable page)
+  * "closed" / "reopened" / state changes of any kind
+  * title edits and body edits (the new text is quoted in the comment)
+  * deletion, or a transfer that removes the issue from upstream's listing
+  * a release deleted upstream, or a release asset withdrawn
+
+That is the point of this repository: an upstream that quietly closes an
+uncomfortable issue, rewrites what it said, or deletes the thread leaves a
+trail here, next to the copy of what it said before.
+
+Two things are deliberately not chased: reactions and review-thread state
+(kept out so each archive stays a single readable page), and comment edits
+after the fact (a new comment is recorded; an edit of an old one only shows up
+as the issue's updated_at moving, which is noted without a diff).
+
+Watermarks for the change detection live in state.json on the mirror-state
+branch, not in this repository's history. A run that finds nothing new writes
+nothing at all.
 
 Limit: GitHub caps issue bodies at 65536 characters. An upstream issue with
 a very long comment thread would fail to archive; the run reports it and
 carries on (each archive attempt is independent).
 """
 
+import base64
+import datetime
+import hashlib
 import json
 import os
 import sys
@@ -51,7 +61,12 @@ FORK_REPO = os.environ["GITHUB_REPOSITORY"]
 TOKEN = os.environ["GH_TOKEN"]
 
 MARKER = "<!-- forbric-backup-mirror"
+EVENT = "<!-- forbric-backup-event"
 MIRROR_TAG = "[mirrored]"
+EVENTS_TITLE = MIRROR_TAG + " upstream metadata events"
+
+STATE_BRANCH = "mirror-state"
+STATE_PATH = "state.json"
 
 API = "https://api.github.com"
 UPLOADS = "https://uploads.github.com"
@@ -97,22 +112,115 @@ def paged(path, params=None):
         page += 1
 
 
+# ------------------------------------------------- watermarks for change detection
+
+def load_state():
+    """Read state.json from the mirror-state branch. Missing branch or file = {}."""
+    blob = api("/repos/%s/contents/%s" % (FORK_REPO, STATE_PATH), {"ref": STATE_BRANCH})
+    if not blob:
+        return {}
+    try:
+        return json.loads(base64.b64decode(blob["content"]).decode())
+    except Exception as e:
+        print("::warning::state.json on %s is unreadable (%s); starting from what the "
+              "archive itself already shows" % (STATE_BRANCH, e))
+        return {}
+
+
+def save_state(state):
+    """Write state.json back on the mirror-state branch, creating the branch if needed."""
+    existing = api("/repos/%s/contents/%s" % (FORK_REPO, STATE_PATH), {"ref": STATE_BRANCH})
+    payload = {
+        "message": "Mirror watermarks after the run at %s" % stamp(),
+        "content": base64.b64encode(
+            json.dumps(state, indent=1, sort_keys=True).encode()).decode(),
+        "branch": STATE_BRANCH,
+    }
+    if existing:
+        payload["sha"] = existing["sha"]
+    elif not api("/repos/%s/git/ref/heads/%s" % (FORK_REPO, STATE_BRANCH)):
+        # First run: branch the state off the default branch, then drop the file in.
+        default = api("/repos/%s" % FORK_REPO)["default_branch"]
+        head = api("/repos/%s/git/ref/heads/%s" % (FORK_REPO, default))
+        api("/repos/%s/git/refs" % FORK_REPO, method="POST",
+            body={"ref": "refs/heads/" + STATE_BRANCH, "sha": head["object"]["sha"]})
+    api("/repos/%s/contents/%s" % (FORK_REPO, STATE_PATH), method="PUT", body=payload)
+
+
+def stamp():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def digest(text):
+    return hashlib.sha1((text or "").encode()).hexdigest()[:12]
+
+
+def fingerprint(item):
+    return {
+        "state": item.get("state"),
+        "title": item.get("title"),
+        "body": digest(item.get("body")),
+        "updated_at": item.get("updated_at"),
+    }
+
+
+def changes_between(old, new):
+    """What upstream did to an item we already archived, in words."""
+    out = []
+    if old.get("state") != new.get("state"):
+        out.append("state changed: %s -> %s" % (old.get("state"), new.get("state")))
+    if old.get("title") != new.get("title"):
+        out.append("title edited\n\n  was: %s\n  now: %s"
+                   % (old.get("title"), new.get("title")))
+    if old.get("body") != new.get("body"):
+        out.append("body edited; the text upstream shows now is quoted below")
+    return out
+
+
+# ------------------------------------------------- what the archive already holds
+
 def existing_mirrors():
-    """The archive is the database: scan this fork's issues for mirror markers."""
-    seen = set()
+    """Scan this fork's issues for mirror markers -> {upstream number: fork issue number}."""
+    seen = {}
     for issue in paged("/repos/%s/issues" % FORK_REPO, {"state": "all"}):
         body = issue.get("body") or ""
         if MARKER in body and issue["title"].startswith(MIRROR_TAG):
             for line in body.splitlines():
                 if line.startswith("Upstream number: "):
-                    seen.add(int(line.rsplit(" ", 1)[-1]))
+                    seen[int(line.rsplit(" ", 1)[-1])] = issue["number"]
                     break
     return seen
 
 
 def existing_release_tags():
-    return {r["tag_name"] for r in paged("/repos/%s/releases" % FORK_REPO)}
+    return {r["tag_name"]: r for r in paged("/repos/%s/releases" % FORK_REPO)}
 
+
+def events_issue():
+    """The one issue that collects events with no archive of their own (releases)."""
+    for issue in paged("/repos/%s/issues" % FORK_REPO, {"state": "all"}):
+        if issue["title"] == EVENTS_TITLE:
+            return issue["number"]
+    created = api("/repos/%s/issues" % FORK_REPO, method="POST", body={
+        "title": EVENTS_TITLE,
+        "body": "%s events %s -->\n\nAppend-only log of things that happened upstream to "
+                "content this fork mirrors outside of a single issue: a release deleted, an "
+                "asset withdrawn. New entries are comments; nothing here is ever rewritten.\n"
+                % (MARKER, UPSTREAM_REPO),
+    })
+    print("  opened the upstream events issue #%d" % created["number"])
+    return created["number"]
+
+
+def post_event(issue_number, lines):
+    """Append one event to an archive issue. Never edits what is already there."""
+    body = "%s at %s -->\n\n%s" % (EVENT, stamp(), "\n\n".join(lines))
+    api("/repos/%s/issues/%d/comments" % (FORK_REPO, issue_number), method="POST",
+        body={"body": body})
+    print("    recorded an upstream change on #%d" % issue_number)
+
+
+# ------------------------------------------------- writers
 
 def create_issue(title, body, labels):
     created = api("/repos/%s/issues" % FORK_REPO, method="POST",
@@ -221,14 +329,15 @@ def mirror_release(rel):
     return created
 
 
+# ------------------------------------------------- main
+
 def main():
     # A 404 from the repo endpoint means upstream is gone, renamed or private. Say that once
     # instead of the misleading "0 issues, 0 releases, nothing new to mirror" the empty
     # listings below would otherwise print. The git job is where the alert issue is raised;
     # this job only stays quiet and honest.
     if api("/repos/%s" % UPSTREAM_REPO) is None:
-        print("::warning::upstream %s is not visible; nothing to mirror"
-              % UPSTREAM_REPO)
+        print("::warning::upstream %s is not visible; nothing to mirror" % UPSTREAM_REPO)
         return 0
 
     # The issues endpoint returns PRs too; both get archived. Pull requests are ALSO
@@ -249,33 +358,119 @@ def main():
     print("sources: issues endpoint %d, pulls endpoint %d, merged %d"
           % (len(raw_issues), len(pulls), len(upstream_issues)))
 
-    done = existing_mirrors()
+    state = load_state()
+    known = state.setdefault("issues", {})
+    mirrored = existing_mirrors()
     tags_done = existing_release_tags()
+    dirty = False
 
-    new_issues = [i for i in upstream_issues if i["number"] not in done]
-    new_rels = [r for r in upstream_releases if r["tag_name"] not in tags_done]
-
-    print("upstream: %d issues/PRs, %d releases; fork already mirrors %d issues"
-          " and %d release tags"
-          % (len(upstream_issues), len(upstream_releases), len(done), len(tags_done)))
-
-    for rel in new_rels:
-        print("mirroring release %s" % rel["tag_name"])
-        try:
-            mirror_release(rel)
-        except Exception as e:
-            print("::warning::release %s failed: %s" % (rel["tag_name"], e))
-
-    for issue in sorted(new_issues, key=lambda i: i["number"]):
+    # ---- new issues, and any archive that has gone missing from this fork
+    for issue in upstream_issues:
+        n = str(issue["number"])
+        if n in known:
+            if issue["number"] in mirrored:
+                continue
+            # The archive issue itself is gone from this fork. Re-archive rather than keep a
+            # watermark pointing at nothing.
+            print("archive for upstream #%d is gone from this fork; re-archiving" % issue["number"])
         print("mirroring issue #%d" % issue["number"])
         comments = list(paged("/repos/%s/issues/%d/comments"
                               % (UPSTREAM_REPO, issue["number"])))
         try:
             mirror_issue(issue, comments)
         except Exception as e:
+            # Do not record a watermark for something that was not archived.
             print("::warning::issue #%d failed: %s" % (issue["number"], e))
+            continue
+        known[n] = fingerprint(issue)
+        dirty = True
 
-    if not new_issues and not new_rels:
+    # ---- what upstream did to what we already archived
+    for n_str, old in sorted(known.items(), key=lambda kv: int(kv[0])):
+        number = int(n_str)
+        mirror_number = mirrored.get(number)
+        if mirror_number is None:
+            continue
+        now = by_number.get(number)
+        if now is None:
+            # Gone from the listing. Confirm directly before calling it deleted: the listing
+            # has been seen to drop items for some tokens, and a false "deleted" here would be
+            # exactly the kind of lie this archive exists to avoid.
+            if api("/repos/%s/issues/%d" % (UPSTREAM_REPO, number)) is None and \
+               not (old.get("deleted")):
+                archive_url = "https://github.com/%s/issues/%d" % (UPSTREAM_REPO, number)
+                post_event(mirror_number, [
+                    "**Upstream no longer serves this item: deleted, or moved somewhere a "
+                    "plain lookup cannot follow.**",
+                    "The copy above is the last snapshot taken while it still existed. "
+                    "Source: %s" % archive_url,
+                ])
+                old["deleted"] = True
+                dirty = True
+            continue
+        if now.get("updated_at") == old.get("updated_at"):
+            continue
+        new = fingerprint(now)
+        described = changes_between(old, new)
+        if described:
+            lines = ["**Upstream changed this item after it was archived** "
+                     "(%s):" % now.get("updated_at"), "- " + "\n- ".join(described)]
+            if old.get("body") != new.get("body"):
+                lines += ["", "Upstream's current text:", "",
+                          "````", now.get("body") or "_(no body)_", "````"]
+            try:
+                post_event(mirror_number, lines)
+            except Exception as e:
+                print("::warning::could not record the change to #%d: %s" % (number, e))
+                continue
+        known[n_str] = new
+        dirty = True
+
+    # ---- releases: mirrored already, but upstream can withdraw them
+    rel_state = state.setdefault("releases", {})
+    upstream_tags = {r["tag_name"]: r for r in upstream_releases}
+    for rel in upstream_releases:
+        tag = rel["tag_name"]
+        assets = sorted(a["name"] for a in rel.get("assets", []))
+        now_fp = {"assets": assets, "updated_at": rel.get("updated_at")}
+        if tag in tags_done:
+            # Asset withdrawal is the quiet way to unpublish a download.
+            had = rel_state.get(tag, {}).get("assets")
+            if had is not None and set(had) != set(assets):
+                events = events_issue()
+                post_event(events, [
+                    "**Assets changed on release `%s`**" % tag,
+                    "was: %s" % (", ".join(had) or "none"),
+                    "now: %s" % (", ".join(assets) or "none"),
+                    "The fork's copy of the release still holds what it was given.",
+                ])
+            if rel_state.get(tag) != now_fp:
+                rel_state[tag] = now_fp
+                dirty = True
+        else:
+            print("mirroring release %s" % tag)
+            try:
+                mirror_release(rel)
+            except Exception as e:
+                print("::warning::release %s failed: %s" % (tag, e))
+                continue
+            rel_state[tag] = now_fp
+            dirty = True
+
+    for tag in list(rel_state):
+        if tag not in upstream_tags and not rel_state[tag].get("deleted"):
+            events = events_issue()
+            post_event(events, [
+                "**Upstream release `%s` is gone** (deleted, or turned back into a draft)."
+                % tag,
+                "This fork keeps its own copy of that release and its assets.",
+            ])
+            rel_state[tag]["deleted"] = True
+            dirty = True
+
+    if dirty:
+        save_state(state)
+    else:
         print("nothing new to mirror")
     return 0
 
