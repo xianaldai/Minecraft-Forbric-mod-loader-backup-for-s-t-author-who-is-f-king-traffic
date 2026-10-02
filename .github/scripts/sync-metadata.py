@@ -25,6 +25,8 @@ added to the archive issue:
 
   * "closed" / "reopened" / state changes of any kind
   * title edits and body edits (the new text is quoted in the comment)
+  * comments upstream added after the archive was taken (quoted in full, so the thread keeps
+    growing here even though the archived body only ever shows it as far as it ran)
   * deletion, or a transfer that removes the issue from upstream's listing
   * a release deleted upstream, or a release asset withdrawn
 
@@ -33,9 +35,10 @@ uncomfortable issue, rewrites what it said, or deletes the thread leaves a
 trail here, next to the copy of what it said before.
 
 Two things are deliberately not chased: reactions and review-thread state
-(kept out so each archive stays a single readable page), and comment edits
-after the fact (a new comment is recorded; an edit of an old one only shows up
-as the issue's updated_at moving, which is noted without a diff).
+(kept out so each archive stays a single readable page), and changes to a
+comment's own text after it was written. A new comment is recorded; an edit of
+an old one, or an old one deleted, moves the issue's updated_at and leaves
+nothing else behind, so it shows up only as a watermark advancing.
 
 Watermarks for the change detection live in state.json on the mirror-state
 branch, not in this repository's history. A run that finds nothing new writes
@@ -51,6 +54,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -175,6 +179,23 @@ def changes_between(old, new):
     if old.get("body") != new.get("body"):
         out.append("body edited; the text upstream shows now is quoted below")
     return out
+
+
+# The way this script writes a comment into an archive body. Used to read an archive back and
+# find how far its thread runs, for archives taken before comments were tracked.
+COMMENT_STAMP = re.compile(r"\*\*@[^*]+\*\* commented on (\S+):")
+
+
+def archived_comment_through(mirror_number):
+    """The newest comment timestamp already rendered into an archived body, or "" when that
+    archive holds no comments at all. None when the body could not be read -- the caller then
+    leaves the watermark alone rather than guess a baseline and re-post comments already
+    visible above."""
+    issue = api("/repos/%s/issues/%d" % (FORK_REPO, mirror_number))
+    if issue is None:
+        return None
+    stamps = COMMENT_STAMP.findall(issue.get("body") or "")
+    return max(stamps) if stamps else ""
 
 
 # ------------------------------------------------- what the archive already holds
@@ -448,6 +469,9 @@ def main():
             print("::warning::issue #%d failed: %s" % (issue["number"], e))
             continue
         known[n] = fingerprint(issue)
+        # The body just written carries the thread as far as it runs today, so this is where a
+        # later run starts recording comments from.
+        known[n]["comments_through"] = max((c["created_at"] for c in comments), default="")
         dirty = True
 
     # ---- what upstream did to what we already archived
@@ -477,12 +501,41 @@ def main():
             continue
         new = fingerprint(now)
         described = changes_between(old, new)
-        if described:
-            lines = ["**Upstream changed this item after it was archived** "
-                     "(%s):" % now.get("updated_at"), "- " + "\n- ".join(described)]
-            if old.get("body") != new.get("body"):
-                lines += ["", "Upstream's current text:", "",
-                          "````", now.get("body") or "_(no body)_", "````"]
+
+        # Comments upstream posted after this fork archived the item. The archived body shows
+        # the thread only as far as it ran when the archive was taken, and nothing else here
+        # would ever hold the rest of it. Only items whose updated_at moved are asked for their
+        # comments, which is every item a comment could have been added to.
+        through = old.get("comments_through")
+        if through is None:
+            through = archived_comment_through(mirror_number)
+            if through is None:
+                continue  # unreadable archive body; leave the watermark and retry next run
+            new["comments_through"] = through
+            dirty = True
+        thread = list(paged("/repos/%s/issues/%d/comments" % (UPSTREAM_REPO, number)))
+        added = [c for c in thread if c["created_at"] > through]
+        newest = max((c["created_at"] for c in thread), default="")
+        if newest > through:
+            new["comments_through"] = newest
+            dirty = True
+
+        if described or added:
+            lines = []
+            if described:
+                lines += ["**Upstream changed this item after it was archived** "
+                          "(%s):" % now.get("updated_at"), "- " + "\n- ".join(described)]
+                if old.get("body") != new.get("body"):
+                    lines += ["", "Upstream's current text:", "",
+                              "````", now.get("body") or "_(no body)_", "````"]
+            if added:
+                lines += ["", "**%d comment%s upstream added after this fork archived the "
+                          "item**, quoted in full:" % (len(added),
+                                                       "" if len(added) == 1 else "s")]
+                for comment in added:
+                    lines += ["", "---", "**@%s** commented on %s:"
+                              % (comment["user"]["login"], comment["created_at"]), "",
+                              "````", comment["body"] or "_(no body)_", "````"]
             try:
                 post_event(mirror_number, lines)
             except Exception as e:
