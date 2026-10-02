@@ -106,6 +106,7 @@
     }
    },
    "comments_through": "2026-10-01T14:30:52Z",
+   "deleted": true,
    "state": "closed",
    "title": "GGEZ",
    "updated_at": "2026-10-01T14:35:27Z"
@@ -500,10 +501,9 @@
      "t": "2026-10-02T10:55:11Z"
     }
    },
-   "comments_through": "2026-10-02T10:55:11Z",
    "state": "closed",
    "title": "\u8ddf[UNOFFICIAL]TaCZ Refabricated\u4e0d\u517c\u5bb9",
-   "updated_at": "2026-10-02T11:07:16Z"
+   "updated_at": "2026-10-02T14:04:34Z"
   },
   "33": {
    "body": "83bd74f1c5f0",
@@ -527,10 +527,9 @@
      "t": "2026-10-02T13:29:17Z"
     }
    },
-   "comments_through": "2026-10-02T13:29:17Z",
-   "state": "open",
+   "state": "closed",
    "title": "Branding, TaCZ damage, and four mixed-pack crash fixes (Carpet, Forge mob attributes, WTHIT-Forge, LPLM)",
-   "updated_at": "2026-10-02T13:29:17Z"
+   "updated_at": "2026-10-02T13:44:11Z"
   },
   "35": {
    "body": "6f73cd9ea448",
@@ -588,9 +587,24 @@
     }
    },
    "comments_through": "2026-10-02T13:32:59Z",
+   "deleted": true,
    "state": "open",
    "title": "\u6211\u60f3\u8981\u7528\u514d\u8d39\u7684claude",
    "updated_at": "2026-10-02T13:32:59Z"
+  },
+  "39": {
+   "body": "4a86f001a84c",
+   "comments": {
+    "5954390976": {
+     "a": "MarbleGateKeeper",
+     "d": "62b7791f57ff",
+     "t": "2026-10-02T14:12:44Z"
+    }
+   },
+   "comments_through": "2026-10-02T14:12:44Z",
+   "state": "open",
+   "title": "\u5bf9\u4e8e\u672c\u9879\u76ee\u7684\u4e2a\u4eba\u89c2\u70b9",
+   "updated_at": "2026-10-02T14:12:45Z"
   },
   "4": {
    "body": "600345487502",
@@ -599,6 +613,22 @@
    "state": "closed",
    "title": "\u8fdb\u5165\u5355\u4eba\u6e38\u620f\u4e00\u6bb5\u65f6\u95f4\u540e\u62a5\u7f51\u7edc\u534f\u8bae\u9519\u8bef/After playing the singleplayer game for a while, I get a network protocol error",
    "updated_at": "2026-10-01T08:47:49Z"
+  },
+  "40": {
+   "body": "ac96a4872f84",
+   "comments": {},
+   "comments_through": "",
+   "state": "open",
+   "title": "\u4fee\u590d\uff1a\u4e2d\u6587\u8bed\u8a00\u73af\u5883\u4e0b ./gradlew test \u5fc5\u7ea2\uff08KernelLoadReportTest \u628a\u82f1\u6587\u63aa\u8f9e\u65ad\u8a00\u5728\u7cfb\u7edf\u8bed\u8a00\u6587\u4ef6\u4e0a\uff09",
+   "updated_at": "2026-10-02T14:05:28Z"
+  },
+  "41": {
+   "body": "e8d19aa3c296",
+   "comments": {},
+   "comments_through": "",
+   "state": "open",
+   "title": "\u8fd9\u73a9\u610f\u53ebAI\u5f04\u51fa\u6765\u6709\u5565\u7528\u5462",
+   "updated_at": "2026-10-02T14:32:29Z"
   },
   "5": {
    "body": "790fe72fe504",
@@ -674,6 +704,15 @@
     "forbric-kernel-installer-0.3.1-beta.zip"
    ],
    "updated_at": "2026-09-30T15:58:17Z"
+  },
+  "v0.3.1-beta2": {
+   "assets": [
+    "Forbric-Installer.bat",
+    "Forbric-Installer.command",
+    "forbric-kernel-installer-0.3.1-beta2.jar",
+    "forbric-kernel-installer-0.3.1-beta2.zip"
+   ],
+   "updated_at": "2026-10-02T13:54:24Z"
   }
  }
 }
