@@ -65,7 +65,38 @@ public final class KernelBundledJars {
 						+ "place (../forbric-loader/run/) via: ./gradlew jar", true),
 	};
 
+	private static volatile String mixinExtrasVersion;
+
 	private KernelBundledJars() {
+	}
+
+	/**
+	 * The version the bundled MixinExtras declares, read from its own {@code fabric.mod.json}; null when this boot
+	 * jar carries none (a run from class directories), which callers must take as "nothing supersedes anything".
+	 */
+	public static String mixinExtrasVersion() {
+		String known = mixinExtrasVersion;
+		if (known != null) return known.isEmpty() ? null : known;
+		known = "";
+		try (InputStream in = KernelBundledJars.class.getResourceAsStream("/META-INF/jars/mixinextras-fabric.jar")) {
+			if (in != null) {
+				java.util.zip.ZipInputStream zip = new java.util.zip.ZipInputStream(in);
+				for (java.util.zip.ZipEntry entry; (entry = zip.getNextEntry()) != null;) {
+					if (!entry.getName().equals("fabric.mod.json")) continue;
+					known = net.forbric.kernel.fabric.FabricModMetadataParser.read(zip).getVersion().getFriendlyString();
+					break;
+				}
+			}
+		} catch (Exception unreadable) {
+			ForbricLog.debug("[Forbric/Boot] could not read the bundled MixinExtras version: %s", String.valueOf(unreadable));
+		}
+		mixinExtrasVersion = known;
+		return known.isEmpty() ? null : known;
+	}
+
+	/** Tests stand in for the boot jar's copy: a version, {@code ""} for none, or null to read the real one again. */
+	static void mixinExtrasVersionForTests(String version) {
+		mixinExtrasVersion = version;
 	}
 
 	/**

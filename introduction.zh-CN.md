@@ -397,7 +397,7 @@ NeoForge 的 `mod_resources` 来源在合并基底上是孤立的。`ClientPackH
 
 ## 13. 安装器 —— `forbric-kernel-installer/`
 
-纯 JDK 实现，没有依赖，字节码 release 17，版本 `0.3.1-beta`。
+纯 JDK 实现，没有依赖，字节码 release 17，版本 `0.3.1-beta2`。
 
 ```
 java -jar forbric-kernel-installer.jar                     # window (InstallerGui)
@@ -606,7 +606,7 @@ java -cp <boot-cp> net.forbric.kernel.boot.Main --scan --mods <dir> --report out
 - **`PARTIAL` 的 mixin 默认应用** —— 宁可保留只应用了一半的结果（并让它可见），也不丢掉还能工作的钩子。
 - **一个类，一份副本。** 同一个 mod 的两个生态构建相互竞争时，只有一个胜出；落败的生态看到的是在场别名，而不是该 mod 自己的平台胶水代码。
 - **靠实测，不靠承诺。** `MOD_TEST_FAILURES.md` 记录了针对当前 `main` 代码的逐 mod 测试（每个 jar 只带上它必需的依赖单独运行，进入世界、截图、退出），用的是三组全新随机抽取的 Modrinth mod：平均 89.0% 加载时没有失败行（91.8% 进入了世界；79.1% 在加载报告里没有任何一项被标为 DEGRADED），而同一批 jar 在发布版 v0.2.0 上是 80.5%。
-- **版本。** `forbric-kernel/build.gradle` 写的是 `0.1.0-SNAPSHOT`；安装器是 `0.3.1-beta`。`net.forbric.api` 是内部 API，随时可能变动，不另行通知。
+- **版本。** `forbric-kernel/build.gradle` 写的是 `0.1.0-SNAPSHOT`；安装器是 `0.3.1-beta2`。`net.forbric.api` 是内部 API，随时可能变动，不另行通知。
 
 ## 20. 延伸阅读
 

@@ -11,6 +11,8 @@ import net.fabricmc.api.EnvType;
 import net.forbric.api.Ecosystem;
 import net.forbric.kernel.discovery.ForbricModDiscoverer;
 import net.forbric.kernel.fabric.FabricModMetadataParser;
+import net.forbric.kernel.fabric.KernelVersion;
+import net.forbric.kernel.util.ForbricLog;
 
 /** Complete physical candidate inventory, before either ecosystem filters or registers a root jar. */
 public final class NestedCandidateInventory {
@@ -24,6 +26,7 @@ public final class NestedCandidateInventory {
 	/** Zip-bomb guards only; a real pack's nested archives total well under 1 GB. There is no archive-count cap. */
 	static final int MAX_DEPTH = 8;
 	static final long ENTRY_BYTES = 1L << 30, TOTAL_BYTES = 16L << 30;
+	private static final String MIXINEXTRAS = "mixinextras";
 
 	private final Map<Path, Node> nodes;
 	private final List<Edge> edges;
@@ -70,6 +73,26 @@ public final class NestedCandidateInventory {
 			if (edge.child().equals(child) || payloadDescendant(edge.child(), child, seen)) return true;
 		}
 		return false;
+	}
+
+	/**
+	 * A nested Forge-family MixinExtras no newer than the kernel's own. MinecraftForge ships mixinextras-forge
+	 * 0.5.3 and its JarJar selection puts that copy beside every nested one and keeps the highest, so
+	 * badpackets-forge's 0.3.5 is closed unopened. Here it used to become a mod: its {@code MixinExtrasMod}
+	 * constructor calls {@code ModList.get()}, gone from MinecraftForge 26.2, and the NoSuchMethodError stopped a
+	 * STRICT server for anyone with WTHIT-Forge. The kernel's MixinExtras is the one every mod's mixins run on
+	 * anyway (it sits ahead of guest jars), so a nested Forge-platform copy brings only that constructor.
+	 */
+	static boolean supersededByKernelMixinExtras(DuplicateModArbiter.Claim claim, String kernelVersion) {
+		if (kernelVersion == null || claim == null || claim.ecosystem() == null || !claim.ecosystem().isForgeFamily()
+				|| !claim.modIds().equals(List.of(MIXINEXTRAS))) return false;
+		String nested = claim.versions().get(MIXINEXTRAS);
+		if (nested == null) return false;
+		try {
+			return KernelVersion.parse(nested).compareTo(KernelVersion.parse(kernelVersion)) <= 0;
+		} catch (Exception unparseable) {
+			return false;
+		}
 	}
 
 	static String digest(Path path) throws IOException {
@@ -144,6 +167,13 @@ public final class NestedCandidateInventory {
 								child = materialize(hash, entryName, zip, entry);
 								var claim = DuplicateModArbiter.claimOf(discoverer, child, side, aliases);
 								boolean excluded = claim == null && excludedBySide(child);
+								String platform = KernelBundledJars.mixinExtrasVersion();
+								if (!excluded && supersededByKernelMixinExtras(claim, platform)) {
+									excluded = true;
+									ForbricLog.info("[Forbric/JiJ] %s nests MixinExtras %s (%s); the kernel's own %s supersedes it, "
+											+ "as MinecraftForge's JarJar selection drops a nested copy older than the one it ships",
+											parent.path().getFileName(), claim.versions().get(MIXINEXTRAS), child.getFileName(), platform);
+								}
 								if (claim == null && !excluded && MultiLoaderArbiter.ownerOf(child) != null) issues.add(new Issue(child, "nested mod identity was unreadable; retaining its physical library without claiming a valid mod"));
 								nodes.put(child, new Node(child, hash, claim, false, excluded)); content.put(hash, child);
 							}

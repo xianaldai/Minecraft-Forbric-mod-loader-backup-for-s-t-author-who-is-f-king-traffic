@@ -769,6 +769,19 @@ public final class PayloadInterop {
 		}
 	}
 
+	/**
+	 * Called right after NeoForge's {@code NetworkRegistry.isModdedPayload} where the common packet listeners decide
+	 * whether a RECEIVED payload goes to NeoForge's dispatcher ({@code ForeignPayloadReceiveInjector}). NeoForge's
+	 * dispatcher knows only the channels NeoForge registered and closes the connection on any other — the receiving
+	 * half of the verdict {@link #isForgePayloadPacket} already takes away from its send check. A channel another
+	 * ecosystem negotiated goes down vanilla's path instead, where the mod that owns it listens: Carpet's client
+	 * takes {@code carpet:hello} at {@code ClientPacketListener.handleUnknownCustomPayload}, and was disconnected
+	 * with "No Channel for carpet:hello" before it got there.
+	 */
+	public static boolean neoForgeDispatches(Object payload, boolean modded) {
+		return modded && !notNeoForgesToPolice(payload);
+	}
+
 	/** Channels already let past, so the log says it once per channel rather than once per packet. */
 	private static final Set<String> UNPOLICED = Collections.synchronizedSet(new LinkedHashSet<>());
 
