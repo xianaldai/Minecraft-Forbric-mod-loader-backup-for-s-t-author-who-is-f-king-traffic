@@ -19,6 +19,7 @@ class NestedCandidateSelectionTest {
 	@TempDir Path root;
 	@BeforeEach @AfterEach void reset() {
 		DuplicateModArbiter.reset(); MultiLoaderArbiter.reset(); CompatibilityFindings.reset();
+		KernelBundledJars.mixinExtrasVersionForTests(null);
 		for (String property : List.of("forbric.modOwner", "forbric.dupeIdPreference", "forbric.nestedDupePreference",
 				"forbric.multiLoaderPreference", "forbric.arbitrationMaxNodes", "forbric.arbitrationTimeoutMillis")) System.clearProperty(property);
 	}
@@ -308,6 +309,29 @@ class NestedCandidateSelectionTest {
 		assertEquals(JointCandidateSelector.Status.SOLVED, plan.selection().status());
 		assertEquals(1, plan.nestedFiles().size());
 		assertEquals("2.0.4", plan.inventory().nodes().get(plan.nestedFiles().getFirst()).claim().versionOf("fabric-screen-api-v1"));
+	}
+
+	@Test void aNestedForgeMixinExtrasNoNewerThanTheKernelsOwnIsNotLoaded() throws Exception {
+		// badpackets-forge nests mixinextras-forge 0.3.5, whose @Mod constructor calls ModList.get(), gone from
+		// MinecraftForge 26.2. MinecraftForge ships 0.5.3 and its JarJar selection closes the nested copy unopened.
+		Map<String, NestedCandidateInventory.Coordinate> coordinate = Map.of("META-INF/jarjar/mixinextras-forge.jar",
+				new NestedCandidateInventory.Coordinate("io.github.llamalad7:mixinextras-forge", "[0.3.5,)", "0.3.5"));
+		for (String nested : List.of("0.3.5", "0.5.4", "0.6.0")) for (String kernel : List.of("0.5.4", "")) {
+			reset(); Files.deleteIfExists(mods().resolve("badpackets.jar"));
+			KernelBundledJars.mixinExtrasVersionForTests(kernel);
+			byte[] wrapper = forge("mixinextras", nested, Map.of(), Map.of(),
+					Map.of("com/llamalad7/mixinextras/platform/forge/MixinExtrasMod.class", type("com/llamalad7/mixinextras/platform/forge/MixinExtrasMod")));
+			install("badpackets.jar", forge("badpackets", "0.12.2", Map.of("META-INF/jarjar/mixinextras-forge.jar", wrapper), coordinate, Map.of()));
+			decide(); var plan = DuplicateModArbiter.currentPlan(); String label = "nested " + nested + ", kernel " + kernel;
+			assertEquals(JointCandidateSelector.Status.SOLVED, plan.selection().status(), label);
+			boolean superseded = !kernel.isEmpty() && !nested.equals("0.6.0");
+			assertEquals(superseded ? 0 : 1, plan.nestedFiles().size(), label);
+			assertTrue(plan.verify(plan.nestedFiles()), label);
+		}
+		// A Fabric mod's own nested mixinextras-fabric is the Fabric dependency graph's business, not this rule's.
+		reset(); KernelBundledJars.mixinExtrasVersionForTests("0.5.4");
+		assertFalse(NestedCandidateInventory.supersededByKernelMixinExtras(new DuplicateModArbiter.Claim(root, net.forbric.api.Ecosystem.FABRIC,
+				List.of("mixinextras"), Map.of("mixinextras", "0.3.5")), "0.5.4"));
 	}
 
 	@Test void twoCopiesOfOneJarJarArtifactKeepTheNewestArtifactVersionWhateverTheirModsTomlSays() throws Exception {

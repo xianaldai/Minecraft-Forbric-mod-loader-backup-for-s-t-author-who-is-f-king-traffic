@@ -85,6 +85,16 @@ public final class KernelLivingDamage {
 		}
 	}
 
+	/**
+	 * Vanilla's first read of {@code actuallyHurt}'s damage, which a mod may have rewritten ({@code read}), against the
+	 * parameter as it came ({@code param}); VanillaDamageReadInjector places it before armour. A rewrite moves the
+	 * container by the same amount; no rewrite changes nothing, so NeoForge's own amount stays exactly as it was.
+	 */
+	public static void vanillaRead(LivingEntity entity, DamageContainer container, float read, float param) {
+		if (container == null || Float.floatToIntBits(read) == Float.floatToIntBits(param)) return;
+		container.setNewDamage(Math.max(0.0F, container.getNewDamage() + (read - param)));
+	}
+
 	/** The player-attack seam, at the head of {@code Player.hurtServer}: false ends the hit, as MinecraftForge's does. */
 	public static boolean playerAttack(LivingEntity player, DamageSource source, float amount) {
 		try {

@@ -54,8 +54,31 @@ import net.forbric.kernel.util.Reflect;
 public final class KernelForgeAttributes {
 
 	private static volatile Map<EntityType<? extends LivingEntity>, AttributeSupplier> view;
+	private static volatile boolean validationHeld;
 
 	private KernelForgeAttributes() {
+	}
+
+	/** A client's MinecraftForge mods are not constructed yet and their attribute events are held: so is the check. */
+	public static void holdValidation() {
+		validationHeld = true;
+	}
+
+	/** The held attribute events are about to be posted; the next freeze validates. */
+	public static void releaseValidation() {
+		validationHeld = false;
+	}
+
+	/**
+	 * MinecraftForge's freeze-time {@code DefaultAttributes.validate()}, from its attribute registry's validate
+	 * callback ({@code ForgeAttributeValidationInjector}). While the attribute events are held it would only report
+	 * every Forge mob as having no attributes, and its {@code hasSupplier} calls would be the first ones, made with
+	 * the registries frozen and before any Fabric main entrypoint: Better Nether's mixin there starts its entity
+	 * registration, which then fails for good. The freeze that closes the client's entrypoint window validates.
+	 */
+	public static void validate() {
+		if (validationHeld) return;
+		net.minecraft.world.entity.ai.attributes.DefaultAttributes.validate();
 	}
 
 	/**

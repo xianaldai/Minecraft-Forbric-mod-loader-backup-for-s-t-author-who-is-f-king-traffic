@@ -511,6 +511,11 @@ public final class KernelBoot {
 					+ "again (constructor arity)", net.forbric.kernel.transform.SnippetConstructorFunnel.PROPERTY);
 		}
 
+		// The title screen and F3 name Forbric's release (forbric-v0.3.1-beta), not NeoForge's or the launcher's
+		// profile id; display only, the brand sent to servers stays NeoForge's.
+		if (net.forbric.kernel.transform.ForbricBrandingInjector.enabled()) {
+			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ForbricBrandingInjector());
+		}
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ForgeBlockTintInjector());
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ForgeOptionsInjector());
 
@@ -518,6 +523,11 @@ public final class KernelBoot {
 
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ForgeCreativeTabsInjector());
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ForgeSpawnPlacementsInjector());
+		// A client freezes once before its MinecraftForge mods exist; that freeze's attribute validation waits for
+		// their (held) attribute events, or it runs first and Better Nether's lazy entity registration fails.
+		if (net.forbric.kernel.transform.ForgeAttributeValidationInjector.enabled()) {
+			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ForgeAttributeValidationInjector());
+		}
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ForgeWorldModifierInjector());
 
 		// Client only: hand the kernel the live PackRepository at the vanilla-woven
@@ -535,6 +545,22 @@ public final class KernelBoot {
 		// disconnect every player on join once any mod asked for crafting recipes; it is left out with a warning.
 		if (net.forbric.kernel.transform.RecipeSyncFailSoftInjector.enabled()) {
 			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.RecipeSyncFailSoftInjector());
+		}
+		// The merged ServerStatus keeps both families' constructors, and vanilla's (NeoForge's) left MinecraftForge's
+		// Optional forgeData null: a mod rebuilding the status with it (LPLM) stopped the server tick loop on encode.
+		if (net.forbric.kernel.transform.MergedRecordOptionalDefaults.enabled()) {
+			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.MergedRecordOptionalDefaults());
+		}
+		// Every merged caller builds custom-payload codecs with NeoForge's overload, so a mod hooking vanilla's
+		// CustomPacketPayload.codec was never called: Carpet's carpet:hello could not be encoded and a dedicated
+		// server running it disconnected every player at login. Builds go through vanilla's overload again.
+		if (net.forbric.kernel.transform.PayloadCodecFunnelInjector.enabled()) {
+			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.PayloadCodecFunnelInjector());
+		}
+		// …and a payload on a channel only another ecosystem negotiated is RECEIVED down vanilla's path, where its mod
+		// listens, not by NeoForge's dispatcher, which disconnected Carpet's client on carpet:hello.
+		if (net.forbric.kernel.transform.ForeignPayloadReceiveInjector.enabled()) {
+			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ForeignPayloadReceiveInjector());
 		}
 
 		// …and keep the packs it serves OUT of the player's resource-pack screen. Pack.isHidden survived the
@@ -676,6 +702,11 @@ public final class KernelBoot {
 		// MinecraftForge's Hurt, Damage and player-Attack events have no NeoForge event at their positions to bridge
 		// from; seams in the merged actuallyHurt and Player.hurtServer post them where MinecraftForge did.
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ForgeDamageSeamsInjector());
+		// After the seams: vanilla's pre-armour read of actuallyHurt's damage goes back AHEAD of MinecraftForge's Hurt seam,
+		// so a Fabric mod rewriting the damage there (TaCZ) rewrites what NeoForge applies instead of throwing on every hit.
+		if (net.forbric.kernel.transform.VanillaDamageReadInjector.enabled()) {
+			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.VanillaDamageReadInjector());
+		}
 		// The merged Gui.setScreen is MinecraftForge's; NeoForge's ScreenEvent.Opening and Closing go in after its hooks.
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.NeoScreenEventsInjector());
 		// fabric-api's class tweaker injects FabricCreativeModeInventoryScreen into the creative screen, and the mixin that
