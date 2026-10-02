@@ -1,0 +1,97 @@
+# This fork is a safety copy of Ray-T-r/Minecraft-Forbric-mod-loader, and this workflow is the
+# only automated thing that ever writes to its main. Its contract:
+#
+#   * It syncs upstream on a schedule, but only in ways that ADD commits: a fast-forward when
+#     this fork has nothing of its own, otherwise a merge commit. Neither rewrites a single
+#     existing commit, so whatever upstream does to its own history -- rebase, reset,
+#     force-push, or deleting the repo outright -- cannot reach backwards into what this fork
+#     already holds. The merge case even keeps an upstream-rewritten lineage and the
+#     previously mirrored one reachable at the same time.
+#   * It never runs rebase, reset, or any flavor of force push. The plain `git push` at the
+#     end is deliberate: it can only ever land fast-forwards or the merge commit above, so
+#     nothing it does can rewrite this fork's history even if its merge logic were wrong.
+#   * If upstream vanishes (deleted, renamed, made private), the run fails before any ref in
+#     this clone has moved; main is left exactly as it was and an issue is opened. The copy
+#     survives upstream's death by design.
+name: sync upstream
+
+on:
+  schedule:
+    - cron: '*/5 * * * *' # every 5 minutes
+  workflow_dispatch: # and on demand, for testing or catching up
+
+permissions:
+  contents: write # push fast-forwards and merge commits to main
+  issues: write # report upstream-unreachable and unmergeable states
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: Ray-T-r/Minecraft-Forbric-mod-loader
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Every decision below is a merge-base question, and shallow clones answer those wrong.
+          fetch-depth: 0
+
+      - name: Sync (fast-forward or merge only, never rewrite)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          notify() {
+            # $1 title, $2 body. One open issue per title; later runs do not duplicate it.
+            if [ "$(gh issue list --state open --search "$1 in:title" --json number --jq 'length')" = 0 ]; then
+              gh issue create --title "$1" --body "$2" || true
+            fi
+          }
+
+          # An absent upstream must change nothing here. ls-remote first, so a deleted repo or a
+          # renamed main fails before any ref in this clone has moved.
+          if [ -z "$(git ls-remote "https://github.com/${UPSTREAM_REPO}.git" refs/heads/main)" ]; then
+            notify \
+              "Upstream ${UPSTREAM_REPO} is unreachable" \
+              "@xianaldai The scheduled sync could not see ${UPSTREAM_REPO}'s main branch (repo deleted, renamed, or made private?). This fork's main was not touched and keeps the full history as of the last successful sync."
+            exit 1
+          fi
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream main --tags
+
+          if git merge-base --is-ancestor upstream/main main; then
+            echo "upstream/main is already contained in main; nothing to sync"
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor main upstream/main; then
+            # The fork has no commits upstream lacks: a pure fast-forward.
+            git merge --ff-only upstream/main
+          else
+            # Diverged: the fork carries commits upstream does not (at minimum this workflow's
+            # own), or upstream rewrote its history. Merge -- a merge commit adds a commit and
+            # erases none, so both lineages stay reachable and the backup never loses ground.
+            # If the contents conflict, leave main alone and ask a human.
+            if ! git merge --no-rebase --no-edit upstream/main; then
+              git merge --abort || true
+              notify \
+                "Upstream cannot be merged automatically" \
+                "@xianaldai Merging ${UPSTREAM_REPO}/main into this fork's main conflicts. main was left untouched. Merge by hand, then re-run this workflow."
+              exit 1
+            fi
+          fi
+
+          # No --force and no --force-with-lease, on purpose: the server-side ruleset must be the
+          # thing that stops a non-fast-forward, not this script's discipline.
+          git push origin main
+
+          # Best effort: mirror tags too. An upstream that moved or deleted a tag must not fail
+          # the run -- the commit sync above already succeeded.
+          git push origin --tags || echo "::warning::some tags were not pushed (upstream moved or deleted them); commits are unaffected"
