@@ -318,12 +318,17 @@
      "a": "NitroFeSH",
      "d": "ea0a914f904a",
      "t": "2026-10-02T12:45:01Z"
+    },
+    "5955596088": {
+     "a": "Zxis233",
+     "d": "f2c9de665da8",
+     "t": "2026-10-02T15:25:23Z"
     }
    },
-   "comments_through": "2026-10-02T12:45:01Z",
+   "comments_through": "2026-10-02T15:25:23Z",
    "state": "open",
    "title": "\u62ffai\u9010\u884creview\u4e86\u4e00\u4e0b",
-   "updated_at": "2026-10-02T12:45:01Z"
+   "updated_at": "2026-10-02T15:25:24Z"
   },
   "25": {
    "body": "5b43242653dd",
@@ -593,7 +598,7 @@
    "updated_at": "2026-10-02T13:32:59Z"
   },
   "39": {
-   "body": "221305f7ad9c",
+   "body": "d14b1b7fa77e",
    "comments": {
     "5954390976": {
      "a": "MarbleGateKeeper",
@@ -617,14 +622,24 @@
     },
     "5955082938": {
      "a": "NitroFeSH",
-     "d": "5eb99d0e5815",
+     "d": "90e77eaca91d",
      "t": "2026-10-02T14:54:44Z"
+    },
+    "5955530320": {
+     "a": "Hulan1234",
+     "d": "1abe37b95076",
+     "t": "2026-10-02T15:21:15Z"
+    },
+    "5957426155": {
+     "a": "GongSunFangYun",
+     "d": "3796f7e8bf99",
+     "t": "2026-10-02T17:08:23Z"
     }
    },
-   "comments_through": "2026-10-02T14:54:44Z",
+   "comments_through": "2026-10-02T17:08:23Z",
    "state": "open",
    "title": "\u5bf9\u4e8e\u672c\u9879\u76ee\u7684\u4e2a\u4eba\u89c2\u70b9",
-   "updated_at": "2026-10-02T14:54:44Z"
+   "updated_at": "2026-10-02T17:39:27Z"
   },
   "4": {
    "body": "600345487502",
@@ -651,18 +666,30 @@
   "42": {
    "body": "ecbd73d46435",
    "comments": {},
-   "comments_through": "",
-   "state": "open",
+   "state": "closed",
    "title": "Pin that load-report.txt follows the system language; let gate-m24 read it in Chinese",
-   "updated_at": "2026-10-02T14:55:32Z"
+   "updated_at": "2026-10-02T16:12:43Z"
+  },
+  "44": {
+   "body": "4727bcaf0ad5",
+   "comments": {
+    "5958607405": {
+     "a": "micheleqaq",
+     "d": "8f77457ca4e5",
+     "t": "2026-10-02T18:19:33Z"
+    }
+   },
+   "comments_through": "2026-10-02T18:19:33Z",
+   "state": "open",
+   "title": "\u4f60\u7684\u8111\u5b50\u5b58\u5728\u95ee\u9898",
+   "updated_at": "2026-10-02T18:19:33Z"
   },
   "5": {
-   "body": "790fe72fe504",
+   "body": "df58248c414f",
    "comments": {},
-   "comments_through": "",
    "state": "closed",
    "title": "\u592a\u4e71\u4e86",
-   "updated_at": "2026-10-01T09:41:47Z"
+   "updated_at": "2026-10-02T15:26:51Z"
   },
   "6": {
    "body": "5787b95dba3d",
