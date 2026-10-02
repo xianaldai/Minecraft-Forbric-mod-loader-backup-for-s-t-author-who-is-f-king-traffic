@@ -1,0 +1,85 @@
+# GitHub disables scheduled workflows in a public repository once no repository activity has
+# occurred for 60 days:
+#
+#   "In a public repository, scheduled workflows are automatically disabled when no repository
+#    activity has occurred in 60 days."
+#   -- https://docs.github.com/en/actions/reference/events-that-trigger-workflows (schedule)
+#
+# This fork is a watchtower: its whole job is to sit quietly until something happens upstream.
+# Quiet is exactly the state GitHub punishes, so left alone the watch would end itself -- 60 days
+# after upstream goes silent, the sync schedule would be disabled, and a silent resurrection
+# upstream would then go unnoticed. That is the exact scenario this repository exists for.
+#
+# What resets the clock is repository activity. A workflow run is not activity and an API call is
+# not activity -- dispatching a workflow or reading an endpoint changes no repository data. So
+# this runs weekly, well inside the window, and asks when the repository last saw a push; only
+# when that is older than 45 days does it make one empty commit, the smallest thing that counts.
+# While upstream is alive the sync job pushes constantly, the age stays small, and an ordinary
+# run here does nothing but read one API field.
+#
+# The 45-day threshold leaves room for a delayed, skipped, or failed weekly run: even three
+# consecutive misses still land inside the 60-day window, because a missed push only means the
+# next week's run finds a slightly older age and commits then.
+#
+# The same run heals the one failure this design cannot rule out: if GitHub disabled the sync's
+# schedule anyway -- an inactivity gap longer than this workflow could cover, an account mishap --
+# it is re-enabled here rather than waiting for a human to notice the silence.
+name: keepalive
+
+on:
+  schedule:
+    - cron: '17 3 * * 1' # Mondays, 03:17 UTC -- off the hour, away from the sync's */5 grid
+  workflow_dispatch:
+
+permissions:
+  contents: write # the keepalive commit, and reading when the last push was
+  actions: write # re-enable the sync workflow if GitHub disabled its schedule
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Make one empty commit if the repository has been quiet long enough to matter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          last=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .pushedAt)
+          last_epoch=$(date -u -d "$last" +%s)
+          now=$(date -u +%s)
+          age_days=$(( (now - last_epoch) / 86400 ))
+          echo "last push: ${last} (${age_days} days ago)"
+
+          if [ "$age_days" -lt 45 ]; then
+            echo "repository is active; no keepalive commit needed"
+            exit 0
+          fi
+
+          # An empty commit: it adds no file and changes no tree, it exists only so that a
+          # repository with nothing else happening still counts as alive. [skip ci] keeps it
+          # from waking any workflow if a human ever pushes it instead of this job.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "Keep the sync schedules alive: no repository activity for ${age_days} days [skip ci]"
+          git push origin main
+
+      - name: Re-enable the sync workflow if GitHub disabled it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          state=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/sync-upstream.yml" --jq .state)
+          echo "sync-upstream.yml state: ${state}"
+          if [ "$state" != "active" ]; then
+            gh api --method PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/sync-upstream.yml/enable"
+            echo "::warning::sync-upstream.yml was '${state}' and has been re-enabled"
+          fi

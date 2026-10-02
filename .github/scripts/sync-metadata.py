@@ -222,25 +222,32 @@ def mirror_release(rel):
 
 
 def main():
+    # A 404 from the repo endpoint means upstream is gone, renamed or private. Say that once
+    # instead of the misleading "0 issues, 0 releases, nothing new to mirror" the empty
+    # listings below would otherwise print. The git job is where the alert issue is raised;
+    # this job only stays quiet and honest.
+    if api("/repos/%s" % UPSTREAM_REPO) is None:
+        print("::warning::upstream %s is not visible; nothing to mirror"
+              % UPSTREAM_REPO)
+        return 0
+
     # The issues endpoint returns PRs too; both get archived. Pull requests are ALSO
     # fetched from the pulls endpoint and merged in: the issues listing has, more than
     # once, omitted PRs for some tokens/edge caches, and a backup prefers two sources
     # over one.
-    upstream_issues = list(paged("/repos/%s/issues" % UPSTREAM_REPO, {"state": "all"}))
+    raw_issues = list(paged("/repos/%s/issues" % UPSTREAM_REPO, {"state": "all"}))
     pulls = list(paged("/repos/%s/pulls" % UPSTREAM_REPO, {"state": "all"}))
     upstream_releases = list(paged("/repos/%s/releases" % UPSTREAM_REPO))
 
-    by_number = {i["number"]: i for i in upstream_issues}
+    by_number = {i["number"]: i for i in raw_issues}
     for pr in pulls:
         if pr["number"] not in by_number:
-            # The pulls payload carries the same issue-facing fields (title, body,
-            # user, labels, state, timestamps) the archive renders.
+            # The pulls payload carries the same issue-facing fields (title, body, user,
+            # labels, state, timestamps) that the archive renders.
             by_number[pr["number"]] = pr
     upstream_issues = [by_number[n] for n in sorted(by_number)]
-
     print("sources: issues endpoint %d, pulls endpoint %d, merged %d"
-          % (len(upstream_issues) - len(pulls) if len(pulls) <= len(upstream_issues) else len(upstream_issues),
-             len(pulls), len(upstream_issues)))
+          % (len(raw_issues), len(pulls), len(upstream_issues)))
 
     done = existing_mirrors()
     tags_done = existing_release_tags()

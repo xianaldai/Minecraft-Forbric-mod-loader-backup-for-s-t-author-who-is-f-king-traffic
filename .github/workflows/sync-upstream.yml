@@ -10,9 +10,12 @@
 #   * It never runs rebase, reset, or any flavor of force push. The plain `git push` at the
 #     end is deliberate: it can only ever land fast-forwards or the merge commit above, so
 #     nothing it does can rewrite this fork's history even if its merge logic were wrong.
-#   * If upstream vanishes (deleted, renamed, made private), the run fails before any ref in
+#   * If upstream vanishes (deleted, renamed, made private), the run stops before any ref in
 #     this clone has moved; main is left exactly as it was and an issue is opened. The copy
-#     survives upstream's death by design.
+#     survives upstream's death by design. Note "stops", not "fails": the issue is the alert,
+#     and a run every 5 minutes must not mail a failure 288 times a day for a standing
+#     condition, so both standing conditions here (upstream gone, upstream unmergeable) end
+#     the run green with a warning annotation instead.
 #   * A second job mirrors upstream's releases and issues/PRs as read-only archives. It obeys
 #     the same append-only contract: only create, never edit, close, or delete -- not even its
 #     own past output. Upstream has discussions and a wiki disabled, so there is nothing there
@@ -38,6 +41,9 @@ env:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    # A hung run would hold the concurrency group while one queued run per 5 minutes stacks up
+    # behind it. Bounding the job means the next run takes over instead of the queue growing.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
         with:
@@ -61,14 +67,27 @@ jobs:
 
           # An absent upstream must change nothing here. ls-remote first, so a deleted repo or a
           # renamed main fails before any ref in this clone has moved.
+          #
+          # This exits 0 on purpose. The alert is the issue, and the run is only a messenger: at
+          # one run every 5 minutes, a red run here would mean 288 failed runs and 288 failure
+          # notifications a day for a condition that cannot improve on its own. The warning
+          # annotation marks the run in the UI without mailing the same news 288 times.
           if [ -z "$(git ls-remote "https://github.com/${UPSTREAM_REPO}.git" refs/heads/main)" ]; then
             notify \
               "Upstream ${UPSTREAM_REPO} is unreachable" \
               "@xianaldai The scheduled sync could not see ${UPSTREAM_REPO}'s main branch (repo deleted, renamed, or made private?). This fork's main was not touched and keeps the full history as of the last successful sync."
-            exit 1
+            echo "::warning::upstream main is not visible; nothing was touched"
+            exit 0
           fi
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
-          git fetch upstream main --tags
+          git fetch upstream main
+
+          # Tags are a courtesy copy, never the sync itself: upstream replacing or moving a tag
+          # makes a plain `fetch --tags` refuse to clobber the local one and exit non-zero, and
+          # that must not take the commit sync down with it -- otherwise one rewritten tag would
+          # stop the backup from ever updating again, failing once per 5-minute run, forever.
+          git fetch upstream --tags \
+            || echo "::warning::could not fetch upstream tags (moved or replaced upstream?); the commit sync is unaffected"
 
           if git merge-base --is-ancestor upstream/main main; then
             echo "upstream/main is already contained in main; nothing to sync"
@@ -88,7 +107,10 @@ jobs:
               notify \
                 "Upstream cannot be merged automatically" \
                 "@xianaldai Merging ${UPSTREAM_REPO}/main into this fork's main conflicts. main was left untouched. Merge by hand, then re-run this workflow."
-              exit 1
+              # Same reasoning as the unreachable case: the issue is the alert, and a 5-minute
+              # schedule must not turn one standing condition into a failure notification storm.
+              echo "::warning::upstream conflicts with this fork's main; main left untouched"
+              exit 0
             fi
           fi
 
@@ -104,14 +126,18 @@ jobs:
   # job re-publishes them on the fork, appending only: the script creates whatever upstream
   # has that the fork does not yet, and touches nothing that already exists. It runs even
   # when the git job above fails -- a deleted upstream is exactly when the metadata mirror
-  # matters most, and the API stays readable for a while after git endpoints do not. (When
-  # the repo is truly gone, GitHub returns 404 here too; the script reports and exits 1
-  # without touching anything.)
+  # matters most, and the API stays readable for a while after git endpoints do not.
+  #
+  # Unlike the git job this one never pushes, so its checkout does not keep the token on disk
+  # for the Python script to find, and a hung run is bounded like the other.
   mirror-metadata:
     runs-on: ubuntu-latest
     if: ${{ !cancelled() }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
