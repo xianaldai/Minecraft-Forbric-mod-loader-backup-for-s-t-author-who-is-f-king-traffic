@@ -20,6 +20,14 @@ set -euo pipefail
 remote=${1:?upstream remote name, e.g. upstream}
 branch=${2:?branch name, e.g. main}
 
+# Being run outside a clone is not a conflict, and must not be reported as one: exit 20 opens
+# the "upstream cannot be merged automatically" issue, which would blame upstream for a script
+# that was simply pointed at the wrong directory.
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+  echo "::error::merge-upstream.sh was run outside a git repository; nothing was touched"
+  exit 21
+fi
+
 fork_owned=(.github/workflows .github/scripts)
 
 if git merge-base --is-ancestor "$remote/$branch" HEAD; then
@@ -44,7 +52,10 @@ fi
 git merge --no-commit "$remote/$branch" || true
 
 if [ ! -e .git/MERGE_HEAD ]; then
-  # The merge did not start (unrelated histories, a missing ref, and so on). Nothing changed.
+  # The merge did not start (unrelated histories, a missing ref, a tree it would clobber).
+  # Nothing changed. Filed with the conflicts rather than as a failure because a run every 5
+  # minutes must not turn one standing condition into a failure notification storm.
+  echo "::warning::git merge did not start; main left untouched"
   exit 20
 fi
 
