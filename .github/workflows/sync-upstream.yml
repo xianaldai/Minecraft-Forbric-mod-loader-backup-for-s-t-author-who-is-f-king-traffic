@@ -13,6 +13,10 @@
 #   * If upstream vanishes (deleted, renamed, made private), the run fails before any ref in
 #     this clone has moved; main is left exactly as it was and an issue is opened. The copy
 #     survives upstream's death by design.
+#   * A second job mirrors upstream's releases and issues/PRs as read-only archives. It obeys
+#     the same append-only contract: only create, never edit, close, or delete -- not even its
+#     own past output. Upstream has discussions and a wiki disabled, so there is nothing there
+#     to mirror; if that ever changes, this file is where a mirror would be added.
 name: sync upstream
 
 on:
@@ -95,3 +99,25 @@ jobs:
           # Best effort: mirror tags too. An upstream that moved or deleted a tag must not fail
           # the run -- the commit sync above already succeeded.
           git push origin --tags || echo "::warning::some tags were not pushed (upstream moved or deleted them); commits are unaffected"
+
+  # Releases and issues/PRs are not git objects, so the fetch above cannot carry them. This
+  # job re-publishes them on the fork, appending only: the script creates whatever upstream
+  # has that the fork does not yet, and touches nothing that already exists. It runs even
+  # when the git job above fails -- a deleted upstream is exactly when the metadata mirror
+  # matters most, and the API stays readable for a while after git endpoints do not. (When
+  # the repo is truly gone, GitHub returns 404 here too; the script reports and exits 1
+  # without touching anything.)
+  mirror-metadata:
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Mirror releases and issues/PRs (create-only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/sync-metadata.py
