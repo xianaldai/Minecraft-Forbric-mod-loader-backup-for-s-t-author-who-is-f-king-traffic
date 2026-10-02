@@ -152,4 +152,7 @@ jobs:
       - name: Mirror releases and issues/PRs (create-only)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python .github/scripts/sync-metadata.py
+        # -u because the script's own account of what it did is the only record of it, and a
+        # block-buffered pipe loses the last of it: runs that finished cleanly were logging a
+        # source count and then nothing, which reads exactly like a run that stopped early.
+        run: python -u .github/scripts/sync-metadata.py
