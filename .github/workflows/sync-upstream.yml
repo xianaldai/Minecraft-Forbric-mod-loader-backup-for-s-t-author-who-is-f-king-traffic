@@ -42,6 +42,11 @@ on:
 permissions:
   contents: write # push fast-forwards and merge commits to main
   issues: write # report upstream-unreachable and unmergeable states
+  # Copying upstream's tags means pushing refs whose trees carry upstream's own
+  # .github/workflows/build.yml, and GitHub refuses that push without this --
+  # "refusing to allow a GitHub App to create or update workflow ... without
+  # `workflows` permission" (seen once the repo default dropped to read).
+  workflows: write
 
 concurrency:
   group: sync-upstream
