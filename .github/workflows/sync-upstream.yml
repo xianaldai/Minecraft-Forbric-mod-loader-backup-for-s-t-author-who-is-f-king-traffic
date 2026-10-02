@@ -26,6 +26,12 @@
 #     the same append-only contract: only create, never edit, close, or delete -- not even its
 #     own past output. Upstream has discussions and a wiki disabled, so there is nothing there
 #     to mirror; if that ever changes, this file is where a mirror would be added.
+#   * The schedule below is the intended heartbeat, and since 2026-08-26 GitHub's cron dispatch
+#     has been unreliable platform-wide: many repos report that no scheduled run is created at
+#     all (workflow_dispatch starts within seconds on the same file). This fork has had zero
+#     schedule-triggered runs. Nobody needs to fix anything here -- the trigger stays so it
+#     resumes by itself -- but until runs stop being missing, expect to dispatch this workflow
+#     by hand, and do not read a quiet Actions tab as "upstream has not changed".
 name: sync upstream
 
 on:
