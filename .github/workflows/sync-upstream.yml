@@ -16,6 +16,12 @@
 #     and a run every 5 minutes must not mail a failure 288 times a day for a standing
 #     condition, so both standing conditions here (upstream gone, upstream unmergeable) end
 #     the run green with a warning annotation instead.
+#   * Upstream owns the code; this fork owns .github/workflows and .github/scripts. A merge takes
+#     everything upstream has except those two directories, which are restored to this fork's
+#     copies, and anything under them that exists only upstream is dropped -- so upstream's edits
+#     to CI never arrive here, and neither does a workflow upstream adds later. build.yml diverged
+#     on purpose (the Windows leg was dropped) and the sync and keepalive live only here; the
+#     rule is what keeps it that way without a human resolving conflicts every time.
 #   * A second job mirrors upstream's releases and issues/PRs as read-only archives. It obeys
 #     the same append-only contract: only create, never edit, close, or delete -- not even its
 #     own past output. Upstream has discussions and a wiki disabled, so there is nothing there
@@ -89,29 +95,29 @@ jobs:
           git fetch upstream --tags \
             || echo "::warning::could not fetch upstream tags (moved or replaced upstream?); the commit sync is unaffected"
 
-          if git merge-base --is-ancestor upstream/main main; then
-            echo "upstream/main is already contained in main; nothing to sync"
+          # The merge decision lives in a script so it can be driven through real scenarios
+          # (upstream rewrote its workflows, upstream added a workflow, a conflict outside them)
+          # outside CI. Its contract: exit 0 = main is in the wanted state, exit 20 = a conflict
+          # this fork will not resolve by itself, anything else = unexpected.
+          if bash .github/scripts/merge-upstream.sh upstream main; then
+            merge_status=0
+          else
+            merge_status=$?
+          fi
+
+          if [ "$merge_status" -eq 20 ]; then
+            notify \
+              "Upstream cannot be merged automatically" \
+              "@xianaldai Merging ${UPSTREAM_REPO}/main into this fork's main conflicts somewhere other than .github/workflows and .github/scripts, which this fork owns and never takes from upstream. main was left untouched. Merge by hand, then re-run this workflow."
+            # Same reasoning as the unreachable case: the issue is the alert, and a 5-minute
+            # schedule must not turn one standing condition into a failure notification storm.
+            echo "::warning::upstream conflicts with this fork's main outside its own workflows; main left untouched"
             exit 0
           fi
 
-          if git merge-base --is-ancestor main upstream/main; then
-            # The fork has no commits upstream lacks: a pure fast-forward.
-            git merge --ff-only upstream/main
-          else
-            # Diverged: the fork carries commits upstream does not (at minimum this workflow's
-            # own), or upstream rewrote its history. Merge -- a merge commit adds a commit and
-            # erases none, so both lineages stay reachable and the backup never loses ground.
-            # If the contents conflict, leave main alone and ask a human.
-            if ! git merge --no-rebase --no-edit upstream/main; then
-              git merge --abort || true
-              notify \
-                "Upstream cannot be merged automatically" \
-                "@xianaldai Merging ${UPSTREAM_REPO}/main into this fork's main conflicts. main was left untouched. Merge by hand, then re-run this workflow."
-              # Same reasoning as the unreachable case: the issue is the alert, and a 5-minute
-              # schedule must not turn one standing condition into a failure notification storm.
-              echo "::warning::upstream conflicts with this fork's main; main left untouched"
-              exit 0
-            fi
+          if [ "$merge_status" -ne 0 ]; then
+            echo "::error::merging upstream failed with status ${merge_status}; main left untouched"
+            exit 1
           fi
 
           # No --force and no --force-with-lease, on purpose: the server-side ruleset must be the
