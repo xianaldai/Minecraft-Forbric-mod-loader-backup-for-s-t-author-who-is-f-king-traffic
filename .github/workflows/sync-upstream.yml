@@ -152,7 +152,9 @@ jobs:
       - name: Mirror releases and issues/PRs (create-only)
         env:
           GH_TOKEN: ${{ github.token }}
-        # -u because the script's own account of what it did is the only record of it, and a
-        # block-buffered pipe loses the last of it: runs that finished cleanly were logging a
-        # source count and then nothing, which reads exactly like a run that stopped early.
-        run: python -u .github/scripts/sync-metadata.py
+        # The last line or two this step logs are regularly dropped, so a run that did its
+        # work can read as one that stopped early: run 37006494226's log ends at "mirroring
+        # issue #36" while the archive it created for #36 is in the issue list. Believe the
+        # fork's issues over the tail of this log -- running python with -u does not bring
+        # the tail back, so it is the log pipeline dropping it, not the script's stdout.
+        run: python .github/scripts/sync-metadata.py
