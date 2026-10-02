@@ -27,6 +27,9 @@ added to the archive issue:
   * title edits and body edits (the new text is quoted in the comment)
   * comments upstream added after the archive was taken (quoted in full, so the thread keeps
     growing here even though the archived body only ever shows it as far as it ran)
+  * a comment upstream edited afterwards (the new text is quoted; the text from before the
+    edit is the copy already sitting above), or one it deleted (noted with the author and
+    time it was posted, so the copy here stands as the last text known to exist)
   * deletion, or a transfer that removes the issue from upstream's listing
   * a release deleted upstream, or a release asset withdrawn
 
@@ -34,11 +37,14 @@ That is the point of this repository: an upstream that quietly closes an
 uncomfortable issue, rewrites what it said, or deletes the thread leaves a
 trail here, next to the copy of what it said before.
 
-Two things are deliberately not chased: reactions and review-thread state
-(kept out so each archive stays a single readable page), and changes to a
-comment's own text after it was written. A new comment is recorded; an edit of
-an old one, or an old one deleted, moves the issue's updated_at and leaves
-nothing else behind, so it shows up only as a watermark advancing.
+One thing is deliberately not chased: reactions and review-thread state, kept
+out so each archive stays a single readable page.
+
+Comment edits and deletions cost nothing to find, because GitHub moves the
+item's updated_at for both, just as it does for a new comment. So a run asks
+about a thread only when something actually happened to the item. The one
+exception is a watermark written before this feature existed: it has no record
+of what its thread said, so it is read once to learn that, and never again.
 
 Watermarks for the change detection live in state.json on the mirror-state
 branch, not in this repository's history. A run that finds nothing new writes
@@ -199,6 +205,18 @@ def archived_comment_through(mirror_number):
 
 
 # ------------------------------------------------- what the archive already holds
+
+def comment_author(comment):
+    """Upstream serves user: null once an account is deleted, so a login is never assumed."""
+    return ((comment.get("user") or {}).get("login")) or "ghost"
+
+
+def comment_map(thread):
+    """What this fork knows about each comment it has seen, so a later run can tell an edit
+    from an addition -- and, when one disappears, still say who posted it and when."""
+    return {str(c["id"]): {"d": digest(c["body"]), "a": comment_author(c),
+                           "t": c["created_at"]} for c in thread}
+
 
 def existing_mirrors():
     """Scan this fork's issues for mirror markers -> {upstream number: fork issue number}."""
@@ -472,6 +490,9 @@ def main():
         # The body just written carries the thread as far as it runs today, so this is where a
         # later run starts recording comments from.
         known[n]["comments_through"] = max((c["created_at"] for c in comments), default="")
+        # ...and what each of those comments said, so an edit or a deletion after today is
+        # visible as a difference rather than lost.
+        known[n]["comments"] = comment_map(comments)
         dirty = True
 
     # ---- what upstream did to what we already archived
@@ -497,7 +518,13 @@ def main():
                 old["deleted"] = True
                 dirty = True
             continue
-        if now.get("updated_at") == old.get("updated_at"):
+        # Skip only when both halves hold: nothing upstream touched, and this fork already
+        # knows the shape of the thread. A watermark written before comment edits were tracked
+        # has no record of what each comment said, so without that second half the next edit to
+        # one would be invisible -- the item moves, this run looks, and finds nothing to compare
+        # against. Learning the shape costs one comments call per item, once ever.
+        untouched = now.get("updated_at") == old.get("updated_at")
+        if untouched and old.get("comments") is not None:
             continue
         new = fingerprint(now)
         described = changes_between(old, new)
@@ -514,13 +541,30 @@ def main():
             new["comments_through"] = through
             dirty = True
         thread = list(paged("/repos/%s/issues/%d/comments" % (UPSTREAM_REPO, number)))
-        added = [c for c in thread if c["created_at"] > through]
+        seen = old.get("comments") or {}
+        present = comment_map(thread)
+        # Three ways a thread can differ from what was recorded, and they are not
+        # interchangeable: an id nobody has seen is new, an id whose text digest moved was
+        # edited in place, and an id that was recorded but is no longer served was deleted.
+        added = [c for c in thread
+                 if str(c["id"]) not in seen and c["created_at"] > through]
+        edited = [c for c in thread if str(c["id"]) in seen
+                  and seen[str(c["id"])]["d"] != present[str(c["id"])]["d"]]
+        gone = [(cid, seen[cid]) for cid in seen if cid not in present]
+        if gone:
+            # The same care the issue listing gets: a page that came back short must not turn
+            # into an invented deletion, so read the thread once more and keep only what is
+            # missing from both. This costs an extra call only when something looks deleted.
+            thread = list(paged("/repos/%s/issues/%d/comments" % (UPSTREAM_REPO, number)))
+            present = comment_map(thread)
+            gone = [(cid, meta) for cid, meta in gone if cid not in present]
         newest = max((c["created_at"] for c in thread), default="")
         if newest > through:
             new["comments_through"] = newest
             dirty = True
+        new["comments"] = present
 
-        if described or added:
+        if described or added or edited or gone:
             lines = []
             if described:
                 lines += ["**Upstream changed this item after it was archived** "
@@ -534,8 +578,29 @@ def main():
                                                        "" if len(added) == 1 else "s")]
                 for comment in added:
                     lines += ["", "---", "**@%s** commented on %s:"
-                              % (comment["user"]["login"], comment["created_at"]), "",
+                              % (comment_author(comment), comment["created_at"]), "",
                               "````", comment["body"] or "_(no body)_", "````"]
+            if edited:
+                # The text from before is not repeated: it is already in the copy above, in
+                # the archived body or in the event comment that first carried it.
+                lines += ["", "**%d comment%s upstream edited after this fork recorded %s** "
+                          "-- the earlier text is the one already above; this is what %s now:"
+                          % (len(edited), "" if len(edited) == 1 else "s",
+                             "it" if len(edited) == 1 else "they",
+                             "it says" if len(edited) == 1 else "they say")]
+                for comment in edited:
+                    lines += ["", "---", "**@%s** commented on %s:"
+                              % (comment_author(comment), comment["created_at"]), "",
+                              "````", comment["body"] or "_(no body)_", "````"]
+            if gone:
+                lines += ["", "**%d comment%s this fork recorded %s gone from upstream.** "
+                          "The copy above is the last text of %s known to exist."
+                          % (len(gone), "" if len(gone) == 1 else "s",
+                             "has" if len(gone) == 1 else "have",
+                             "it" if len(gone) == 1 else "them")]
+                for cid, meta in gone:
+                    lines += ["- **@%s** commented on %s (id %s)"
+                              % (meta.get("a"), meta.get("t"), cid)]
             try:
                 post_event(mirror_number, lines)
             except Exception as e:
