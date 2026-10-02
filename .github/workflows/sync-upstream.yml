@@ -87,7 +87,11 @@ jobs:
           if [ -z "$(git ls-remote "https://github.com/${UPSTREAM_REPO}.git" refs/heads/main)" ]; then
             notify \
               "Upstream ${UPSTREAM_REPO} is unreachable" \
-              "@xianaldai The scheduled sync could not see ${UPSTREAM_REPO}'s main branch (repo deleted, renamed, or made private?). This fork's main was not touched and keeps the full history as of the last successful sync."
+              "The scheduled sync could not see ${UPSTREAM_REPO}'s main branch (repo deleted, renamed, or made private?). This fork's main was not touched and keeps the full history as of the last successful sync."
+              # No @mention on purpose: a mention in an issue body emails the user when the
+              # issue is created, and the standing conditions this files are expected to sit
+              # open for days. The issue itself is the alert -- it sits at the top of the
+              # issue list and the run carries a warning annotation.
             echo "::warning::upstream main is not visible; nothing was touched"
             exit 0
           fi
@@ -114,7 +118,7 @@ jobs:
           if [ "$merge_status" -eq 20 ]; then
             notify \
               "Upstream cannot be merged automatically" \
-              "@xianaldai Merging ${UPSTREAM_REPO}/main into this fork's main conflicts somewhere other than .github/workflows and .github/scripts, which this fork owns and never takes from upstream. main was left untouched. Merge by hand, then re-run this workflow."
+              "Merging ${UPSTREAM_REPO}/main into this fork's main conflicts somewhere other than .github/workflows and .github/scripts, which this fork owns and never takes from upstream. main was left untouched. Merge by hand, then re-run this workflow."
             # Same reasoning as the unreachable case: the issue is the alert, and a 5-minute
             # schedule must not turn one standing condition into a failure notification storm.
             echo "::warning::upstream conflicts with this fork's main outside its own workflows; main left untouched"
