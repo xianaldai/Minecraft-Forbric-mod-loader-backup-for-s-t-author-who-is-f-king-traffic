@@ -208,8 +208,6 @@ class FixturePolicyExtensionTest {
 		assertTrue(failure.getMessage().startsWith("[fixture:third-party] sweep pack"), failure.getMessage());
 		assertTrue(failure.getMessage().contains("-Dforbric.requireFixtures=third-party"), failure.getMessage());
 
-		assertThrows(AssertionFailedError.class, () -> TestFixtures.require(false, "untagged"),
-				"the untagged form counts as every kind, like an untagged raw skip");
 	}
 
 	@Test

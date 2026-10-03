@@ -34,7 +34,7 @@ class EventChainAuditTest {
 		System.setProperty(EventChainAudit.PROPERTY, "unused-in-tests.json");
 		EventChainAudit.reset();
 		Path staged = Path.of(System.getProperty("forbric.stagedRoot"));
-		TestFixtures.requireFiles("staged carriers", staged.resolve("neoforge-runtime/neoforge-runtime.jar"),
+		TestFixtures.requireFiles(TestFixtures.Fixture.STAGED, "staged carriers", staged.resolve("neoforge-runtime/neoforge-runtime.jar"),
 				staged.resolve("forge-runtime/forge-runtime.jar"));
 		String log4j = System.getProperty("forbric.log4jApiForTests", "");
 		assertFalse(log4j.isBlank(), "the build passes the log4j-api jar the real buses need");

@@ -119,7 +119,7 @@ class ForgeOptionsInjectorTest {
 
 	private static byte[] real() throws Exception {
 		Path jar=Path.of(System.getenv().getOrDefault("FORBRIC_OLD","../forbric-loader"),"run/merged-base/patched-mc-merged-26.2.jar");
-		TestFixtures.requireFiles("staged merged base",jar);
+		TestFixtures.requireFiles(TestFixtures.Fixture.STAGED, "staged merged base",jar);
 		try(ZipFile zip=new ZipFile(jar.toFile())) {return zip.getInputStream(zip.getEntry("net/minecraft/client/Options.class")).readAllBytes();}
 	}
 	private static ClassNode read(byte[] bytes){ClassNode node=new ClassNode();new ClassReader(bytes).accept(node,0);return node;}

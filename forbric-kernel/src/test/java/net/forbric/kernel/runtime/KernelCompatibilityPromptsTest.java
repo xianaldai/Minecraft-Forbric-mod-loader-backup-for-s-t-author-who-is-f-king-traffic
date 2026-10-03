@@ -264,7 +264,7 @@ class KernelCompatibilityPromptsTest {
 		}
 		assertEquals(0, javax.tools.ToolProvider.getSystemJavaCompiler().run(null, null, null, args.toArray(String[]::new)));
 		Path runtime = Path.of("build/classes/java/runtime").toAbsolutePath();
-		TestFixtures.requireFiles("compiled game side", runtime.resolve("net/forbric/kernel/runtime/KernelCompatibilityPrompts.class"));
+		TestFixtures.requireFiles(TestFixtures.Fixture.GAME_SIDE, "compiled game side", runtime.resolve("net/forbric/kernel/runtime/KernelCompatibilityPrompts.class"));
 		return new Fixture(new URLClassLoader(new URL[] {classes.toUri().toURL(), runtime.toUri().toURL()}, getClass().getClassLoader()));
 	}
 

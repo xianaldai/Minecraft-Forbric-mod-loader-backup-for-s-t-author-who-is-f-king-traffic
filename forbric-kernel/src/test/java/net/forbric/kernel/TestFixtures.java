@@ -163,26 +163,6 @@ public final class TestFixtures {
 	}
 
 	/**
-	 * Skips the test when {@code present} is false, or fails it when this run requires any fixture. Untagged, so
-	 * it counts as every kind; {@link #require(Fixture, boolean, String)} says which one it is.
-	 */
-	public static void require(boolean present, String what) {
-		if (present) return;
-		if (!requiredFixtures().isEmpty()) throw new AssertionFailedError(what + " — required by " + policySource());
-		throw new TestAbortedException(what);
-	}
-
-	/** {@link #require} for files: every path must be a regular file. */
-	public static void requireFiles(String what, Path... files) {
-		for (Path file : files) require(Files.isRegularFile(file), what + ": " + file);
-	}
-
-	/** {@link #require} for a directory, such as a local mod pack. */
-	public static void requireDirectory(String what, Path directory) {
-		require(Files.isDirectory(directory), what + ": " + directory);
-	}
-
-	/**
 	 * The staged artifacts' {@code run/} directory: Gradle hands every test task the root the game side compiled
 	 * against as {@code forbric.stagedRoot}; outside Gradle it is {@code FORBRIC_OLD/run}, else the sibling
 	 * forbric-loader checkout's.

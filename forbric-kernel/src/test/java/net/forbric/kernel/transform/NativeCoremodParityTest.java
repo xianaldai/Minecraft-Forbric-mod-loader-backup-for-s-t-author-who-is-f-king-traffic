@@ -28,6 +28,9 @@ class NativeCoremodParityTest {
 	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path FORGE = STAGED.resolve("merged-base/forge-runtime-interop.jar");
 	private static final Path VANILLA = TestFixtures.vanillaJar();
+	/** tools/dev.py prepare downloads NeoForge's universal jar here; its coremods jar is nested inside. */
+	private static final Path NEO_DOWNLOADS = TestFixtures.minecraftDir().resolve(".forbric-build/dl");
+	/** A native NeoForge instance's extracted nested jars, on a machine that ran one. */
 	private static final Path NEO_COREMODS = Path.of("build/journeymap-native/instance/.cache/jij");
 	private static final String POT = "net/minecraft/world/level/block/FlowerPotBlock";
 	private static final String BIOME = "net/minecraft/world/level/biome/Biome";
@@ -106,14 +109,39 @@ class NativeCoremodParityTest {
 			expected.add(NativeCoremodParity.TRIAL_SPAWNER);
 			assertEquals(expected, forge);
 		}
+		String json = neoForgeFinalizeTargets();
+		Set<String> listed = new TreeSet<>();
+		var match = java.util.regex.Pattern.compile("\"([a-zA-Z0-9_.$]+)\"").matcher(json);
+		while (match.find()) listed.add(match.group(1).replace('.', '/'));
+		assertEquals(new TreeSet<>(NativeCoremodParity.FINALIZE_TARGETS), listed);
+	}
+
+	/**
+	 * NeoForge's own finalize_spawn_targets.json: from the coremods jar nested in the universal jar tools/dev.py
+	 * downloaded, else from a native instance's extracted copy. Both are NeoForge's official build, not a mod.
+	 */
+	private static String neoForgeFinalizeTargets() throws Exception {
+		String targets = "net/neoforged/neoforge/coremods/finalize_spawn_targets.json";
+		List<Path> universal = Files.isDirectory(NEO_DOWNLOADS)
+				? Files.list(NEO_DOWNLOADS).filter(p -> p.getFileName().toString().matches("neoforge-.+-universal\\.jar")).sorted().toList()
+				: List.of();
+		if (!universal.isEmpty()) {
+			try (ZipFile outer = new ZipFile(universal.get(universal.size() - 1).toFile())) {
+				ZipEntry nested = Collections.list(outer.entries()).stream()
+						.filter(e -> e.getName().matches("META-INF/jarjar/net\\.neoforged\\.neoforge-coremods-.+\\.jar"))
+						.findFirst().orElseThrow(() -> new AssertionError(universal + " has no nested coremods jar"));
+				try (var in = new java.util.zip.ZipInputStream(outer.getInputStream(nested))) {
+					for (ZipEntry entry; (entry = in.getNextEntry()) != null; ) {
+						if (entry.getName().equals(targets)) return new String(in.readAllBytes());
+					}
+				}
+				throw new AssertionError(nested.getName() + " has no " + targets);
+			}
+		}
 		Optional<Path> neo = Files.isDirectory(NEO_COREMODS) ? Files.walk(NEO_COREMODS).filter(p -> p.getFileName().toString().startsWith("net.neoforged.neoforge-coremods-")).findFirst() : Optional.empty();
-		TestFixtures.require(Fixture.THIRD_PARTY, neo.isPresent(), "native NeoForge coremods jar absent");
+		TestFixtures.require(Fixture.MC_LIBRARIES, neo.isPresent(), "NeoForge universal jar absent from " + NEO_DOWNLOADS);
 		try (ZipFile zip = new ZipFile(neo.get().toFile())) {
-			Set<String> listed = new TreeSet<>();
-			String json = new String(zip.getInputStream(zip.getEntry("net/neoforged/neoforge/coremods/finalize_spawn_targets.json")).readAllBytes());
-			var match = java.util.regex.Pattern.compile("\"([a-zA-Z0-9_.$]+)\"").matcher(json);
-			while (match.find()) listed.add(match.group(1).replace('.', '/'));
-			assertEquals(new TreeSet<>(NativeCoremodParity.FINALIZE_TARGETS), listed);
+			return new String(zip.getInputStream(zip.getEntry(targets)).readAllBytes());
 		}
 	}
 

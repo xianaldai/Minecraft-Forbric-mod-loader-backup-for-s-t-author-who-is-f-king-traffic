@@ -19,7 +19,7 @@ class WatchdogDumpEquivalenceTest {
  private static final String CONFIG="fabric-crash-report-info-v1.mixins.json";
  @BeforeEach @AfterEach void reset(){MixinCompatibility.reset();CompatibilityFindings.reset();MixinConfigOwners.publish(List.of(new MixinConfigOwners.Owned(CONFIG,"crash-info",Ecosystem.FABRIC)));}
  private Path neo(){return Path.of(System.getenv().getOrDefault("NEO_RT",Path.of(System.getenv().getOrDefault("FORBRIC_OLD","../forbric-loader"),"run/neoforge-runtime/neoforge-runtime.jar").toString()));}
- private ClassNode helper()throws Exception{TestFixtures.requireFiles("staged NeoForge carrier",neo());try(ZipFile z=new ZipFile(neo().toFile())){return MixinFit.parse(z.getInputStream(z.getEntry(WatchdogDumpEquivalence.HELPER.replace('.','/')+".class")).readAllBytes());}}
+ private ClassNode helper()throws Exception{TestFixtures.requireFiles(TestFixtures.Fixture.STAGED, "staged NeoForge carrier",neo());try(ZipFile z=new ZipFile(neo().toFile())){return MixinFit.parse(z.getInputStream(z.getEntry(WatchdogDumpEquivalence.HELPER.replace('.','/')+".class")).readAllBytes());}}
  private ClassNode target(boolean changedHandler)throws Exception{
   MixinCompatibility.rememberOriginalConfig(CONFIG,"{\"required\":true,\"package\":\"net.fabricmc.fabric.mixin.crash.report.info\",\"mixins\":[\"ServerWatchdogMixin\"],\"injectors\":{\"defaultRequire\":1}}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
   ClassNode mixin=StagedFabricMixinFixture.mixin("fabric-crash-report-info-v1",WatchdogDumpEquivalence.MIXIN.replace('.','/'));
@@ -45,7 +45,7 @@ class WatchdogDumpEquivalenceTest {
   ClassNode helper=helper();helper.methods.removeIf(m->m.name.equals("getEntireStacktrace"));observeHelper(helper);observeTarget(target(false));assertEquals(CompatibilityFinding.Confidence.CONFIRMED,finding().confidence());
  }
  @Test void bothActualUpstreamRenderersRetainEveryFrameBeyondTheJdkEightFrameLimit()throws Exception{
-  TestFixtures.requireFiles("local merged mod pack and staged NeoForge carrier",TestFixtures.fabricApi(),neo());
+  TestFixtures.requireFiles(TestFixtures.Fixture.STAGED, "local merged mod pack and staged NeoForge carrier",TestFixtures.fabricApi(),neo());
   Path fabric=temporary.resolve("crash-info.jar");try(ZipFile z=new ZipFile(TestFixtures.fabricApi().toFile())){var entry=z.stream().filter(e->e.getName().startsWith("META-INF/jars/fabric-crash-report-info-v1-")).findFirst().orElseThrow();Files.write(fabric,z.getInputStream(entry).readAllBytes());}
   try(URLClassLoader loader=new URLClassLoader(new URL[]{neo().toUri().toURL(),fabric.toUri().toURL()},ClassLoader.getPlatformClassLoader())){
    var nativeRender=loader.loadClass(WatchdogDumpEquivalence.HELPER).getMethod("getEntireStacktrace",ThreadInfo.class);var fabricRender=loader.loadClass("net.fabricmc.fabric.impl.crash.report.info.ThreadPrinting").getMethod("fullThreadInfoToString",ThreadInfo.class);
