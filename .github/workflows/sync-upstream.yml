@@ -7,9 +7,11 @@
 #     force-push, or deleting the repo outright -- cannot reach backwards into what this fork
 #     already holds. The merge case even keeps an upstream-rewritten lineage and the
 #     previously mirrored one reachable at the same time.
-#   * It never runs rebase, reset, or any flavor of force push. The plain `git push` at the
-#     end is deliberate: it can only ever land fast-forwards or the merge commit above, so
-#     nothing it does can rewrite this fork's history even if its merge logic were wrong.
+#   * It never runs rebase or any flavor of force push. The one reset it runs is over its own
+#     checkout, to start again from a fork main that moved while it was working, and never over
+#     anything that has been published. The plain `git push` at the end is deliberate: it can
+#     only ever land fast-forwards or the merge commit above, so nothing it does can rewrite
+#     this fork's history even if its merge logic were wrong.
 #   * If upstream vanishes (deleted, renamed, made private), the run stops before any ref in
 #     this clone has moved; main is left exactly as it was and an issue is opened. The copy
 #     survives upstream's death by design. Note "stops", not "fails": the issue is the alert,
@@ -28,10 +30,13 @@
 #     to mirror; if that ever changes, this file is where a mirror would be added.
 #   * The schedule below is the intended heartbeat, and since 2026-08-26 GitHub's cron dispatch
 #     has been unreliable platform-wide: many repos report that no scheduled run is created at
-#     all (workflow_dispatch starts within seconds on the same file). This fork has had zero
-#     schedule-triggered runs. Nobody needs to fix anything here -- the trigger stays so it
-#     resumes by itself -- but until runs stop being missing, expect to dispatch this workflow
-#     by hand, and do not read a quiet Actions tab as "upstream has not changed".
+#     all (workflow_dispatch starts within seconds on the same file). Here it does fire, but
+#     hours apart rather than minutes: 3 scheduled runs in the fork's first day, against the
+#     ~350 the cron asks for, measured 2026-10-03. The trigger stays so it resumes by itself,
+#     and what actually covers the gap is a local watchdog that dispatches this workflow when
+#     upstream changes (see .github/scripts/watch-upstream.ps1). Either way, do not read a
+#     quiet Actions tab as "upstream has not changed" -- the fork's own issues are where a
+#     change lands, and they are the thing to read.
 name: sync upstream
 
 on:
@@ -109,30 +114,63 @@ jobs:
           # (upstream rewrote its workflows, upstream added a workflow, a conflict outside them)
           # outside CI. Its contract: exit 0 = main is in the wanted state, exit 20 = a conflict
           # this fork will not resolve by itself, anything else = unexpected.
-          if bash .github/scripts/merge-upstream.sh upstream main; then
-            merge_status=0
-          else
-            merge_status=$?
-          fi
+          #
+          # The loop is for this fork's own main moving while the run works: a person pushing,
+          # the web "Sync fork" button, or the run before this one still finishing. A push
+          # refused for that reason says nothing about the backup being in trouble, and with
+          # runs now minutes or less apart it would be red often enough to stop meaning
+          # anything. Each attempt starts again from the fork's current tip and redoes the
+          # merge on top of it.
+          #
+          # Only this job's own checkout moves in that reset, and only over a commit this run
+          # built a moment ago and has not published. The push below is still a plain push, so
+          # the published history can only ever gain commits -- and a non-fast-forward still
+          # cannot land even if this reasoning were wrong.
+          attempt=1
+          while true; do
+            git fetch origin main
+            git reset --hard origin/main
 
-          if [ "$merge_status" -eq 20 ]; then
-            notify \
-              "Upstream cannot be merged automatically" \
-              "Merging ${UPSTREAM_REPO}/main into this fork's main conflicts somewhere other than .github/workflows and .github/scripts, which this fork owns and never takes from upstream. main was left untouched. Merge by hand, then re-run this workflow."
-            # Same reasoning as the unreachable case: the issue is the alert, and a 5-minute
-            # schedule must not turn one standing condition into a failure notification storm.
-            echo "::warning::upstream conflicts with this fork's main outside its own workflows; main left untouched"
-            exit 0
-          fi
+            if bash .github/scripts/merge-upstream.sh upstream main; then
+              merge_status=0
+            else
+              merge_status=$?
+            fi
 
-          if [ "$merge_status" -ne 0 ]; then
-            echo "::error::merging upstream failed with status ${merge_status}; main left untouched"
-            exit 1
-          fi
+            if [ "$merge_status" -eq 20 ]; then
+              notify \
+                "Upstream cannot be merged automatically" \
+                "Merging ${UPSTREAM_REPO}/main into this fork's main conflicts somewhere other than .github/workflows and .github/scripts, which this fork owns and never takes from upstream. main was left untouched. Merge by hand, then re-run this workflow."
+              # Same reasoning as the unreachable case: the issue is the alert, and a run every
+              # few minutes must not turn one standing condition into a failure notification storm.
+              echo "::warning::upstream conflicts with this fork's main outside its own workflows; main left untouched"
+              exit 0
+            fi
 
-          # No --force and no --force-with-lease, on purpose: the server-side ruleset must be the
-          # thing that stops a non-fast-forward, not this script's discipline.
-          git push origin main
+            if [ "$merge_status" -ne 0 ]; then
+              echo "::error::merging upstream failed with status ${merge_status}; main left untouched"
+              exit 1
+            fi
+
+            # No --force and no --force-with-lease, on purpose: the server-side ruleset must be
+            # the thing that stops a non-fast-forward, not this script's discipline.
+            if push_out=$(git push origin main 2>&1); then
+              echo "$push_out"
+              break
+            fi
+            echo "$push_out"
+            if ! printf '%s\n' "$push_out" | grep -qE 'non-fast-forward|fetch first'; then
+              # Anything else -- permissions, a missing ref, the server refusing for real --
+              # is not a race and must not be retried into looking like one.
+              echo "::error::pushing main failed for a reason other than main moving under this run"
+              exit 1
+            fi
+            if [ "$attempt" -ge 3 ]; then
+              echo "::warning::main moved during each of 3 attempts; leaving the rest to the next run"
+              exit 0
+            fi
+            attempt=$((attempt + 1))
+          done
 
           # Best effort: mirror tags too. An upstream that moved or deleted a tag must not fail
           # the run -- the commit sync above already succeeded.

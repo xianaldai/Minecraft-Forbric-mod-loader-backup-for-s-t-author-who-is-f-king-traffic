@@ -53,9 +53,13 @@ Watermarks for the change detection live in state.json on the mirror-state
 branch, not in this repository's history. A run that finds nothing new writes
 nothing at all.
 
-Limit: GitHub caps issue bodies at 65536 characters. An upstream issue with
-a very long comment thread would fail to archive; the run reports it and
-carries on (each archive attempt is independent).
+Limit: GitHub caps an issue body and a comment body at 65536 characters. An
+event that outgrows one comment is posted as several, in order, each saying
+which part it is, and a single quoted comment bigger than the whole limit is
+cut with the cut marked in the archiver's own words -- so nothing is dropped
+for being long. What that still leaves is an upstream issue whose body and
+comments together exceed the limit on the day it is first archived: that one
+fails to archive, the run says so, and later runs keep trying.
 """
 
 import base64
@@ -254,12 +258,69 @@ def events_issue():
     return created["number"]
 
 
+def cut_marker(count):
+    """The archiver's own words, and marked as such, where a quoted comment is cut in two."""
+    return ("**(quoted text cut here; it continues in the next part%s)**"
+            % (", %d more" % count if count else ""))
+
+
+def split_for_limit(lines, limit):
+    """Group event lines into comment-sized chunks, cutting a line that is too big on its own.
+
+    GitHub refuses a comment body over 65536 characters, and thirty upstream comments quoted in
+    full blow past that easily. Before this, the post failed whole: nothing was recorded, the
+    watermark did not move, and every later run failed the same way on the same thread. A cut
+    line closes its code fence, says so in the archiver's own voice, and reopens the fence, so
+    the text is all still there in order, inside fences that still balance.
+    """
+    chunks = []
+    current = []
+    size = 0
+    for line in lines:
+        # The blank line and the "\n\n" join are part of the size; approximate with slack, and
+        # leave room for the cut marker and fences so a cut line's pieces stay in one chunk
+        # instead of pushing each piece into a comment of its own.
+        budget = limit - 400
+        if len(line) > budget:
+            piece_count = (len(line) + budget - 1) // budget
+            pieces = [line[i * budget:(i + 1) * budget] for i in range(piece_count)]
+            expanded = []
+            for index, piece in enumerate(pieces):
+                expanded.append(piece)
+                if index + 1 < len(pieces):
+                    expanded += ["", "````", cut_marker(piece_count - index - 1), "````"]
+            line = None
+            todo = expanded
+        else:
+            todo = [line]
+        for item in todo:
+            if current and size + len(item) + 2 > limit:
+                chunks.append(current)
+                current = []
+                size = 0
+            current.append(item)
+            size += len(item) + 2
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def post_event(issue_number, lines):
-    """Append one event to an archive issue. Never edits what is already there."""
-    body = "%s at %s -->\n\n%s" % (EVENT, stamp(), "\n\n".join(lines))
-    api("/repos/%s/issues/%d/comments" % (FORK_REPO, issue_number), method="POST",
-        body={"body": body})
-    print("    recorded an upstream change on #%d" % issue_number)
+    """Append one event to an archive issue. Never edits what is already there.
+
+    An event too big for one comment arrives as several, in order, each saying which part it is.
+    """
+    # Room left for the marker line, the date, and the part header.
+    chunks = split_for_limit(lines, 60000)
+    for index, chunk in enumerate(chunks, 1):
+        head = ""
+        if len(chunks) > 1:
+            head = "**(part %d of %d)**\n\n" % (index, len(chunks))
+        body = "%s at %s -->\n\n%s%s" % (EVENT, stamp(), head, "\n\n".join(chunk))
+        api("/repos/%s/issues/%d/comments" % (FORK_REPO, issue_number), method="POST",
+            body={"body": body})
+    print("    recorded an upstream change on #%d%s"
+          % (issue_number, " (%d comments)" % len(chunks) if len(chunks) > 1 else ""))
 
 
 # ------------------------------------------------- writers
