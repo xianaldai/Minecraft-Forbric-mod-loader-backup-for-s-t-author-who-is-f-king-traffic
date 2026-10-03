@@ -12,13 +12,16 @@
 # What it looks at: upstream's main commit, the numbers and timestamps of its issues and pull
 # requests, its releases, and its tags. Any difference from the last look -- including a number
 # that disappeared, which is what a deletion looks like from outside -- counts as a change.
-# Nothing is dispatched twice for the same shape of upstream, so a machine left on all day asks
-# for a handful of runs, not 1440.
+# Nothing is dispatched twice for the same shape of upstream, and nothing is dispatched while a
+# run is already going, so a busy upstream settles into "one run at a time, as fast as the runs
+# themselves finish" instead of a queue of them, and an idle one asks for a handful a day.
 #
 # Its memory lives in %LOCALAPPDATA%\forbric-upstream-watch, never in the working clone, so it
-# cannot dirty a checkout or be confused by a branch someone is on. A failed read (no network,
-# gh logged out, GitHub down) is logged and retried on the next tick; it never dispatches on a
-# shape it could not read.
+# cannot dirty a checkout or be confused by a branch someone is on. A read that fails for an
+# ordinary reason (no network, gh logged out, GitHub down) is logged and retried on the next
+# tick, and never dispatches on a shape it could not read. A read that answers 404 is different
+# and dispatches: a repository that has stopped existing is the change this fork was built to
+# survive, not a hiccup, and the run it asks for is the one that raises the alert issue.
 #
 # Install and remove it with install-watch-task.ps1 next to this file, which registers it as a
 # Windows scheduled task (once a minute is the smallest Windows repeats, and it is why the task
@@ -43,8 +46,10 @@ $MinSeconds = 90
 # With nothing changing at all, ask for a run this often: upstream can always change something
 # this probe does not look at, and a run that finds nothing new writes nothing.
 $HeartbeatHours = 6
-# And a hard cap for the day, in case it is this probe that is broken rather than upstream busy.
-$MaxPerDay = 120
+# And a hard cap for the day, insurance against this probe being the broken thing rather than
+# upstream being busy. Not the real limiter: that is the in-flight check below, which cannot be
+# tuned into a runaway because it only ever dispatches into an idle window.
+$MaxPerDay = 300
 
 $StateDir = Join-Path $env:LOCALAPPDATA 'forbric-upstream-watch'
 $StatePath = Join-Path $StateDir 'watch-state.json'
@@ -130,21 +135,37 @@ if (Test-Path -LiteralPath $StatePath) {
     try { $state = Get-Content -Raw -LiteralPath $StatePath | ConvertFrom-Json } catch { $state = $null }
 }
 
+$gone = $false
 try {
     $shape = Get-UpstreamShape
 } catch {
-    # A tick that cannot read upstream must not guess, and must not shout once a minute either.
-    # The position goes in the log because a watchdog that breaks quietly is worse than none.
-    Write-WatchLog ("could not read upstream: {0} [{1}] {2} {3}" -f $_.Exception.Message,
-                    ($_.InvocationInfo.PositionMessage -replace '\s+', ' ').Trim(),
-                    $_.Exception.GetType().FullName,
-                    ($_.ScriptStackTrace -replace '\s+', ' ').Trim())
-    exit 0
+    $message = $_.Exception.Message
+    if ($message -match 'HTTP 404|HTTP 410|Not Found') {
+        # Deleted, renamed, or made private. That is not a read that failed -- it is the one
+        # change this fork exists to notice, and a watcher that only logged it would leave the
+        # backup silent through the exact event the user built it for. Dispatch (under the same
+        # guards); the sync job raises the alert issue and never touches main. The signature is
+        # a word rather than a hash so that upstream coming back also reads as a change.
+        $gone = $true
+        $shape = [pscustomobject]@{ Sig = 'upstream-not-visible'
+                                    Summary = 'upstream is not visible' }
+    } else {
+        # Network, auth, GitHub down: not a reason to guess, and not a reason to shout once a
+        # minute either. The position goes in the log -- a watchdog that breaks quietly is
+        # worse than none.
+        Write-WatchLog ("could not read upstream: {0} [{1}] {2} {3}" -f $message,
+                        ($_.InvocationInfo.PositionMessage -replace '\s+', ' ').Trim(),
+                        $_.Exception.GetType().FullName,
+                        ($_.ScriptStackTrace -replace '\s+', ' ').Trim())
+        exit 0
+    }
 }
 
 $last = Get-LastDispatch $state
 $reason = $null
-if (-not $state -or -not $state.sig) {
+if ($gone) {
+    $reason = 'upstream is not visible'
+} elseif (-not $state -or -not $state.sig) {
     $reason = 'first look'
 } elseif ($shape.Sig -ne $state.sig) {
     $reason = 'upstream changed'
@@ -166,6 +187,20 @@ if ($last -and ($now - $last).TotalSeconds -lt $MinSeconds) {
                     $reason, ($now - $last).TotalSeconds)
     exit 0
 }
+
+# A run already in flight is reading the same upstream: it will have picked up everything that
+# changed while it was starting, so a second dispatch now would only queue another run behind
+# the workflow's concurrency group. Skipping costs nothing, because the next tick sees the same
+# difference and dispatches once the run has finished. This is what keeps a busy upstream from
+# turning into a stack of runs.
+$latest = @((Invoke-Gh @('run', 'list', '--repo', $Fork, '--workflow', $Workflow, '--limit', '1',
+                         '--json', 'databaseId,status')) | ConvertFrom-Json)[0]
+if ($latest -and 'queued', 'in_progress', 'waiting', 'requested', 'pending' -contains $latest.status) {
+    Write-WatchLog ('{0}, but run {1} is still {2}; waiting for it' -f
+                    $reason, $latest.databaseId, $latest.status)
+    exit 0
+}
+
 if ($dayCount -ge $MaxPerDay) {
     Write-WatchLog ('{0}, but {1} dispatches already today; not asking for more' -f
                     $reason, $dayCount)
