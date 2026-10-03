@@ -1,22 +1,67 @@
 #!/usr/bin/env python3
-"""Select 100 unseen projects: up to 38 popular from the top 200, then random projects; dependencies are extra.
-Usage: pick.py <data-dir> <seed> <exclude-manifest> ...
+"""Select N unseen projects: up to 38 in 100 popular from the top 200, then random projects; dependencies are extra.
+Usage: [PICK_LOADER=fabric|neoforge|forge] [PICK_COUNT=100] [PICK_SIDE=server] pick.py <data-dir> <seed> <exclude-manifest> ...
+
+Without PICK_LOADER each subject's loader is a seeded choice among its 26.2 builds. With it every subject is that
+loader's build and a project without one is skipped, so a pack of one ecosystem is drawn from the same pools.
+PICK_SIDE=server keeps only projects a dedicated server runs: Modrinth must list the server side as required or
+optional, and a Fabric subject's own fabric.mod.json must not declare environment "client".
 """
-import io, json, random, sys, tomllib, urllib.error, urllib.parse, zipfile
+import io, json, os, random, sys, tomllib, urllib.error, urllib.parse, zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import api as p
-from archive import jar_ids
+from archive import environment, jar_ids
 
-DATA = Path(sys.argv[1]).resolve()
-SEED = int(sys.argv[2])
-EXCLUDE = [Path(x) for x in sys.argv[3:]]
-rng = random.Random(SEED)
 IGNORE = {'minecraft', 'java', 'fabricloader', 'fabric-loader', 'neoforge', 'forge', 'quilt_loader', 'fml', 'javafml',
           'lowcodefml'}
+SIDES = ('server',)
 
 
-def main():
+def choose_loader(builds, rng, forced=None):
+    """The loader whose build a project contributes, or None to skip it.
+
+    Forced, a project without that loader's build is skipped rather than substituted: a NeoForge build is not a
+    Fabric mod. Otherwise the choice is seeded over the sorted loaders, so it does not depend on dict order.
+    """
+    if forced:
+        return forced if forced in builds else None
+    return rng.choice(sorted(builds)) if builds else None
+
+
+def popular_share(count):
+    """How many of `count` subjects come from the popular pool: 38 of 100, as every earlier sweep drew them."""
+    return round(count * 38 / 100)
+
+
+def settings(environ):
+    forced = environ.get('PICK_LOADER') or None
+    if forced and forced not in p.LOADERS:
+        raise SystemExit(f'PICK_LOADER must be one of {", ".join(p.LOADERS)}, not {forced!r}')
+    count = int(environ.get('PICK_COUNT', '100'))
+    if count < 1:
+        raise SystemExit('PICK_COUNT must be positive')
+    side = environ.get('PICK_SIDE') or None
+    if side and side not in SIDES:
+        raise SystemExit(f'PICK_SIDE must be one of {", ".join(SIDES)}, not {side!r}')
+    return forced, count, side
+
+
+def facets(forced, side):
+    rows = [[f'versions:{p.MC}'], ['project_type:mod'], [f'categories:{l}' for l in ((forced,) if forced else p.LOADERS)]]
+    if side == 'server':
+        rows.append(['server_side:required', 'server_side:optional'])
+    return json.dumps(rows)
+
+
+def main(argv=None, environ=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if len(argv) < 2:
+        raise SystemExit(__doc__)
+    DATA, SEED, EXCLUDE = Path(argv[0]).resolve(), int(argv[1]), [Path(x) for x in argv[2:]]
+    forced, count, side = settings(os.environ if environ is None else environ)
+    rng = random.Random(SEED)
+    FACETS = facets(forced, side)
     DATA.mkdir(parents=True, exist_ok=True)
     excluded_pids = set()
     for m in EXCLUDE:
@@ -44,6 +89,30 @@ def main():
         print(f'  + {kind:11} {slug} [{loader}] {version["version_number"]}' + (f'  (for {needed_by})' if needed_by else ''), flush=True)
         return True
 
+    def side_ok(hit, version, loader):
+        if hit.get('server_side') not in ('required', 'optional'):
+            return False
+        if loader != 'fabric':
+            return True
+        # The jar is the authority Fabric Loader itself reads; Modrinth's side flags are the author's form entry.
+        a = p.primary(version)
+        cached = DATA / 'probe' / (a['hashes']['sha1'] + '.jar')
+        if not (cached.is_file() and p.sha1(cached) == a['hashes']['sha1']):
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            cached.write_bytes(p.fetch(a['url']))
+            if p.sha1(cached) != a['hashes']['sha1']:
+                raise SystemExit('hash mismatch ' + a['filename'])
+        return environment(cached.read_bytes()) in ('*', 'server')
+
+    def download(row):
+        target = DATA / 'mods' / row['filename']
+        if not (target.is_file() and target.stat().st_size == row['size'] and p.sha1(target) == row['sha1']):
+            probed = DATA / 'probe' / (row['sha1'] + '.jar')
+            target.write_bytes(probed.read_bytes() if probed.is_file() else p.fetch(row['url']))
+            if target.stat().st_size != row['size'] or p.sha1(target) != row['sha1']:
+                raise SystemExit('hash/size mismatch ' + row['filename'])
+        row['sha1_ok'] = True
+
     def pick(hits, want, kind):
         got = 0
         for h in hits:
@@ -53,9 +122,11 @@ def main():
             if pid in picked or pid in excluded_pids:
                 continue
             builds = p.loader_builds(pid)
-            if not builds:
+            loader = choose_loader(builds, rng, forced)
+            if loader is None:
                 continue
-            loader = rng.choice(sorted(builds))
+            if side and not side_ok(h, builds[loader], loader):
+                continue
             mine = {d.get('project_id') for d in builds[loader].get('dependencies', []) if d.get('dependency_type') == 'incompatible'}
             picked.add(pid)
             got += add(slug, pid, loader, builds[loader], kind)
@@ -63,32 +134,25 @@ def main():
 
     top = []
     for off in (0, 100):
-        top += p.get('/search', facets=p.FACETS, index='downloads', limit=100, offset=off)['hits']
+        top += p.get('/search', facets=FACETS, index='downloads', limit=100, offset=off)['hits']
     rng.shuffle(top)
-    (DATA / 'pool.json').write_text(json.dumps(dict(seed=SEED, popular=top), indent=1) + '\n')
+    (DATA / 'pool.json').write_text(json.dumps(dict(seed=SEED, loader=forced, count=count, side=side, facets=FACETS,
+                                                    popular=top), indent=1) + '\n')
     print('popular (top 200 by downloads):')
-    n_pop = pick(top, min(38, sum(h['project_id'] not in excluded_pids for h in top)), 'popular')
-    wanted_random = 100 - n_pop
-    total = p.get('/search', facets=p.FACETS, limit=1)['total_hits']
+    n_pop = pick(top, min(popular_share(count), sum(h['project_id'] not in excluded_pids for h in top)), 'popular')
+    wanted_random = count - n_pop
+    total = p.get('/search', facets=FACETS, limit=1)['total_hits']
     offsets = list(range(0, min(total, 10000), 100))
     rng.shuffle(offsets)
     pool = []
     for off in offsets[:15]:
-        pool += p.get('/search', facets=p.FACETS, index='newest', limit=100, offset=off)['hits']
+        pool += p.get('/search', facets=FACETS, index='newest', limit=100, offset=off)['hits']
     rng.shuffle(pool)
     saved_pool = json.loads((DATA / 'pool.json').read_text())
     saved_pool.update(random=pool, total=total)
     (DATA / 'pool.json').write_text(json.dumps(saved_pool, indent=1) + '\n')
     print(f'random (pool {len(pool)} of {total}):')
     n_rand = pick(pool, wanted_random, 'random')
-
-    def download(row):
-        target = DATA / 'mods' / row['filename']
-        if not (target.is_file() and target.stat().st_size == row['size'] and p.sha1(target) == row['sha1']):
-            target.write_bytes(p.fetch(row['url']))
-            if target.stat().st_size != row['size'] or p.sha1(target) != row['sha1']:
-                raise SystemExit('hash/size mismatch ' + row['filename'])
-        row['sha1_ok'] = True
 
     (DATA / 'mods').mkdir(parents=True, exist_ok=True)
     queue, done = list(selected.values()), set()
@@ -157,7 +221,7 @@ def main():
     from collections import Counter
     print('total jars', len(manifest), Counter(r['kind'] for r in manifest), Counter(r['loader'] for r in manifest))
     print('unresolved', unresolved)
-    return 0 if n_pop + n_rand == 100 else 2
+    return 0 if n_pop + n_rand == count else 2
 
 
 if __name__ == '__main__':

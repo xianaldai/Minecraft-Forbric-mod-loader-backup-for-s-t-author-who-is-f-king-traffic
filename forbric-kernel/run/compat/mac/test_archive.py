@@ -47,6 +47,10 @@ class ArchiveDependenciesTest(unittest.TestCase):
         host = jar({'fabric.mod.json': json.dumps(dict(schemaVersion=1, id='host', version='1', jars=[dict(file='child.jar')])), 'child.jar': child})
         self.assertEqual(({'host', 'child'}, set()), jar_ids(host))
 
+    def test_a_raw_control_character_in_a_string_is_read_like_fabric_loader_reads_it(self):
+        host = jar({'fabric.mod.json': '{"schemaVersion": 1, "id": "host", "version": "1",\n "description": "two\tcolumns\nand lines",\n "depends": {"lib": "*"}}'})
+        self.assertEqual(({'host'}, {'lib'}), jar_ids(host))
+
     def test_missing_declared_payload_is_a_setup_failure(self):
         host = jar({'META-INF/jarjar/metadata.json': json.dumps(dict(jars=[dict(path='missing.jar')]))})
         with self.assertRaisesRegex(ValueError, 'declared nested jar missing'):

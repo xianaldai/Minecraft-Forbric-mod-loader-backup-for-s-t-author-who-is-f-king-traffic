@@ -356,6 +356,44 @@ kernel and merge-tools jars it is about to publish.
 `NATIVE_CONTROL_CACHE` selects the read-only reference checkout; its default is the parent of `FORBRIC_OLD`,
 or this checkout when that variable is absent. All generated files remain under this kernel's `build/`.
 
+`native-controls.py run-set --engine native|forbric --family fabric --mods JAR... [--ticks 200] [--timeout 900]
+[--xmx 3G] [--level-type minecraft:normal] [--policy strict] [--keep]` boots one fresh server under `build/native-controls/instances/`
+with exactly those jars (a normal world from the fixed seed, view and simulation distance 3, pause when empty off),
+waits for `Done (` as `control-diff.sh` does, asks `time query gametime` until the game has advanced `--ticks`, then
+saves and stops. The native arm is the image `prepare --family fabric` installed; the Forbric arm builds this
+checkout's kernel jar first and runs `launch-kernel-server.sh` under the strict policy (a dedicated server has no
+window, so the product default refuses the same way; `--policy continue` shows what a refused launch would have
+done, as a diagnostic and never as the comparison). `results/<run>/result.json` records `outcome`, the
+`modSetSha256` over the sorted jar SHA-256s (equal on both arms means they ran the same bytes), the kernel jar's
+SHA-256 (Forbric) or the launcher's (native), the measured game time, `signature` (`mac/ddmin_core.signature` of a
+failure), crash-report count, uncaught exceptions of other threads, and whether a non-daemon thread kept the JVM
+alive after the server had stopped (`lingeredAfterStop`, killed and not a failure). The console is classified by
+`server_outcome(log, ticks, exit_code)` alone: no `Done (` is `FAILED_TO_START` when the process ended on its own or
+printed a start failure (`Failed to start the minecraft server`, an uncaught `main` exception, a Forbric policy
+stop) and `STALL` when it had to be killed; after `Done (`, a crash report, the run loop's `Encountered an unexpected
+exception`, an exception escaping the server or main thread, a failed stop or a JVM fatal error is `CRASH`, and so is
+a JVM that went away by itself before the stop; it is `DONE` only when the ticks were reached and the stop was
+acknowledged. A mod that logs a caught exception and keeps ticking is not a crash. `test_native_controls.py` pins
+these on synthetic consoles. The instance is deleted after a `DONE` without `--keep`; the console, crash reports and
+the kernel's reports stay in `results/<run>/`.
+
+`fabric-ab.py --data <pick dir> --out <dir> pack|per-mod|confirm|ddmin|summary` runs a pure-Fabric pick (for example
+`PICK_LOADER=fabric PICK_COUNT=130 PICK_SIDE=server mac/pick.py`, then `mac/closure.py`) through `run-set` on both arms.
+It refuses a jar that is not the manifest's bytes or a closure that names a jar outside the manifest. `pack` runs
+every jar together (`--subjects native-pass` only the subjects that ran alone on native Fabric, `matched-pass` those
+that ran alone on both, each with its dependencies); `per-mod --jobs N` runs each subject with its `closure.json`
+dependencies; `confirm` reruns, one at a time, each per-mod pair whose arms disagree; `ddmin [--subjects ...]`
+minimises a pack's Forbric failure with `mac/ddmin_core.py` (oracle: the Forbric arm; FAIL: the pack session's
+signature; seeds: that session's own evidence, where a named library or nested mod stands for the at most three
+candidates that pull it in, since only candidates can be taken out) and then runs the minimal set on native Fabric, so the result says
+`FORBRIC_ONLY` or `BOTH_FAIL` from a run rather than an argument. Every session is a line of `<out>/runs.jsonl`
+keyed by engine, mod-set SHA-256, ticks and the engine's identity (the kernel jar's SHA-256 or the launcher's), so a
+repeated or interrupted command runs only what it has not seen, and a session of another kernel is never reused.
+A pair is `MATCHED_PASS`, `FORBRIC_ONLY`, `NATIVE_ONLY`, `BOTH_FAIL`, or `INPUT_MISMATCH` when its arms ran different
+bytes. `summary [--report DIR]` writes `summary.json` with jar names, digests, outcomes and signatures and no local
+path. `test_fabric_ab.py` runs all of it against a fake server: verdicts, the cache, kernel refusal, the minimiser
+with a dependency, pack selection and the summary. The 2026-10-03 run is `reports/2026-10-03-pure-fabric-server/`.
+
 `retention-control.py` requires the prepared native NeoForge image and the fixed Unlit Campfire jar in
 the copied mixed pack. It compiles an independent canary, saves a real campfire and compares the untouched
 mod's static cache after normal shutdown on native NeoForge and Forbric. Both arms and their exact mod
@@ -432,6 +470,11 @@ the known missing-field error because the actual original constructor is execute
 
 `mac/pick.py <data-dir> <seed> <exclude-manifest> ...` selects up to 38 previously untested popular projects from the top 200
 and fills the remaining places with random projects for the selected game version, then downloads and verifies required dependencies.
+`PICK_COUNT` changes the 100 subjects (38 in 100 stay popular), `PICK_LOADER=fabric|neoforge|forge` takes every subject's
+build for that loader and skips a project without one instead of substituting another ecosystem's build, and
+`PICK_SIDE=server` keeps only projects whose Modrinth server side is required or optional and, for Fabric, whose own
+`fabric.mod.json` does not declare `"environment": "client"`. Without them the selection is the earlier sweeps' for the
+same seed. `mac/test_pick.py` checks the loader choice, the settings and a whole selection against a fake registry.
 `mac/api.py` supplies registry requests; `mac/archive.py` reads declared nested dependencies recursively.
 Set `PERMOD_DATA=<data-dir>` and run `mac/closure.py` to produce the per-subject transitive dependency sets.
 `mac/per-mod.py` runs each subject separately; dependency libraries are not counted as subjects. Configure

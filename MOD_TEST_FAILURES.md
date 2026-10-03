@@ -4,6 +4,27 @@
 加载器：Forbric main `11ca1ffa`，用 `forbric-kernel-installer` 装进 Mac 官方目录 `~/Library/Application Support/minecraft`（版本 `26.2-forbric`）
 下面的历史测试保留当时结果；后续修复及验证单独记录，不回写原始统计。
 
+## 130 个纯 Fabric mod：原生 Fabric 与 Forbric 同字节对照（服务端，2026-10-03）
+
+用 `PICK_LOADER=fabric PICK_COUNT=130 PICK_SIDE=server`、种子 `20261003` 抽了 49 个热门 + 81 个随机的纯 Fabric 服务端主体，连同依赖共 165 个 jar（sha1 已固定）。同一组 jar 分别跑原生 Fabric Loader 0.19.5 和 Forbric（内核 SHA-256 `80ad82d1…`，strict 策略）专用服，判据是到 `Done` 后实测跑满 tick 数。证据在 `forbric-kernel/run/compat/reports/2026-10-03-pure-fabric-server/`，工具是 `run/compat/fabric-ab.py` 和 `native-controls.py run-set`。**只测了服务端，客户端、联机和渲染没测。**
+
+| | 结果 |
+|---|---|
+| 单独跑（各带依赖，200 tick） | 119 两边都过 · **7 只在 Forbric 失败** · 4 两边都失败 · 0 只在原生失败 |
+| 全部 130 个一起（165 jar） | 两边都起不来（原生自己先死在 beilin-data-portability，那是 1.21.x 的 mod） |
+| 原生能单独跑的 126 个一起（159 jar） | 原生 Done，Forbric 被策略拒绝；ddmin 22 次启动缩到 4 个主体，都在上面那 7 个里，**没有新的组合冲突** |
+| 两边都能单独跑的 119 个一起（149 jar） | 两边都跑满 1200 tick |
+
+只在 Forbric 失败的 7 个（都是 Forbric 的缺陷，未修）：
+
+- notenoughcrashes：它的一个 mixin 目标在原版里本来就不存在，原生静默跳过，Forbric 却算成必需损失并拒绝启动（误报）。
+- debugify、EnhancedVisuals（经 CreativeCore）、MoogsEndStructures（经 MoogsStructureLib）：合并基底的方法体或描述符和原版不同，mixin 锚点找不到。
+- moreladders：合并基底的铜氧化走 NeoForge 数据映射，Fabric 初始化时读到还没绑定的值。
+- ViaVersion（经 ViaFabric）：Forbric 多加载了一个 Minecraft 版本不符的嵌套 jar，两个入口都跑。
+- meowantixray：方块注册表的运行时类型是一个非 public 的 MinecraftForge 类，mod 反射调用被拒，进服后崩溃。
+
+前 6 个改用 continue 策略都能进服跑满 200 tick，但对应功能缺失。两边都失败的 4 个是 mod 自己的问题（1.21.x 的 mod、注册时空指针、用了 Fabric API 却没声明依赖）。
+
 ## 同一批 100 个 mod 用当前内核复测（2026-10-03）
 
 输入与 2026-10-01 完全相同（同一份 manifest、依赖闭包和 jar，SHA-256 已复核），只换了内核：main `ddceddb6` 的内核代码（构建自 `9d6bdc2e`，两者内核源码一致），装进与上次相同布局的**隔离**安装目录，不碰日常使用的版本配置。证据在 `forbric-kernel/run/compat/reports/2026-10-03-sweep100-rerun/`。
