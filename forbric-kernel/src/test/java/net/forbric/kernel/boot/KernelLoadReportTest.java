@@ -408,6 +408,35 @@ class KernelLoadReportTest {
 		assertTrue(zh.contains("怎么办"), "the what-to-do section is the reason the file exists");
 		assertTrue(en.contains("What to do"), en);
 		assertFalse(en.contains("没有完成加载"), "the two renderings must not bleed into each other");
+		// The Chinese half of the claim the test above pins in English; gate-m24 accepts either on a real boot.
+		assertTrue(zh.contains("还有一部分留在游戏里"), zh);
+	}
+
+	@Test
+	void theFileItselfAsksTheSystemWhichLanguage(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+		// The test above names the language; writeTo asks the system for it, and that choice is what this pins. The
+		// English words once asserted on writeTo's file covered it by accident, on an English machine only, and
+		// accepting either language there -- which is right for that test -- left it to nobody.
+		ModCatalog.publish(List.of(entry("alpha")));
+		ModCatalog.mark("alpha", ModCatalog.Status.DEGRADED, "one of its deferred setup tasks threw");
+		java.util.Locale original = java.util.Locale.getDefault();
+		String zh, en;
+		try {
+			java.util.Locale.setDefault(java.util.Locale.SIMPLIFIED_CHINESE);
+			KernelLoadReport.writeTo(dir.resolve("zh").resolve("load-report.txt"));
+			zh = java.nio.file.Files.readString(dir.resolve("zh").resolve("load-report.txt"));
+			java.util.Locale.setDefault(java.util.Locale.ENGLISH);
+			KernelLoadReport.reset();
+			KernelLoadReport.writeTo(dir.resolve("en").resolve("load-report.txt"));
+			en = java.nio.file.Files.readString(dir.resolve("en").resolve("load-report.txt"));
+		} finally {
+			java.util.Locale.setDefault(original);
+		}
+
+		assertTrue(zh.contains("Forbric 加载报告") && zh.contains("有一部分没有跑起来"), zh);
+		assertFalse(zh.contains("partly did not run"), zh);
+		assertTrue(en.contains("Forbric load report") && en.contains("partly did not run"), en);
+		assertFalse(en.contains("有一部分没有跑起来"), en);
 	}
 
 	@Test

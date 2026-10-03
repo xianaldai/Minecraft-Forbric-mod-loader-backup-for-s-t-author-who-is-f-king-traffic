@@ -130,10 +130,12 @@ if [ -f "$REPORT" ]; then
   echo "[kernel] PASS the load report was written ($REPORT)"
   check "the report names the broken mod"   "forbricbrokencanary"     "$REPORT"
   check "the report names its jar"          "forbricbrokencanary.jar" "$REPORT"
-  check "the report says what happened"     "did not finish loading"  "$REPORT"
+  # The file is in the system language (the log lines above are always English), so on a Chinese host these two
+  # read the Chinese wording. KernelLoadReportTest pins each language's words where it names the language.
+  check "the report says what happened"     "did not finish loading|没有完成加载"  "$REPORT"
   # The wording carries a claim that is easy to get wrong and expensive when it is: a withdrawn mod's classes ARE
   # loaded and its mixins ARE applied, so telling a player it is absent sends them to reinstall what is there.
-  check        "the report says the mod is still partly present" "still partly present" "$REPORT"
+  check        "the report says the mod is still partly present" "still partly present|还有一部分留在游戏里" "$REPORT"
   check_absent "and never claims the mod is not running"         "is not running"       "$REPORT"
 else
   echo "[kernel] FAIL no load report at $REPORT"; FAIL=1
