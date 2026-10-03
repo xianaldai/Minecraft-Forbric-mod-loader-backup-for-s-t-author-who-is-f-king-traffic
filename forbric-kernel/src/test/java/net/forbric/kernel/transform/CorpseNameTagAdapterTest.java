@@ -1,6 +1,7 @@
 package net.forbric.kernel.transform;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import static org.junit.jupiter.api.Assertions.*;
 import java.lang.reflect.InvocationTargetException;
 import java.net.*;
@@ -21,7 +22,7 @@ class CorpseNameTagAdapterTest {
  private ClassNode parse(byte[] bytes){ClassNode c=new ClassNode();new ClassReader(bytes).accept(c,0);return c;}
  private byte[] bytes(ClassNode c){ClassWriter w=new ClassWriter(0);c.accept(w);return w.toByteArray();}
  private ClassNode read(Path jar,String name)throws Exception{try(ZipFile z=new ZipFile(jar.toFile())){return parse(z.getInputStream(z.getEntry(name+".class")).readAllBytes());}}
- private ClassNode corpse()throws Exception{Path jar=Path.of("run/client-merged-pack/mods/corpse-neoforge-1.1.17+26.2.jar");TestFixtures.requireFiles("local merged mod pack",jar);return read(jar,CorpseNameTagAdapter.TARGET);}
+ private ClassNode corpse()throws Exception{Path jar=Path.of("run/client-merged-pack/mods/corpse-neoforge-1.1.17+26.2.jar");TestFixtures.requireFiles(Fixture.THIRD_PARTY,"local merged mod pack",jar);return read(jar,CorpseNameTagAdapter.TARGET);}
  private Map<String,ClassNode> declarations()throws Exception{return new HashMap<>(Map.of(
   CorpseNameTagAdapter.NATIVE,read(OLD.resolve("run/neoforge-runtime/neoforge-runtime.jar"),CorpseNameTagAdapter.NATIVE),
   CorpseNameTagAdapter.ATTRIBUTES,read(OLD.resolve("run/merged-base/patched-mc-merged-26.2.jar"),CorpseNameTagAdapter.ATTRIBUTES)));}

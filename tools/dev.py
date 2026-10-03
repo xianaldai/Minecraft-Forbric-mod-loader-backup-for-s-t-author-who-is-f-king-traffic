@@ -33,7 +33,27 @@ API_PINS = (
 STAGED_FILES = ('merged-base/patched-mc-merged-26.2.jar', 'forge-runtime/forge-runtime.jar',
                 'merged-base/forge-runtime-interop.jar', 'neoforge-runtime/neoforge-runtime.jar',
                 # Not launched, but the bytecode tests compare the merge against both patched sides.
-                'forge-patched/patched-mc-forge-26.2.jar', 'neoforge-patched/patched-mc-neoforge-26.2.jar')
+                'forge-patched/patched-mc-forge-26.2.jar', 'neoforge-patched/patched-mc-neoforge-26.2.jar',
+                # Also only read by tests: the merge's own report, the pins that tie the Forge side to this merge,
+                # and the two canary mods (see CANARIES).
+                'merged-base/merge-conflicts.txt', 'merged-base/patched-mc-merged-26.2.jar.pins',
+                'forge-patched/patched-mc-forge-26.2.jar.pins',
+                'forge-runtime/forbriclive.jar', 'neoforge-runtime/forbricneolive.jar')
+# forbric-loader/run/build-testmods.sh's two canary mods, built the same way into the stage: (sources, jar, javac
+# --release, the staged game jars they compile against). Their sources go beside them, as in forbric-loader/run/,
+# because the tests check the packaged data against the source it was built from.
+CANARY_SOURCES = ROOT / 'forbric-loader' / 'run'
+CANARIES = (
+    # The NeoForge carrier last: the MinecraftForge canary asks NeoForge's loader whether a foreign mod is there, as
+    # a multi-platform mod does. build-testmods.sh found that loader among a launcher's libraries.
+    ('livemod-src', 'forge-runtime/forbriclive.jar', '17',
+     ('forge-runtime/forge-runtime.jar', 'forge-patched/patched-mc-forge-26.2.jar', 'neoforge-runtime/neoforge-runtime.jar')),
+    ('livemod-src-neoforge', 'neoforge-runtime/forbricneolive.jar', '21',
+     ('neoforge-runtime/neoforge-runtime.jar', 'neoforge-patched/patched-mc-neoforge-26.2.jar')),
+)
+# What build-testmods.sh packages besides classes. The mixin config goes at the jar root: Forge drops a declared
+# config whose entry is missing with only a warning, so a misplaced one makes the canary silently do nothing.
+CANARY_RESOURCES = ('META-INF', 'forbriclive.mixins.json', 'data', 'assets')
 CONSOLE_PINS = (
     ('jline-reader', '26333a275de502adf1dd9e6ea50aa0b4021412c71490df9ed5e88a648886ee89'),
     ('jline-terminal', 'c0f5d70901255da66a94e59778b265d19f9308342578e34c88fc92d1b0c65fef'),
@@ -246,13 +266,55 @@ def java_environment(java, minimum=25):
     return dict(os.environ, JAVA_HOME=str(home), FORBRIC_DEV_ARCH=values['os.arch'])
 
 
-def gradle(module, arguments, env):
+def gradle(module, arguments, env, capture=False):
     wrapper = ROOT / module / ('gradlew.bat' if os.name == 'nt' else 'gradlew')
     command = [str(wrapper), '-p', str(wrapper.parent)] + list(arguments)
     # Explicit cmd invocation for .bat wrappers; subprocess still quotes paths with spaces.
     if os.name == 'nt':
         command = ['cmd', '/d', '/c'] + command
-    subprocess.run(command, cwd=ROOT, env=env, check=True)
+    result = subprocess.run(command, cwd=ROOT, env=env, check=True, stdout=subprocess.PIPE if capture else None, text=capture)
+    return result.stdout if capture else None
+
+
+def kernel_libraries(env, mc, stage):
+    """sponge-mixin and ASM as the kernel resolves them, which a vanilla Minecraft tree does not have."""
+    # The kernel's prepareDev task hands its classpath over rather than have this start a second build of itself.
+    classpath = env.get('FORBRIC_KERNEL_CLASSPATH') or (gradle(
+        'forbric-kernel', ['-q', 'printBootClasspath'] + build_properties(mc, stage), env, capture=True).strip().splitlines() or [''])[-1]
+    jars = [Path(p) for p in classpath.split(os.pathsep) if p.endswith('.jar')]
+    chosen = [p for p in jars if p.name.startswith(('sponge-mixin-', 'asm-'))]
+    for prefix in ('sponge-mixin-', 'asm-tree-'):
+        if not any(p.name.startswith(prefix) and p.is_file() for p in chosen):
+            raise RuntimeError(f'the kernel classpath has no {prefix}*.jar for the canary mods')
+    return chosen
+
+
+def stage_canaries(stage, libraries, java_home, sources=CANARY_SOURCES):
+    """Build CANARIES into the stage as build-testmods.sh does, replacing what an earlier prepare left."""
+    suffix = '.exe' if os.name == 'nt' else ''
+    javac, jar = (str(Path(java_home) / 'bin' / (tool + suffix)) for tool in ('javac', 'jar'))
+    for source, output, release, game in CANARIES:
+        tree = stage / source
+        if tree.exists():
+            shutil.rmtree(tree)
+        shutil.copytree(sources / source, tree)
+        target = stage / output
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='forbric-canary-') as scratch:
+            classes = Path(scratch) / 'classes'
+            classpath = os.pathsep.join(str(p) for p in [stage / jar_path for jar_path in game] + list(libraries))
+            subprocess.run([javac, '--release', release, '-proc:none', '-cp', classpath, '-d', str(classes)]
+                           + sorted(str(p) for p in tree.rglob('*.java')), check=True)
+            for name in CANARY_RESOURCES:
+                resource = tree / name
+                if resource.is_dir():
+                    shutil.copytree(resource, classes / name, dirs_exist_ok=True)
+                elif resource.is_file():
+                    shutil.copy2(resource, classes / name)
+            partial = target.with_name(target.name + '.part')
+            subprocess.run([jar, '--create', '--file', str(partial), '-C', str(classes), '.'], check=True)
+            partial.replace(target)
+        print(f'[dev] Built {target.name} from {source}', flush=True)
 
 
 def options(args, arch=None):
@@ -280,6 +342,10 @@ def prepare(args, java, env):
     stage_minecraft(mc, natives, env['FORBRIC_DEV_ARCH'], assets=not getattr(args, 'no_assets', False))
     for name, url, sha in API_PINS:
         fetch(url, STATE / 'api' / name, sha, 'sha256')
+    metadata = json.loads((mc / f'versions/{MC_VERSION}/{MC_VERSION}.json').read_text())
+    game_libraries = [confined(mc / 'libraries', entry['path'])
+                      for entry in libraries(metadata, arch=env['FORBRIC_DEV_ARCH']) if entry['path'].endswith('.jar')]
+    stage_canaries(stage, game_libraries + kernel_libraries(env, mc, stage), env['JAVA_HOME'])
     print('[dev] Prepared. Launch with python3 tools/dev.py client (Windows: py tools/dev.py client).', flush=True)
 
 

@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('run_nightly', ROOT / 'tools/nightly/run_nightly.py')
@@ -271,6 +271,18 @@ class NightlyTest(unittest.TestCase):
         self.assertIn('| integration | TIMED OUT after', self.published(f'results/{SATURDAY}/summary.md'))
         time.sleep(4)
         self.assertFalse(proof.exists(), 'a process the timed-out step started outlived it')
+
+    def test_stopping_a_group_that_is_already_gone_is_not_an_error(self):
+        # macOS answered EPERM for the group of a step whose leader had just been reaped, and the night died there
+        # instead of reporting the timeout.
+        process = Mock(pid=4242)
+        for refusal in (ProcessLookupError, PermissionError):
+            # create=True: Windows has neither os.killpg nor signal.SIGKILL, and this path is the posix one.
+            with patch.object(nightly.os, 'name', 'posix'), \
+                    patch.object(nightly.os, 'killpg', side_effect=refusal, create=True), \
+                    patch.object(nightly.signal, 'SIGKILL', 9, create=True):
+                nightly.stop(process, grace=0)
+        self.assertEqual(4, process.wait.call_count)
 
     def test_dry_run_prints_the_night_and_changes_nothing(self):
         before = self.checkout_state()

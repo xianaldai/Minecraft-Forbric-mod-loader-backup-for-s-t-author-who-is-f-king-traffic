@@ -144,15 +144,14 @@ class HookCallSiteCensusStagedTest {
 
 	/** MinecraftForge's own patched game, as it was before the merge took some of its call sites. */
 	private static Path forgePatchedGame() {
-		return TestFixtures.minecraftDir().resolve(
-				"libraries/net/forbric/patched-mc-forge/26.2-65.0.1/patched-mc-forge-26.2-65.0.1.jar");
+		return TestFixtures.forgeMergeInput();
 	}
 
 	@Test
 	void thePartialTableIsExactlyWhatTheCallSitesSay() throws Exception {
 		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(base()), "staged merged base absent");
 		Path before = forgePatchedGame();
-		// A build-merged-base.sh input the staging leaves under libraries/; no vanilla install has it.
+		// The merge's own input, staged beside it; no vanilla install has it.
 		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(before), "MinecraftForge's patched game absent");
 		Path carrier = root().resolve("forge-runtime/forge-runtime.jar");
 		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "staged Forge carrier absent");

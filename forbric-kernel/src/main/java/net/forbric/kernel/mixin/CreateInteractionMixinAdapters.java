@@ -5,9 +5,11 @@ import org.objectweb.asm.*;import org.objectweb.asm.tree.*;
 
 /** Keep Create's redstone, collision and block-break controls around the native operations and event gates. */
 public final class CreateInteractionMixinAdapters {
+	public static final String PROPERTY="forbric.createInteractionMixins";
 	private static final String STATE="net/minecraft/world/level/block/state/BlockState", BLOCK="net/minecraft/world/level/block/Block", POS="net/minecraft/core/BlockPos", OP=MixinWrapOperationShim.OPERATION;
 	private CreateInteractionMixinAdapters() { }
 	public static int adapt(ClassNode mixin,Function<String,ClassNode> targets){
+		if("off".equalsIgnoreCase(System.getProperty(PROPERTY)))return 0;
 		return switch(mixin.name){
 			case "com/zurrtum/create/mixin/SignalGetterMixin"->signal(mixin,targets);
 			case "com/zurrtum/create/mixin/EntityMixin"->bounce(mixin,targets);

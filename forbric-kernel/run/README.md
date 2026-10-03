@@ -12,7 +12,8 @@ python3 tools/dev.py client
 
 On Windows, use `py tools/dev.py client` (or `python` if that is your Python command). The first run
 prepares the game automatically: it downloads Minecraft 26.2, assembles both carriers and the merged base,
-checks their links, downloads platform libraries/assets and pinned Fabric API/Energy APIs, then builds and
+checks their links, downloads platform libraries/assets and pinned Fabric API/Energy APIs, builds the two
+canary mods the unit tests read (`forbric-loader/run/livemod-src*`, as `build-testmods.sh` does), then builds and
 launches the kernel. Later launches reuse those inputs and rebuild changed kernel source.
 
 Everything goes under `forbric-kernel/.dev/`: `minecraft/` holds upstream downloads and build caches,

@@ -956,9 +956,12 @@ java -cp <boot-cp> net.forbric.kernel.boot.Main --scan --mods <dir> --report out
   are uploaded as `kernel-test-results`; regenerate the baseline from that artifact's `skips-actual-ci-unstaged.tsv`
   or with `-Pforbric.writeSkipBaseline`. Job `kernel-prepared` (JDK 25) first builds the game files on the runner
   with `tools/dev.py prepare --no-assets` (Minecraft from Mojang, Forge and NeoForge from their own mavens, the
-  merged base and carriers built there; only upstream downloads are cached and nothing derived is uploaded), then
-  runs the same suite plus `transferTest`. There about 150 tests still skip, nearly all needing third-party mod packs
-  that are not in this repository, held to `ci-prepared.tsv` the same way. Job `development-tools` runs
+  merged base and carriers built there, plus the two canary mods and the merge report the unit tests read; only
+  upstream downloads are cached and nothing derived is uploaded), then runs the same suite plus `transferTest` with
+  `-Pforbric.requireFixtures=staged,game-side,mc-libraries,java-25`: every kind of fixture except third-party mod
+  packs is present there, so a skip for any other kind, or an untagged skip, fails the job at the test that skipped.
+  The 136 tests that still skip all need third-party mod packs that are not in this repository, held to
+  `ci-prepared.tsv` the same way. Job `development-tools` runs
   `tools/dev.py tool-test` and the packaged link gate on Windows, Linux and macOS. kernel-prepared then runs four
   real dedicated-server gates on the same files: m1, m36, m46 and m53, whose mods are canaries built from this
   repository. The other gates (client, third-party packs, soak) need the developer's Mac: `tools/nightly/` runs

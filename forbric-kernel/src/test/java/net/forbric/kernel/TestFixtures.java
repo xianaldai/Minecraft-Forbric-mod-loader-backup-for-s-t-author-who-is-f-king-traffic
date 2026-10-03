@@ -219,6 +219,33 @@ public final class TestFixtures {
 	}
 
 	/**
+	 * MinecraftForge's patched game exactly as the merged base under {@link #stagedRoot()} took it. tools/dev.py stages
+	 * the one its own merge read as {@code forge-patched/}, with the installer's build pins beside it and beside the
+	 * merged base. A tree without matching pins is forbric-loader's, whose {@code forge-patched/} is an older build:
+	 * its merge read the copy a Forbric launcher install keeps under {@code libraries/}, which is also where
+	 * run/build-merged-base.sh reads it by default.
+	 */
+	public static Path forgeMergeInput() {
+		Path staged = stagedRoot().resolve("forge-patched/patched-mc-forge-26.2.jar");
+		if (Files.isRegularFile(staged) && sameBuild(staged, stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar"))) {
+			return staged;
+		}
+		return minecraftDir().resolve("libraries/net/forbric/patched-mc-forge/26.2-65.0.1/patched-mc-forge-26.2-65.0.1.jar");
+	}
+
+	/** Whether both artifacts carry the same installer build pins ({@code <jar>.pins}), so came out of one build. */
+	private static boolean sameBuild(Path one, Path other) {
+		Path first = one.resolveSibling(one.getFileName() + ".pins");
+		Path second = other.resolveSibling(other.getFileName() + ".pins");
+		try {
+			return Files.isRegularFile(first) && Files.isRegularFile(second)
+					&& Files.readString(first).strip().equals(Files.readString(second).strip());
+		} catch (IOException unreadable) {
+			return false;
+		}
+	}
+
+	/**
 	 * Netty's codec library under {@link #minecraftDir()}: 26.2 ships netty 4.2's split {@code netty-codec-base},
 	 * which a launcher directory that also holds older versions keeps beside their {@code netty-codec}.
 	 */

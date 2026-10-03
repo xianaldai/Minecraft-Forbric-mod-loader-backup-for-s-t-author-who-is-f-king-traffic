@@ -9,6 +9,7 @@ import org.objectweb.asm.tree.*;
 
 /** NeoForge joins the key-release and key-press exits; retain Create's separate callbacks. */
 public final class CreateKeyboardMixinAdapter {
+	public static final String PROPERTY = "forbric.createKeyboardMixin";
 	static final String MIXIN = "com/zurrtum/create/client/mixin/KeyboardHandlerMixin";
 	static final String TARGET = "net/minecraft/client/KeyboardHandler";
 	static final String EVENT = "Lnet/minecraft/client/input/KeyEvent;";
@@ -17,7 +18,7 @@ public final class CreateKeyboardMixinAdapter {
 	private CreateKeyboardMixinAdapter() { }
 
 	public static int adapt(ClassNode mixin, Function<String, ClassNode> targets) {
-		if (!MIXIN.equals(mixin.name)) return 0;
+		if (!MIXIN.equals(mixin.name) || "off".equalsIgnoreCase(System.getProperty(PROPERTY))) return 0;
 		ClassNode target = targets.apply(TARGET);
 		MethodNode host = target == null ? null : CarpetMixinAdapter.selector(target, HOST);
 		MethodNode released = CarpetMixinAdapter.selector(mixin, "onKeyReleased" + HANDLER);

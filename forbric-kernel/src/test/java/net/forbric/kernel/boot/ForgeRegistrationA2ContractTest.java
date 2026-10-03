@@ -1,6 +1,7 @@
 package net.forbric.kernel.boot;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -45,7 +46,7 @@ class ForgeRegistrationA2ContractTest {
 
     @Test
     void realClientBusesRegisterContentAndRealConsumersAreRead() throws Exception {
-        TestFixtures.requireFiles("staged canary", CANARY);
+        TestFixtures.requireFiles(Fixture.STAGED, "staged canary", CANARY);
         try (ZipFile zip = new ZipFile(CANARY.toFile())) {
             ClassNode node = read(zip, "forbric/live/ForbricLiveClient.class");
             MethodNode init = method(node, "init");
@@ -87,7 +88,7 @@ class ForgeRegistrationA2ContractTest {
 
     @Test
     void commonProbeUsesTheGameTablesAndNoCanaryPostsItsOwnRegistrationEvents() throws Exception {
-        TestFixtures.requireFiles("staged canary", CANARY);
+        TestFixtures.requireFiles(Fixture.STAGED, "staged canary", CANARY);
         try (ZipFile zip = new ZipFile(CANARY.toFile())) {
             ClassNode common = read(zip, "forbric/live/ForbricLiveMod.class");
             MethodNode register = method(common, "registerRegistrationProbes");
@@ -129,7 +130,7 @@ class ForgeRegistrationA2ContractTest {
     @Test
     void clientGateSeedsF6AndBothScriptsParse() throws Exception {
         // The options section reads the world version out of the merged base, exactly as the gate does.
-        TestFixtures.requireFiles("staged merged base", System.getenv("MERGED") != null ? Path.of(System.getenv("MERGED"))
+        TestFixtures.requireFiles(Fixture.STAGED, "staged merged base", System.getenv("MERGED") != null ? Path.of(System.getenv("MERGED"))
                 : CANARY.toAbsolutePath().getParent().getParent().resolve("merged-base/patched-mc-merged-26.2.jar"));
         String script = Files.readString(M26);
         String options = section(script, "M26_OPTIONS");

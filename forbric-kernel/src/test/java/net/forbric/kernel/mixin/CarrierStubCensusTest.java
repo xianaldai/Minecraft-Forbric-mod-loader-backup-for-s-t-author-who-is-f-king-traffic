@@ -34,10 +34,10 @@ class CarrierStubCensusTest {
 	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path MC = TestFixtures.minecraftDir();
 	/**
-	 * The two jars build-merged-base.sh merges by default. Not run/forge-patched's MinecraftForge jar: it is an older
-	 * build, and its LivingEntity differs from the one the merge took.
+	 * The two jars the merge merged. For MinecraftForge that is {@link TestFixtures#forgeMergeInput}, never whatever sits
+	 * in forge-patched/: forbric-loader's is an older build, and its LivingEntity differs from the one the merge took.
 	 */
-	private static final Path FORGE = MC.resolve("libraries/net/forbric/patched-mc-forge/26.2-65.0.1/patched-mc-forge-26.2-65.0.1.jar");
+	private static final Path FORGE = TestFixtures.forgeMergeInput();
 	private static final Path NEO = TestFixtures.stagedRoot().resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
 	private static final Path VANILLA = MC.resolve("versions/26.2/26.2.jar");
 
@@ -80,7 +80,7 @@ class CarrierStubCensusTest {
 		if (!carriers) {
 			assertEquals(rows, new TreeSet<>(shipped.stream().map(line -> line.replaceAll(" (forge|neo)=\\S+", "")).toList()),
 					"carrier-stubs.txt's rows must equal what the staged merged base and vanilla say");
-			// Both are build-merged-base.sh inputs, so staged: MinecraftForge's lives under libraries/, but no vanilla install has it.
+			// Both are merge inputs, so staged: no vanilla install has either.
 			TestFixtures.require(Fixture.STAGED, carriers, "both carriers' patched game jars required for the forge=/neo= columns");
 		}
 		if (System.getenv("FORBRIC_WRITE_CARRIER_STUBS") != null) {

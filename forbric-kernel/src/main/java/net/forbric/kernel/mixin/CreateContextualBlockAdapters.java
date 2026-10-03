@@ -8,11 +8,12 @@ import org.objectweb.asm.tree.*;
 
 /** Preserve Create's original Block-based control handlers around native BlockState queries. */
 public final class CreateContextualBlockAdapters {
+	public static final String PROPERTY="forbric.createContextualBlocks";
 	private static final String STATE="net/minecraft/world/level/block/state/BlockState", BLOCK="net/minecraft/world/level/block/Block", OP=MixinWrapOperationShim.OPERATION;
 	private static final Set<String> FRICTION=Set.of("LivingEntityMixin","ItemEntityMixin","ExperienceOrbMixin","AbstractBoatMixin","LeashableMixin");
 	private CreateContextualBlockAdapters() { }
 	public static int adapt(ClassNode mixin,Function<String,ClassNode> targets) {
-		if(!mixin.name.startsWith("com/zurrtum/create/mixin/"))return 0;
+		if(!mixin.name.startsWith("com/zurrtum/create/mixin/")||"off".equalsIgnoreCase(System.getProperty(PROPERTY)))return 0;
 		String simple=mixin.name.substring(mixin.name.lastIndexOf('/')+1);
 		if(FRICTION.contains(simple))return blockReceiver(mixin,targets,"getSlipperiness","getFriction")+(simple.equals("LivingEntityMixin")?scaffolding(mixin,targets):0);
 		if(simple.equals("ExplosionDamageCalculatorMixin"))return blockReceiver(mixin,targets,"getBlastResistance","getExplosionResistance");

@@ -32,6 +32,15 @@ public final class DevPrepare {
 				stage.resolve("forge-patched/patched-mc-forge-26.2.jar"));
 		copy(mc.resolve(".forbric-build/out/patched-mc-neoforge-26.2.jar"),
 				stage.resolve("neoforge-patched/patched-mc-neoforge-26.2.jar"));
+		// The build pins beside the merged base and the Forge side say both came out of this one merge. A staged
+		// tree without them (forbric-loader's, whose forge-patched/ is an older build than the one its merge read)
+		// sends the tests to the Forge jar a launcher install keeps under libraries/ instead.
+		copy(mc.resolve(".forbric-build/out/patched-mc-merged-26.2.jar.pins"),
+				stage.resolve("merged-base/patched-mc-merged-26.2.jar.pins"));
+		copy(mc.resolve(".forbric-build/out/patched-mc-forge-26.2.jar.pins"),
+				stage.resolve("forge-patched/patched-mc-forge-26.2.jar.pins"));
+		// The merge's own report of what it could not reconcile; the tests check the kernel accounts for each loss.
+		copy(mc.resolve(".forbric-build/out/merge-conflicts.txt"), stage.resolve("merged-base/merge-conflicts.txt"));
 		System.out.println("Development artifacts staged under " + stage);
 	}
 

@@ -79,8 +79,10 @@ public final class PostMixinFixups {
 	}
 
 	/** {@code -Dforbric.postMixinFixups=off} disables these repairs. */
+	static final String PROPERTY = "forbric.postMixinFixups";
+
 	public static boolean enabled() {
-		return !"off".equalsIgnoreCase(System.getProperty("forbric.postMixinFixups", "on"));
+		return !"off".equalsIgnoreCase(System.getProperty(PROPERTY, "on"));
 	}
 
 	private PostMixinFixups() {

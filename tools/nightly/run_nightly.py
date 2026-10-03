@@ -213,9 +213,11 @@ def stop(process, grace=60):
         subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], capture_output=True)
         process.wait()
         return
+    # PermissionError as well as ProcessLookupError: once the leader has been reaped, macOS can answer EPERM for a
+    # group that has nothing left this user may signal. Either way nothing of ours is left to stop.
     try:
         os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
     try:
         process.wait(timeout=grace)
@@ -224,7 +226,7 @@ def stop(process, grace=60):
     # Whatever is still in the group (a game JVM that ignored TERM) goes now; the leader may already be gone.
     try:
         os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
     process.wait()
 

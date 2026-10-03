@@ -217,6 +217,72 @@ class DevelopmentWorkflowTest(unittest.TestCase):
                                          cwd=self.root, text=True)
         self.assertEqual(base64.b64decode(output.strip()).decode('utf-8'), '中文值')
 
+    def test_canaries_compile_against_the_staged_game_and_package_their_resources(self):
+        env = dev.java_environment(dev.java_bin(), minimum=21)
+        bin_dir = Path(env['JAVA_HOME']) / 'bin'
+        suffix = '.exe' if os.name == 'nt' else ''
+        stage, sources, work = self.root / 'stage', self.root / 'sources', self.root / 'work'
+
+        def library(jar, name):
+            # One class per jar, so each compile fails unless its exact jar is on the classpath.
+            package, simple = name.rsplit('.', 1)
+            java = work / jar.stem / (simple + '.java')
+            java.parent.mkdir(parents=True)
+            java.write_text(f'package {package}; public class {simple} {{}}')
+            subprocess.run([str(bin_dir / ('javac' + suffix)), '-d', str(java.parent / 'classes'), str(java)], check=True)
+            jar.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run([str(bin_dir / ('jar' + suffix)), '--create', '--file', str(jar), '-C',
+                            str(java.parent / 'classes'), '.'], check=True)
+
+        library(stage / 'forge-patched/patched-mc-forge-26.2.jar', 'net.minecraftforge.Game')
+        library(stage / 'neoforge-runtime/neoforge-runtime.jar', 'net.neoforged.Carrier')
+        mixin = work / 'sponge-mixin-0.17.jar'
+        library(mixin, 'org.spongepowered.Plugin')
+        forge, neo = sources / 'livemod-src', sources / 'livemod-src-neoforge'
+        for tree, body in ((forge, 'net.minecraftforge.Game g; org.spongepowered.Plugin p;'),
+                           (neo, 'net.neoforged.Carrier c;')):
+            (tree / 'live').mkdir(parents=True)
+            (tree / 'live/Probe.java').write_text('package live; class Probe { ' + body + ' }')
+            (tree / 'data/live').mkdir(parents=True)
+            (tree / 'data/live/probe.json').write_text('{}')
+            (tree / 'notes.txt').write_text('not packaged')
+        (forge / 'META-INF').mkdir()
+        (forge / 'META-INF/mods.toml').write_text('modLoader="javafml"')
+        (forge / 'forbriclive.mixins.json').write_text('{}')
+        (forge / 'assets/live').mkdir(parents=True)
+        (forge / 'assets/live/setup_probe.txt').write_text('probe')
+        (neo / 'META-INF').mkdir()
+        (neo / 'META-INF/neoforge.mods.toml').write_text('modLoader="javafml"')
+        # What an earlier prepare left must not survive in either place.
+        (stage / 'livemod-src/stale').mkdir(parents=True)
+
+        dev.stage_canaries(stage, [mixin], env['JAVA_HOME'], sources)
+
+        with zipfile.ZipFile(stage / 'forge-runtime/forbriclive.jar') as archive:
+            names = set(archive.namelist())
+        self.assertTrue({'live/Probe.class', 'META-INF/mods.toml', 'forbriclive.mixins.json', 'data/live/probe.json',
+                         'assets/live/setup_probe.txt'} <= names, names)
+        self.assertFalse({'live/Probe.java', 'notes.txt'} & names)
+        with zipfile.ZipFile(stage / 'neoforge-runtime/forbricneolive.jar') as archive:
+            names = set(archive.namelist())
+        self.assertTrue({'live/Probe.class', 'META-INF/neoforge.mods.toml', 'data/live/probe.json'} <= names, names)
+        self.assertEqual((stage / 'livemod-src/live/Probe.java').read_text(), (forge / 'live/Probe.java').read_text())
+        self.assertFalse((stage / 'livemod-src/stale').exists())
+        self.assertTrue((stage / 'livemod-src-neoforge/data/live/probe.json').is_file())
+
+    def test_canaries_take_only_mixin_and_asm_from_the_kernel_classpath(self):
+        jars = [self.root / name for name in ('sponge-mixin-0.17.3.jar', 'asm-9.10.1.jar', 'asm-tree-9.10.1.jar',
+                                              'core-3.8.0.jar')]
+        for jar in jars:
+            jar.write_bytes(b'')
+        classpath = os.pathsep.join([str(self.root / 'classes')] + [str(jar) for jar in jars])
+        with patch.object(dev, 'gradle') as gradle:
+            chosen = dev.kernel_libraries({'FORBRIC_KERNEL_CLASSPATH': classpath}, self.root, self.root)
+        gradle.assert_not_called()
+        self.assertEqual(chosen, jars[:3])
+        with self.assertRaisesRegex(RuntimeError, 'sponge-mixin'):
+            dev.kernel_libraries({'FORBRIC_KERNEL_CLASSPATH': os.pathsep.join(map(str, jars[1:]))}, self.root, self.root)
+
     def test_windows_retains_argfiles_for_ascii_launches(self):
         path = self.root / 'command.args'
         self.assertEqual(dev.java_command('java', path, ['-cp', 'long;classpath'], windows=True),

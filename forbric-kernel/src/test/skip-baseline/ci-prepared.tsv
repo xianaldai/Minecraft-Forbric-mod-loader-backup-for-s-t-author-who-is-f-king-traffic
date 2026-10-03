@@ -4,18 +4,11 @@
 # or copy skips-actual-ci-prepared.tsv from the CI artifact.
 test	net.forbric.kernel.boot.AbiLinkAuditStagedTest	theStagedClientPackHasNoDanglingForgeFamilyReference()	staged pack or carriers absent
 test	net.forbric.kernel.boot.DuplicateModArbiterStagedTest	theStagedJadePairReproducesTheJavadocsNumbers()	staged pack absent
-test	net.forbric.kernel.boot.ForgeClientCanaryTest	packagedCanarySubscribesTheThreeEventsOnlyBehindItsClientClassBoundary()	build canaries with forbric-loader/run/build-testmods.sh
-test	net.forbric.kernel.boot.ForgeClientCanaryTest	presetListenerUsesTheModsBusGroupAndTheGateRequiresItsDelivery()	build canaries with forbric-loader/run/build-testmods.sh
-test	net.forbric.kernel.boot.ForgeRegistrationA2ContractTest	commonProbeUsesTheGameTablesAndNoCanaryPostsItsOwnRegistrationEvents()	staged canary: $ROOT/forbric-kernel/.dev/staged/run/forge-runtime/forbriclive.jar
-test	net.forbric.kernel.boot.ForgeRegistrationA2ContractTest	realClientBusesRegisterContentAndRealConsumersAreRead()	staged canary: $ROOT/forbric-kernel/.dev/staged/run/forge-runtime/forbriclive.jar
 test	net.forbric.kernel.boot.FrapiRendererEvidenceTest	theRealSodiumBuildsAreToldApart()	[fixture:third-party] sodium fixtures absent: $ROOT/forbric-kernel/run/client-merged-pack/mods
-test	net.forbric.kernel.boot.GateWorldgenContractTest	theGateProbesExactlyTheBlocksThePackagedCanariesPlace()	build canaries with forbric-loader/run/build-testmods.sh
-test	net.forbric.kernel.boot.HookCallSiteCensusStagedTest	thePartialTableIsExactlyWhatTheCallSitesSay()	MinecraftForge's patched game absent
 test	net.forbric.kernel.boot.KernelBundledMixinExtrasStagedTest	[1] true	stage the popular compatibility pack and the boot jar (or set fixture overrides): $ROOT/forbric-kernel/build/compat-inputs/popular/mods/badpackets-forge-0.12.2.jar, $ROOT/forbric-kernel/build/libs/for
 test	net.forbric.kernel.boot.KernelBundledMixinExtrasStagedTest	[2] false	stage the popular compatibility pack and the boot jar (or set fixture overrides): $ROOT/forbric-kernel/build/compat-inputs/popular/mods/badpackets-forge-0.12.2.jar, $ROOT/forbric-kernel/build/libs/for
 test	net.forbric.kernel.boot.MultiLoaderEntrypointsTest	actualBisonAquariusAndBannerstoneUseTheirExecutableFamilies()	requires the prepared random baseline jars
 test	net.forbric.kernel.boot.PassiveSeederFileConfigTest	theRealLithiumFindsUnlitCampfiresOverride()	the player's pack is not here
-test	net.forbric.kernel.boot.WorldgenCanaryDataTest	theTwoCarriersPlaceDifferentNonOverworldBlocks()	build canaries with forbric-loader/run/build-testmods.sh
 test	net.forbric.kernel.interop.CreateWorkerShutdownTest	realFlywheelWorkersDrainAndJoinWithoutCallingTheLazyFactory()	assumption is not true
 test	net.forbric.kernel.interop.PayloadInteropPlayChannelsTest	everyNameTheRecordingSpellsExistsWhereItIsSpelled()	fabric-api's networking module absent
 test	net.forbric.kernel.metadata.forge.ModsTomlParserTest	theFixtureIsTheManifestLibjfShips()	the sweep's LibJF jar is not staged here
@@ -41,7 +34,6 @@ test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	handSwapRunsBeforeTheNative
 test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	reshapedHostsRefuseTheWholeRetarget()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
 test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	reshapedNativeFluidLocalRefusesTheWholeRetarget()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
 test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	vanillaAndDisabledRepairLeaveAllReleasedHandlersUntouched()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
-test	net.forbric.kernel.mixin.CarrierStubCensusTest	theShippedTableIsExactlyWhatTheArtifactsSay()	both carriers' patched game jars required for the forge=/neo= columns
 test	net.forbric.kernel.mixin.ContinuitySpriteMixinAdapterTest	aChangedLocalMapLayoutIsRefused()	actual Continuity fixture required
 test	net.forbric.kernel.mixin.ContinuitySpriteMixinAdapterTest	actualCallbacksMoveToTheLiveOverloadAndKeepTheOriginalLoaderMapArgument()	actual Continuity fixture required
 test	net.forbric.kernel.mixin.ContinuitySpriteMixinAdapterTest	vanillaAndDisabledRepairKeepTheUpstreamMixin()	actual Continuity fixture required
@@ -131,7 +123,6 @@ test	net.forbric.kernel.transform.MergedBaseFrameRecomputerTest	anUnresolvableHi
 test	net.forbric.kernel.transform.MergedBaseFrameRecomputerTest	theConstantPoolSharingWriterIsNotUsed()	InventoryProfilesNext not staged — skipping the real-jar check
 test	net.forbric.kernel.transform.MergedBaseFrameRecomputerTest	theRealModLinksAgainstTheRealMergedBase()	InventoryProfilesNext not staged — skipping the real-jar check
 test	net.forbric.kernel.transform.MergedBaseFrameRecomputerTest	theRecomputedFrameNamesWhatTheRealHierarchySays()	InventoryProfilesNext not staged — skipping the real-jar check
-test	net.forbric.kernel.transform.MergedBaseLostAncestorsTest	everyStructuralConflictTheBuilderReportedIsAccountedFor()	the merge report is absent
 test	net.forbric.kernel.transform.MergedBaseSnippetFunnelTest	fabricRenderingsSnippetWrapFitsAfterTheFunnel()	fabric-api jar absent from run/client-kernel/mods
 test	net.forbric.kernel.transform.NativeCoremodParityTest	theTargetListIsNeoForgesAndMinecraftForgesLessTheTrialSpawner()	native NeoForge coremods jar absent
 test	net.forbric.kernel.transform.PortingLayerAbiInjectorTest	aMethodReferenceToThePortsScreenConstructorIsReAimedAtTheCarriers()	ShoulderSurfing not staged — skipping

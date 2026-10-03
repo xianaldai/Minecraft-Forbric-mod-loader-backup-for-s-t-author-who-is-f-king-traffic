@@ -8,10 +8,11 @@ import org.objectweb.asm.tree.*;
 
 /** Specific, atomic adaptations of the released Create Fly callbacks to the live merged-game operations. */
 public final class CreateInjectionAdapters {
+	public static final String PROPERTY="forbric.createInjectionAdapters";
 	private static final String PREFIX="com/zurrtum/create/", OP=MixinWrapOperationShim.OPERATION;
 	private CreateInjectionAdapters() { }
 	public static int adapt(ClassNode mixin,Function<String,ClassNode> targets) {
-		if(!mixin.name.startsWith(PREFIX)||"off".equalsIgnoreCase(System.getProperty("forbric.createInjectionAdapters")))return 0;
+		if(!mixin.name.startsWith(PREFIX)||"off".equalsIgnoreCase(System.getProperty(PROPERTY)))return 0;
 		return switch(mixin.name.substring(PREFIX.length())) {
 			case "client/mixin/ClientPacketListenerMixin" -> renameOperation(mixin,targets,"onDataPacket","net/minecraft/client/multiplayer/ClientPacketListener","lambda$handleBlockEntityData$0","onDataPacket");
 			case "mixin/LevelChunkMixin" -> renameOperation(mixin,targets,"handleUpdateTag","net/minecraft/world/level/chunk/LevelChunk","lambda$replaceWithPacketData$0","handleUpdateTag");

@@ -58,28 +58,10 @@ class InjectorExecutionCensusTest {
 
 	private static final String NOT_CREDITED = "no test carrying @ExecutesInjector defines and runs its output yet";
 	/**
-	 * Only shrinks. Seeded with every injector: tests that already run some injector's output exist, but none is
-	 * credited until it carries {@link ExecutesInjector} and passes the claim checks below.
+	 * Only shrinks. Seeded with every injector; empty since each got a test carrying {@link ExecutesInjector} that
+	 * passes the claim checks below, so a new injector arrives with one.
 	 */
-	static final Map<String, String> NOT_EXECUTED_YET = notExecutedYet(
-			"ClientPartTrackingInjector",
-			"CommonNetworkInteropInjector", "CompatPluginPlatformInjector",
-			"CompostablesFallbackInjector",
-			"CreativePagerBridgeInjector", "DragonPartsInjector",
-			"DuplicateLambdaPruneInjector", "EventChainAuditInjector",
-			"FabricFluidBehaviorInjector", "FabricFuelValuesInjector",
-			"FlowerPotRepairInjector", "FluidInteractionsInjector", "ForeignFluidTypeInjector",
-			"ForgeClientConsumersInjector",
-			"ForgeLootPoolConditionsInjector",
-			"ForgePartTrackingInjector", "ForgeSpawnPlacementsInjector",
-			"ForgeWorldModifierInjector", "HopperFabricStorageInjector",
-			"LootTableEventBridgeInjector", "ModelFormatFunnelInjector",
-			"NeoTooltipAppendersInjector",
-			"RegistryDirectoryOwnerInjector",
-			"RegistrySyncParityInjector",
-			"SoundRegistryIdentityInjector",
-			"SpawnerFinalizeInjector",
-			"SplitterPacketContextInjector");
+	static final Map<String, String> NOT_EXECUTED_YET = notExecutedYet();
 
 	@Test void everyInjectorIsExecutedOrListedWithAReason() throws Exception {
 		Map<String, String> injectors = injectors(classesBeside(ClassTransformer.class));
@@ -102,20 +84,19 @@ class InjectorExecutionCensusTest {
 
 	/** The census must be able to see an undeclared injector, an overlap, a stale row and an unbacked claim. */
 	@Test void theCensusCanFail() {
-		Set<String> injectors = new TreeSet<>(NOT_EXECUTED_YET.keySet());
-		injectors.add("BrandNewInjector");
-		assertEquals(List.of("undeclared: BrandNewInjector"), problems(injectors, Set.of(), NOT_EXECUTED_YET.keySet()));
+		// Made-up names: the live allowlist is empty, and a real one would break the day its injector is credited.
+		Set<String> allowlisted = Set.of("ListedInjector");
+		Set<String> injectors = new TreeSet<>(Set.of("ListedInjector", "RunInjector", "BrandNewInjector"));
+		assertEquals(List.of("undeclared: BrandNewInjector"), problems(injectors, Set.of("RunInjector"), allowlisted));
 
 		injectors.remove("BrandNewInjector");
-		// Any row will do, and a named one would break the day its injector is credited.
-		String row = NOT_EXECUTED_YET.keySet().iterator().next();
-		assertEquals(List.of("both executed and allowlisted: " + row),
-				problems(injectors, Set.of(row), NOT_EXECUTED_YET.keySet()));
+		assertEquals(List.of("both executed and allowlisted: ListedInjector"),
+				problems(injectors, Set.of("RunInjector", "ListedInjector"), allowlisted));
 
 		Set<String> gone = new TreeSet<>(injectors);
-		gone.remove(row);
-		assertEquals(List.of("allowlisted but no longer an injector: " + row),
-				problems(gone, Set.of(), NOT_EXECUTED_YET.keySet()));
+		gone.remove("ListedInjector");
+		assertEquals(List.of("allowlisted but no longer an injector: ListedInjector"),
+				problems(gone, Set.of("RunInjector"), allowlisted));
 
 		Map<String, String> known = Map.of("ExitHookInjector", "net/forbric/kernel/transform/ExitHookInjector");
 		String exit = known.get("ExitHookInjector");

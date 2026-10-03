@@ -174,7 +174,7 @@ public final class MixinShearsRelay {
 		outer.maxLocals = first + 3;
 		mixin.methods.add(outer);
 		ForbricLog.info("[Forbric/Mixin] %s: %s now also answers %s.%s's %s.%s check — the carrier's form of vanilla's "
-				+ "is(Items.SHEARS) it was written for (%s)", mixin.name.replace('/', '.'), handler.name.replace(ADDED_SUFFIX, ""),
+				+ "is(Items.SHEARS) it was written for (%s)", mixin.name.replace('/', '.'), outerName.replace(ADDED_SUFFIX, ""),
 				target.name.substring(target.name.lastIndexOf('/') + 1), row.method(), row.owner().substring(row.owner().lastIndexOf('/') + 1),
 				row.field(), added ? "beside its other is() calls" : "moved");
 		return true;

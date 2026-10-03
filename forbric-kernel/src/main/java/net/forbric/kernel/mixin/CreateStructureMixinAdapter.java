@@ -7,6 +7,7 @@ import org.objectweb.asm.tree.*;
 
 /** Keep Create's entity processor setup, iteration and cleanup on the same live placement call. */
 public final class CreateStructureMixinAdapter {
+	public static final String PROPERTY = "forbric.createStructureMixin";
 	static final String MIXIN = "com/zurrtum/create/mixin/StructureTemplateMixin";
 	static final String TARGET = "net/minecraft/world/level/levelgen/structure/templatesystem/StructureTemplate";
 	static final String OLD = "placeEntities(Lnet/minecraft/world/level/ServerLevelAccessor;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/Mirror;Lnet/minecraft/world/level/block/Rotation;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/levelgen/structure/BoundingBox;ZLnet/minecraft/util/ProblemReporter;)V";
@@ -14,7 +15,7 @@ public final class CreateStructureMixinAdapter {
 	private CreateStructureMixinAdapter() { }
 
 	public static int adapt(ClassNode mixin, Function<String, ClassNode> targets) {
-		if (!MIXIN.equals(mixin.name)) return 0;
+		if (!MIXIN.equals(mixin.name) || "off".equalsIgnoreCase(System.getProperty(PROPERTY))) return 0;
 		ClassNode target = targets.apply(TARGET);
 		MethodNode place = target == null ? null : CarpetMixinAdapter.selector(target, LIVE);
 		MethodNode set = CarpetMixinAdapter.named(mixin, "setProcessors"), iterate = CarpetMixinAdapter.named(mixin, "getIterator"), clear = CarpetMixinAdapter.named(mixin, "clearProcessors");

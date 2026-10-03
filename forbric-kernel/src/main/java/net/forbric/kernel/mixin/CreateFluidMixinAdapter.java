@@ -10,12 +10,13 @@ import net.forbric.kernel.util.ForbricLog;
 
 /** Run Create's original interaction handler at the live carrier reaction sites. */
 public final class CreateFluidMixinAdapter {
+	public static final String PROPERTY = "forbric.createFluidMixins";
 	static final String MIXIN = "com/zurrtum/create/mixin/LiquidBlockMixin";
 	static final String TARGET = "net/minecraft/world/level/block/LiquidBlock";
 	private CreateFluidMixinAdapter() { }
 
 	public static int adapt(ClassNode mixin, Function<String, ClassNode> targets) {
-		if (!MIXIN.equals(mixin.name) || "off".equalsIgnoreCase(System.getProperty("forbric.createFluidMixins"))) return 0;
+		if (!MIXIN.equals(mixin.name) || "off".equalsIgnoreCase(System.getProperty(PROPERTY))) return 0;
 		MethodNode original = CarpetMixinAdapter.named(mixin, "shouldSpreadLiquid");
 		ClassNode target = targets.apply(TARGET);
 		if (original == null || target == null || (original.access & Opcodes.ACC_STATIC) != 0

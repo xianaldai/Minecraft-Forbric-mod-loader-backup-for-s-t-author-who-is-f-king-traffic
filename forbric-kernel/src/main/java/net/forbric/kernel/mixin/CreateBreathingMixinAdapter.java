@@ -5,11 +5,12 @@ import org.objectweb.asm.*;import org.objectweb.asm.tree.*;
 
 /** Retain the exact diving callbacks while the native loader computes air supply in CommonHooks. */
 public final class CreateBreathingMixinAdapter {
+	public static final String PROPERTY="forbric.createBreathingMixin";
 	public static final String MIXIN="com/zurrtum/create/mixin/LivingEntityMixin";
 	private static final String LIVING="net/minecraft/world/entity/LivingEntity", LEVEL="net/minecraft/server/level/ServerLevel", OP=MixinWrapOperationShim.OPERATION, SCOPE="net/forbric/kernel/interop/CreateBreathingScope";
 	private CreateBreathingMixinAdapter() { }
 	public static int adapt(ClassNode mixin,Function<String,ClassNode> targets){
-		if(!mixin.name.equals(MIXIN)||CreateInjectionAdapters.named(mixin,"forbric$createBreathing")!=null)return 0;
+		if(!mixin.name.equals(MIXIN)||"off".equalsIgnoreCase(System.getProperty(PROPERTY))||CreateInjectionAdapters.named(mixin,"forbric$createBreathing")!=null)return 0;
 		MethodNode lava=CreateInjectionAdapters.named(mixin,"breatheInLava"),water=CreateInjectionAdapters.named(mixin,"canBreatheInWater");ClassNode living=targets.apply(LIVING),hooks=targets.apply("net/neoforged/neoforge/common/CommonHooks");
 		if(lava==null||water==null||living==null||hooks==null||MixinFit.injectorOf(lava)==null||MixinFit.injectorOf(water)==null)return 0;
 		String nativeDesc="(L"+LIVING+";L"+LEVEL+";II)V", nativeCall="L"+hooks.name+";onLivingBreathe"+nativeDesc;

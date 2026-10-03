@@ -52,7 +52,7 @@ class WeaveCoverageCensusTest {
 	/** stage (simple class name) -> the switch its weave test flips. The comment names the test. */
 	static final Map<String, Switch> WOVEN = Map.ofEntries(
 			Map.entry("KernelGuestMixinAdapter", Switch.own("forbric.guestMixinAdapter")), // KernelGuestMixinAdapterWeaveTest
-			Map.entry("FinalMixinApplications", Switch.own()),                   // WeaveHarnessSelfTest, MixinOutcomeWeaveTest
+			Map.entry("FinalMixinApplications", Switch.own()), // WeaveHarnessSelfTest, MixinOutcomeWeaveTest
 			Map.entry("MixinAtWidenedCall", Switch.own("forbric.mixinAtWiden")), // MixinOutcomeWeaveTest
 			Map.entry("MixinStubRebind", Switch.own("forbric.mixinStubRebind")),
 			Map.entry("MixinSubtypeOwnerRetarget", Switch.own("forbric.mixinSubtypeOwner")),
@@ -67,23 +67,46 @@ class WeaveCoverageCensusTest {
 			Map.entry("MixinNativeTail", new Switch(List.of("forbric.vanillaEarlyReturns"), "net.forbric.kernel.transform.VanillaEarlyReturns")),
 			Map.entry("MixinHandlerShim", Switch.own("forbric.mixinHandlerShim")),
 			Map.entry("MixinAnonymousRetarget", Switch.own("forbric.mixinAnonymousDrift")),
-			Map.entry("InterfaceDefaultConflictRepair", Switch.own("forbric.defaultConflictRepair")));
+			Map.entry("InterfaceDefaultConflictRepair", Switch.own("forbric.defaultConflictRepair")),
+			Map.entry("BarrelRollCameraAdapter", Switch.own("forbric.barrelRollCamera")),
+			Map.entry("GuiItemCaptureMixinAdapter", Switch.own("forbric.guiItemCaptureAnchor")),
+			Map.entry("KernelClientHookMixinAnchors", Switch.own("forbric.clientHookMixinAnchors")),
+			Map.entry("MixinShearsRelay", Switch.own("forbric.shearsRelay")),
+			Map.entry("InsertedLambdaArgumentShim", Switch.own("forbric.insertedLambdaArguments")),
+			Map.entry("CarpetMixinAdapter", Switch.own("forbric.carpetMixins")),
+			// CarpetFluidMixinAdapter stands down with CarpetMixinAdapter's switch, which both read through its enabled().
+			Map.entry("CarpetFluidMixinAdapter", new Switch(List.of("forbric.carpetMixins"), "net.forbric.kernel.mixin.CarpetMixinAdapter")),
+			Map.entry("NativeCoremodParity", Switch.own("forbric.flowerPotRepair")), // NativeCoremodParityWeaveTest
+			Map.entry("PostMixinFixups", Switch.own("forbric.postMixinFixups")), // PostMixinFixupsWeaveTest
+			// An audit with no switch: ForgeTransferShapeAuditWeaveTest's control is an unreviewed twin in the same run.
+			Map.entry("ForgeTransferShapeAudit", Switch.own()),
+			Map.entry("FabricRegistryInitializationMixinAdapter", Switch.own("forbric.fabricRegistryInitialization")),
+			Map.entry("FabricCreativePagerMixinAdapter", Switch.own("forbric.fabricCreativeKeyboard")),
+			Map.entry("FabricServerLanguageMixinAdapter", Switch.own("forbric.fabricServerLanguage")),
+			Map.entry("FabricSoundMixinAdapter", new Switch(List.of("forbric.fabricSoundContracts"), "net.forbric.kernel.transform.FabricSoundContractTransformer")),
+			Map.entry("FabricEnchantmentMixinAdapter", new Switch(List.of("forbric.fabricItemContracts"), "net.forbric.kernel.transform.FabricItemContractTransformer")),
+			Map.entry("FabricRegistryLoaderMixinAdapter", Switch.own("forbric.fabricRegistryLoader")),
+			Map.entry("FabricFluidFlowMixinAdapter", Switch.own("forbric.fabricFluidFlow")),
+			Map.entry("FabricBlockStateCodecMixinAdapter", Switch.own("forbric.blockStateModelFormats")),
+			Map.entry("FabricEntityMixinAnchors", Switch.own("forbric.fabricEntityAnchors")),
+			Map.entry("FabricClientMixinAnchors", Switch.own("forbric.fabricClientAnchors")),
+			Map.entry("FabricBlockBreakMixinAdapter", Switch.own("forbric.fabricBlockBreak")),
+			Map.entry("FabricSectionCompilerMixinAdapter", Switch.own("forbric.fabricChunkRendering")),
+			Map.entry("CreateStructureMixinAdapter", Switch.own("forbric.createStructureMixin")),
+			Map.entry("CreateKeyboardMixinAdapter", Switch.own("forbric.createKeyboardMixin")),
+			Map.entry("ContinuitySpriteMixinAdapter", Switch.own("forbric.continuitySpriteSources")),
+			Map.entry("CreateFluidMixinAdapter", Switch.own("forbric.createFluidMixins")),
+			Map.entry("CreateInjectionAdapters", Switch.own("forbric.createInjectionAdapters")),
+			Map.entry("CreateInteractionMixinAdapters", Switch.own("forbric.createInteractionMixins")),
+			Map.entry("CreateContextualBlockAdapters", Switch.own("forbric.createContextualBlocks")),
+			Map.entry("CreateEntitySoundMixinAdapter", Switch.own("forbric.createEntitySounds")),
+			Map.entry("CreateBreathingMixinAdapter", Switch.own("forbric.createBreathingMixin")),
+			Map.entry("CreateHudMixinAdapter", Switch.own("forbric.createHudMixin")));
 
 	private static final String NO_SCENARIO = "no weave scenario yet; ClassNode-level tests only";
 	/** Only shrinks. Every row is a stage whose output no CI test has yet run through the real weave. */
 	static final Map<String, String> NOT_WOVEN_YET = notWovenYet(
-			"BarrelRollCameraAdapter", "CarpetFluidMixinAdapter", "CarpetMixinAdapter", "ContinuitySpriteMixinAdapter",
-			"CreateBreathingMixinAdapter", "CreateContextualBlockAdapters", "CreateEntitySoundMixinAdapter",
-			"CreateFluidMixinAdapter", "CreateHudMixinAdapter", "CreateInjectionAdapters", "CreateInteractionMixinAdapters",
-			"CreateKeyboardMixinAdapter", "CreateStructureMixinAdapter", "FabricBlockBreakMixinAdapter",
-			"FabricBlockStateCodecMixinAdapter", "FabricClientMixinAnchors", "FabricCreativePagerMixinAdapter",
-			"FabricEnchantmentMixinAdapter", "FabricEntityMixinAnchors", "FabricFluidFlowMixinAdapter",
-			"FabricMiningMixinAdapter", "FabricRegistryInitializationMixinAdapter", "FabricRegistryLoaderMixinAdapter",
-			"FabricSectionCompilerMixinAdapter", "FabricServerLanguageMixinAdapter", "FabricSoundMixinAdapter",
-			"GuiItemCaptureMixinAdapter", "InsertedLambdaArgumentShim", "KernelClientHookMixinAnchors",
-			"MixinRetarget", "MixinShearsRelay",
-			// post-Mixin stages
-			"NativeCoremodParity", "PostMixinFixups", "ForgeTransferShapeAudit");
+			"FabricMiningMixinAdapter", "MixinRetarget");
 
 	@Test void everyPipelineStageIsWovenOrListedWithAReason() throws Exception {
 		Set<String> configTime = configTimeStages();
@@ -123,7 +146,13 @@ class WeaveCoverageCensusTest {
 
 		Set<String> gone = new TreeSet<>(stages);
 		gone.remove("MixinShearsRelay");
-		assertEquals(List.of("allowlisted but no longer a stage: MixinShearsRelay"), problems(gone, WOVEN.keySet(), NOT_WOVEN_YET.keySet()));
+		assertEquals(List.of("woven but no longer a stage: MixinShearsRelay"), problems(gone, WOVEN.keySet(), NOT_WOVEN_YET.keySet()));
+
+		// Whichever row is still allowlisted: the list only shrinks, so a row named here would leave it one day.
+		String listed = NOT_WOVEN_YET.keySet().iterator().next();
+		Set<String> unlisted = new TreeSet<>(stages);
+		unlisted.remove(listed);
+		assertEquals(List.of("allowlisted but no longer a stage: " + listed), problems(unlisted, WOVEN.keySet(), NOT_WOVEN_YET.keySet()));
 	}
 
 	static List<String> problems(Set<String> stages, Set<String> woven, Set<String> allowlisted) {

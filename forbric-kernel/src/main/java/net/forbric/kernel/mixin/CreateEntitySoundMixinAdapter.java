@@ -5,10 +5,11 @@ import org.objectweb.asm.*;import org.objectweb.asm.tree.*;
 
 /** Carry the authored sound-group callback into native playback, with lazy native lookup and exact block position. */
 public final class CreateEntitySoundMixinAdapter {
+	public static final String PROPERTY="forbric.createEntitySounds";
 	private static final String STATE="net/minecraft/world/level/block/state/BlockState", POS="net/minecraft/core/BlockPos", OP=MixinWrapOperationShim.OPERATION, SCOPE="net/forbric/kernel/interop/CreateSoundScope";
 	private CreateEntitySoundMixinAdapter() { }
 	public static int adapt(ClassNode mixin,Function<String,ClassNode> targets){
-		boolean fall=mixin.name.equals("com/zurrtum/create/mixin/LivingEntityMixin");if(!fall&&!mixin.name.equals("com/zurrtum/create/mixin/EntityMixin"))return 0;
+		boolean fall=mixin.name.equals("com/zurrtum/create/mixin/LivingEntityMixin");if((!fall&&!mixin.name.equals("com/zurrtum/create/mixin/EntityMixin"))||"off".equalsIgnoreCase(System.getProperty(PROPERTY)))return 0;
 		MethodNode original=CreateInjectionAdapters.named(mixin,fall?"getBlockFallSound":"getStepSound");String targetName=fall?"net/minecraft/world/entity/LivingEntity":"net/minecraft/world/entity/Entity";ClassNode target=targets.apply(targetName);
 		if(original==null||target==null||MixinFit.injectorOf(original)==null||!Type.getReturnType(original.desc).equals(Type.getObjectType("net/minecraft/world/level/block/SoundType")))return 0;
 		String callDesc=fall?"(Lnet/minecraft/world/level/Level;L"+POS+";Lnet/minecraft/world/entity/LivingEntity;)V":"(Lnet/minecraft/world/level/Level;L"+POS+";Lnet/minecraft/world/entity/Entity;FF)V";
