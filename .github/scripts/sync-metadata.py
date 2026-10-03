@@ -30,6 +30,9 @@ added to the archive issue:
   * a comment upstream edited afterwards (the new text is quoted; the text from before the
     edit is the copy already sitting above), or one it deleted (noted with the author and
     time it was posted, so the copy here stands as the last text known to exist)
+  * a comment a moderator collapsed -- readers get a stub where the text was -- or one shown
+    again after that. Hiding changes what upstream shows without changing a word of it, so it
+    is read from GitHub's own field for it rather than from any text
   * deletion, or a transfer that removes the issue from upstream's listing
   * a gap in upstream's numbering -- an item that came and went between two runs, so that
     nothing here ever held a copy of it or a watermark to notice it by. The number itself is
@@ -40,18 +43,22 @@ That is the point of this repository: an upstream that quietly closes an
 uncomfortable issue, rewrites what it said, or deletes the thread leaves a
 trail here, next to the copy of what it said before.
 
-One thing is deliberately not chased: reactions and review-thread state, kept
-out so each archive stays a single readable page.
+Two things are deliberately not chased: reactions, which are counted elsewhere and say
+nothing about what upstream showed, and review-thread state, kept out so each archive stays a
+single readable page. A collapsed comment is not one of those: it is the text on the page
+still, only hidden, which is precisely the kind of quiet change this repository exists to
+notice.
 
-Comment edits and deletions cost nothing to find, because GitHub moves the
-item's updated_at for both, just as it does for a new comment. So a run asks
-about a thread only when something actually happened to the item. The one
-exception is a watermark written before this feature existed: it has no record
-of what its thread said, so it is read once to learn that, and never again.
+An edit, a deletion and a collapse all move the item's updated_at, just as a new comment
+does, so a run asks about a thread only when something actually happened to the item. The
+exception is a watermark written before one of these was tracked: it holds no record of what
+its thread said, or of which comments were hidden, so it is read once to learn that, and never
+again. A collapse found on that first read is the one thing here reported as found rather than
+as done -- the record it is being compared against cannot say whether the hiding is new, so it
+says plainly that those comments were already collapsed when this fork began looking.
 
-Watermarks for the change detection live in state.json on the mirror-state
-branch, not in this repository's history. A run that finds nothing new writes
-nothing at all.
+Watermarks for the change detection live in state.json on the mirror-state branch, not in this
+repository's history. A run that finds nothing new writes nothing at all.
 
 Limit: GitHub caps an issue body and a comment body at 65536 characters. An
 event that outgrows one comment is posted as several, in order, each saying
@@ -225,11 +232,30 @@ def comment_author(comment):
     return ((comment.get("user") or {}).get("login")) or "ghost"
 
 
+def hidden_reason(comment):
+    """Why a moderator collapsed this comment, or None when it reads as posted. GitHub serves
+    {"reason": "off-topic"} (or "spam", "abuse", "outdated", ...) on a collapsed comment and
+    null on every other, so the field itself says which of the two a comment is."""
+    return (comment.get("minimized") or {}).get("reason")
+
+
+def hidden_entry(comment):
+    """One event line naming a comment upstream has collapsed, the reason, and when upstream
+    last touched it -- that timestamp being the only evidence of when the hiding happened,
+    since a collapse leaves the text itself untouched."""
+    return ("- **@%s** commented on %s -- hidden as %s (upstream's last move on this comment: "
+            "%s)" % (comment_author(comment), comment["created_at"],
+                     hidden_reason(comment), comment["updated_at"]))
+
+
 def comment_map(thread):
     """What this fork knows about each comment it has seen, so a later run can tell an edit
-    from an addition -- and, when one disappears, still say who posted it and when."""
+    from an addition -- and, when one disappears or is hidden, still say who posted it, when,
+    and what became of it. updated_at is kept for the hidden case alone: a collapse leaves the
+    text identical, so that timestamp is the only evidence of when it happened."""
     return {str(c["id"]): {"d": digest(c["body"]), "a": comment_author(c),
-                           "t": c["created_at"]} for c in thread}
+                           "t": c["created_at"], "m": hidden_reason(c),
+                           "u": c["updated_at"]} for c in thread}
 
 
 def existing_mirrors():
@@ -381,9 +407,14 @@ def mirror_issue(issue, comments):
             "",
             "---",
             "**@%s** commented on %s:" % (c["user"]["login"], c["created_at"]),
-            "",
-            c["body"] or "_(no body)_",
         ]
+        # Said here as well as in later events, so a reader of this page is never left thinking
+        # a collapsed comment came from upstream that way. The stamp line above is untouched:
+        # archived_comment_through reads these stamps back to find how far a thread ran.
+        if hidden_reason(c):
+            lines += ["", "_(collapsed upstream as %s: readers see a stub until they expand "
+                      "it)_" % hidden_reason(c)]
+        lines += ["", c["body"] or "_(no body)_"]
     if is_pr:
         pr = api("/repos/%s/pulls/%d" % (UPSTREAM_REPO, n))
         if pr:
@@ -684,9 +715,12 @@ def main():
         thread = list(paged("/repos/%s/issues/%d/comments" % (UPSTREAM_REPO, number)))
         seen = old.get("comments") or {}
         present = comment_map(thread)
-        # Three ways a thread can differ from what was recorded, and they are not
+        # Four ways a thread can differ from what was recorded, and they are not
         # interchangeable: an id nobody has seen is new, an id whose text digest moved was
-        # edited in place, and an id that was recorded but is no longer served was deleted.
+        # edited in place, an id that was recorded but is no longer served was deleted, and an
+        # id that a moderator collapsed (or stopped collapsing) is hidden from readers while
+        # still saying exactly what it said. That last one moves nothing but a timestamp, so a
+        # digest cannot see it -- GitHub's own field for the comment is what tells them apart.
         added = [c for c in thread
                  if str(c["id"]) not in seen and c["created_at"] > through]
         edited = [c for c in thread if str(c["id"]) in seen
@@ -699,13 +733,42 @@ def main():
             thread = list(paged("/repos/%s/issues/%d/comments" % (UPSTREAM_REPO, number)))
             present = comment_map(thread)
             gone = [(cid, meta) for cid, meta in gone if cid not in present]
+        # Read after the second look, so the hidden/served split is taken from the thread this
+        # run finally believes. An entry with no "m" of its own is a watermark written before
+        # collapses were tracked. For a comment that is shown now that means nothing to say --
+        # shown is the default, and there is no transition to report. For one that is hidden it
+        # is the opposite: the hiding is real and belongs on the record, but calling it new
+        # would be a guess, since it may have been collapsed before this fork ever read it. So
+        # it is recorded once, in its own words, as what was found rather than what happened.
+        hidden = []
+        shown = []
+        learned = []
+        for c in thread:
+            was = seen.get(str(c["id"]))
+            if was is None:
+                continue
+            now_hidden = present[str(c["id"])]["m"]
+            if "m" not in was:
+                if now_hidden is not None:
+                    learned.append(c)
+                continue
+            if was["m"] == now_hidden:
+                continue
+            (shown if now_hidden is None else hidden).append(c)
         newest = max((c["created_at"] for c in thread), default="")
         if newest > through:
-            new["comments_through"] = newest
+            through = newest
             dirty = True
+        # Written on every pass, not only when it grows. A watermark that is left out whenever
+        # the thread did not grow does not stay left out: the next run finds no watermark,
+        # rebuilds one from the archived body -- which knows the thread only as far as it ran
+        # the day the archive was taken -- and the run after that drops it again. The value is
+        # never wrong, since what protects the thread from being re-reported is the comment map
+        # below and not this stamp, but a watermark that moves backwards is not a watermark.
+        new["comments_through"] = through
         new["comments"] = present
 
-        if described or added or edited or gone:
+        if described or added or edited or gone or hidden or shown or learned:
             lines = []
             if described:
                 lines += ["**Upstream changed this item after it was archived** "
@@ -733,6 +796,38 @@ def main():
                     lines += ["", "---", "**@%s** commented on %s:"
                               % (comment_author(comment), comment["created_at"]), "",
                               "````", comment["body"] or "_(no body)_", "````"]
+            if hidden:
+                # The text is not repeated here either: hiding a comment does not change it,
+                # so the copy above is still exactly what a reader would see on expanding it.
+                lines += ["", "**%d comment%s upstream hid after this fork recorded %s** -- a "
+                          "moderator collapsed %s, so readers get a stub where the text was; "
+                          "the text itself is the cop%s already above:"
+                          % (len(hidden), "" if len(hidden) == 1 else "s",
+                             "it" if len(hidden) == 1 else "them",
+                             "it" if len(hidden) == 1 else "them",
+                             "y" if len(hidden) == 1 else "ies")]
+                lines += [hidden_entry(c) for c in hidden]
+            if shown:
+                lines += ["", "**%d comment%s upstream shows again** -- a moderator unhid %s, "
+                          "so it is back on the page as the text above:"
+                          % (len(shown), "" if len(shown) == 1 else "s",
+                             "it" if len(shown) == 1 else "them")]
+                for comment in shown:
+                    lines += ["- **@%s** commented on %s -- no longer hidden (was %s; "
+                              "upstream's last move on this comment: %s)"
+                              % (comment_author(comment), comment["created_at"],
+                                 seen[str(comment["id"])]["m"], comment["updated_at"])]
+            if learned:
+                # Said once per archive, the first time this fork reads a thread whose
+                # watermarks predate the field: not "upstream hid these now" -- that is not
+                # known -- but "these were already hidden when this fork started looking".
+                lines += ["", "**%d comment%s upstream had already collapsed when this fork "
+                          "began recording which comments are hidden** -- a moderator hid %s, "
+                          "so readers there get a stub; the text is the cop%s above:"
+                          % (len(learned), "" if len(learned) == 1 else "s",
+                             "it" if len(learned) == 1 else "them",
+                             "y" if len(learned) == 1 else "ies")]
+                lines += [hidden_entry(c) for c in learned]
             if gone:
                 lines += ["", "**%d comment%s this fork recorded %s gone from upstream.** "
                           "The copy above is the last text of %s known to exist."
