@@ -2,7 +2,6 @@
 package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -18,6 +17,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.transform.CreativePagerBridgeInjector;
 import net.forbric.kernel.transform.CreativePagerFixtures;
 import org.junit.jupiter.api.Test;
@@ -41,7 +41,7 @@ import org.objectweb.asm.tree.ClassNode;
  */
 @ResourceLock("system-properties")
 class KernelCreativePagerMergedScreenTest {
-	private static final Path RUN = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"));
+	private static final Path RUN = TestFixtures.stagedRoot();
 	private static final String SCREEN = "net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen";
 	private static final String API = CreativePagerFixtures.INTERFACE.replace('/', '.');
 	private static final String PROBE = "fixture.OwoCall";
@@ -149,9 +149,10 @@ class KernelCreativePagerMergedScreenTest {
 		Path merged = RUN.resolve("merged-base/patched-mc-merged-26.2.jar");
 		Path neo = RUN.resolve("neoforge-runtime/neoforge-runtime.jar");
 		Path forge = RUN.resolve("merged-base/forge-runtime-interop.jar");
-		assumeTrue(Files.isRegularFile(compiled.resolve("net/forbric/kernel/runtime/KernelCreativePager.class"))
-				&& Files.isRegularFile(merged) && Files.isRegularFile(neo) && Files.isRegularFile(forge),
-				"the staged game or the compiled runtime set is absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(merged) && Files.isRegularFile(neo) && Files.isRegularFile(forge),
+				"the staged game is absent");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled.resolve("net/forbric/kernel/runtime/KernelCreativePager.class")),
+				"the compiled runtime set is absent");
 		Map<String, byte[]> defined = new HashMap<>();
 		byte[] api = CreativePagerFixtures.creativeModule(CreativePagerFixtures.INTERFACE + ".class");
 		defined.put(API, api);
@@ -166,7 +167,7 @@ class KernelCreativePagerMergedScreenTest {
 				"io/netty/netty-handler", "org/joml/joml", "com/mojang/authlib", "org/apache/commons/commons-lang3",
 				"com/mojang/logging")) {
 			Path library = newestUnder(pattern);
-			assumeTrue(library != null, "no " + pattern + " jar in the local Minecraft libraries");
+			TestFixtures.require(Fixture.MC_LIBRARIES, library != null, "no " + pattern + " jar in the local Minecraft libraries");
 			urls.add(library.toUri().toURL());
 		}
 		for (String pattern : List.of("org/apache/logging/log4j/log4j-core", "org/apache/logging/log4j/log4j-slf4j2-impl",

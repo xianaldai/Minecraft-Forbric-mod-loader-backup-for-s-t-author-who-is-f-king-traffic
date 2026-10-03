@@ -14,7 +14,6 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassReader;
@@ -23,10 +22,13 @@ import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /** NeoForge's furnace tick against MinecraftForge's instance methods, on the real classes, and the census that found it. */
 @ResourceLock("system-properties")
 class FurnaceTickCallsInjectorTest {
-	private static final Path STAGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"));
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path NEO = STAGED.resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
 	private static final Path FORGE = STAGED.resolve("forge-patched/patched-mc-forge-26.2.jar");
@@ -75,7 +77,7 @@ class FurnaceTickCallsInjectorTest {
 	 * fails here instead of in a player's world.
 	 */
 	@Test void theFurnaceIsTheMergedBasesOnlyStaticInstanceMismatch() throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(MERGED), "actual game required");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "actual game required");
 		Map<String, ClassNode> classes = new HashMap<>();
 		try (ZipFile zip = new ZipFile(MERGED.toFile())) {
 			for (ZipEntry entry : Collections.list(zip.entries())) {

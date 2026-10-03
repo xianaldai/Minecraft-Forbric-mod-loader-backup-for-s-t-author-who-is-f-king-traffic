@@ -3,7 +3,6 @@ package net.forbric.kernel.transform;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -13,21 +12,23 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class TransferTransactionHooksTest {
 	private static Path neo() {
-		return Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/neoforge-runtime/neoforge-runtime.jar");
+		return TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
 	}
 	private static Path fabric() throws Exception {
 		Path modules = Path.of("build/transfer-api-compile");
-		assumeTrue(Files.isDirectory(modules));
+		// Extracted from Fabric API by extractTransferApis, which runs only where the game side is built.
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(modules), "the game side's transfer API modules are not extracted: " + modules);
 		try (var paths = Files.list(modules)) { return paths.filter(p -> p.getFileName().toString().startsWith("fabric-transfer-api-")).findFirst().orElseThrow(); }
 	}
 	private static byte[] bytes(Path jar, String name) throws Exception {
-		assumeTrue(Files.isRegularFile(jar));
-		try (ZipFile zip = new ZipFile(jar.toFile())) { return zip.getInputStream(zip.getEntry(name.replace('.', '/') + ".class")).readAllBytes(); }
+		return TestFixtures.requireEntry(NativeCoremodParityTest.fixtureOf(jar), jar, name.replace('.', '/') + ".class");
 	}
 	private static ClassNode node(byte[] bytes) { ClassNode node = new ClassNode(); new ClassReader(bytes).accept(node, 0); return node; }
 	@Test void allNativeTransactionHooksHaveValidBytecodeAndAreIdempotent() throws Exception {
@@ -64,7 +65,7 @@ class TransferTransactionHooksTest {
 		assertEquals(1, hooks);
 	}
 	@Test void forgeFallbackFollowsTheExistingCapabilityCompositionAndKeepsInvalidation() throws Exception {
-		Path merged = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/merged-base/patched-mc-merged-26.2.jar");
+		Path merged = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 		byte[] original = bytes(merged, ForgeTransferCapabilityFallback.TARGET);
 		var transformer = new ForgeTransferCapabilityFallback();
 		// Running before composition must decline, rather than claim a hook that never reaches a native provider.
@@ -91,7 +92,7 @@ class TransferTransactionHooksTest {
 	 * before any provider is asked. Every result it returns must pass the owner-first hook, and nothing else changes.
 	 */
 	@Test void baseContainerItemQueryPassesTheOwnerFirstHook() throws Exception {
-		Path merged = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/merged-base/patched-mc-merged-26.2.jar");
+		Path merged = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 		byte[] original = bytes(merged, ForgeTransferCapabilityFallback.BASE_CONTAINER);
 		var transformer = new ForgeTransferCapabilityFallback();
 		byte[] changed = transformer.transform(ForgeTransferCapabilityFallback.BASE_CONTAINER, original, null);
@@ -118,7 +119,7 @@ class TransferTransactionHooksTest {
 		assertSame(original, transformer.transform("net.minecraft.world.level.block.entity.ChestBlockEntity", original, null));
 	}
 	@Test void standardForgeCertificateRejectsInjectedBehaviorEvenIfClassNameIsUnchanged() throws Exception {
-		Path forge = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/forge-runtime/forge-runtime.jar");
+		Path forge = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
 		for (String name : List.of("net.minecraftforge.items.ItemStackHandler", "net.minecraftforge.fluids.capability.templates.FluidTank")) {
 			byte[] original = bytes(forge, name);
 			byte[] approved = ForgeTransferShapeAudit.certify(name, original);
@@ -135,7 +136,7 @@ class TransferTransactionHooksTest {
 		}
 	}
 	@Test void everyRequiredHelperMatchesTheReviewedCarrierAndGameShapes() throws Exception {
-		Path stage = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run");
+		Path stage = TestFixtures.stagedRoot();
 		var helpers = new java.util.LinkedHashSet<>(ForgeTransferShapeAudit.ITEM_HELPERS); helpers.addAll(ForgeTransferShapeAudit.FLUID_HELPERS);
 		helpers.addAll(ForgeTransferShapeAudit.ENERGY_HELPERS);
 		for (String name : helpers) {
@@ -152,7 +153,7 @@ class TransferTransactionHooksTest {
 	 */
 	@Test void forgeEnergyStorageCertificateCoversItsWholeTransferContract() throws Exception {
 		String name = "net.minecraftforge.energy.EnergyStorage";
-		byte[] original = bytes(Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/forge-runtime/forge-runtime.jar"), name);
+		byte[] original = bytes(TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar"), name);
 		assertTrue(ForgeTransferShapeAudit.ENERGY_HELPERS.contains(name));
 		assertTrue(node(ForgeTransferShapeAudit.certify(name, original)).methods.stream().anyMatch(method -> method.name.equals(ForgeTransferShapeAudit.MARKER)));
 		for (String changedMethod : List.of("receiveEnergy", "extractEnergy", "getEnergyStored", "getMaxEnergyStored", "canReceive", "canExtract", "<init>")) {
@@ -169,7 +170,7 @@ class TransferTransactionHooksTest {
 	}
 	@Test void itemStackTooltipChangesRemainAllowedButCountMutationDoesNot() throws Exception {
 		String name = "net.minecraft.world.item.ItemStack";
-		Path game = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/merged-base/patched-mc-merged-26.2.jar");
+		Path game = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 		byte[] original = bytes(game, name);
 		for (String changedMethod : List.of("getTooltipLines", "setCount")) {
 			ClassNode changed = node(original);
@@ -182,7 +183,7 @@ class TransferTransactionHooksTest {
 	}
 	@Test void theRealNbtBuilderRepairIsOutsideTransferButCopyChangesAreNot() throws Exception {
 		String name = "net.minecraft.nbt.CompoundTag";
-		Path game = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/merged-base/patched-mc-merged-26.2.jar");
+		Path game = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 		byte[] original = bytes(game, name);
 		byte[] repaired = new ForbricMergedBaseCompatTransformer().transform(name, original,
 				new TransformContext(net.fabricmc.api.EnvType.SERVER, false, "intermediary"));
@@ -200,7 +201,7 @@ class TransferTransactionHooksTest {
 	}
 	@Test void redundantMixinHierarchySignatureIsIgnoredWithoutErasingNewGenericOrExecutableContracts() throws Exception {
 		String name = "net.minecraft.world.item.ItemStack";
-		Path game = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/merged-base/patched-mc-merged-26.2.jar");
+		Path game = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 		byte[] original = bytes(game, name); ClassNode woven = node(original);
 		assertNull(woven.signature, "the real staged class has no generic signature");
 		woven.interfaces.add("net/fabricmc/fabric/api/item/v1/FabricItemStack");
@@ -221,7 +222,7 @@ class TransferTransactionHooksTest {
 	}
 	@Test void separateFabricItemInterfacesDoNotHideAnEffectfulVariantCacheGetter() throws Exception {
 		String name = "net.minecraft.world.item.Item";
-		Path game = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/merged-base/patched-mc-merged-26.2.jar");
+		Path game = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 		byte[] original = bytes(game, name); ClassNode woven = node(original);
 		woven.interfaces.addAll(List.of("net/fabricmc/fabric/api/item/v1/FabricItem", "net/fabricmc/fabric/impl/item/ItemExtensions", "net/fabricmc/fabric/impl/transfer/item/ItemVariantCache"));
 		String type = "Lnet/fabricmc/fabric/api/transfer/v1/item/ItemVariant;";

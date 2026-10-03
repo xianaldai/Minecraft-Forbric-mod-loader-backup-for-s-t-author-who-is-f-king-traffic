@@ -9,8 +9,8 @@ import java.util.List;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassReader;
@@ -128,7 +128,7 @@ class MixinWrapOperationShimTest {
 	}
 
 	private static Path merged() {
-		return Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/merged-base/patched-mc-merged-26.2.jar");
+		return TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	}
 
 	private static ClassNode fabric() throws Exception {
@@ -144,7 +144,8 @@ class MixinWrapOperationShimTest {
 	}
 
 	private static ClassNode game(Path jar, String name) throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(jar), "actual game required");
+		Fixture kind = jar.equals(TestFixtures.vanillaJar()) ? Fixture.MC_LIBRARIES : Fixture.STAGED;
+		TestFixtures.require(kind, Files.isRegularFile(jar), "actual game required");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ClassNode node = new ClassNode();
 			new ClassReader(zip.getInputStream(zip.getEntry(name + ".class")).readAllBytes()).accept(node, 0);

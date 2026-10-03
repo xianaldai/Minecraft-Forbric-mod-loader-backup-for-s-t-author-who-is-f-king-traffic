@@ -18,7 +18,6 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -36,6 +35,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.ClassNode;
@@ -50,8 +50,7 @@ import net.forbric.kernel.mixin.MergedBaseAnonymousDrift;
  * plus its superclass; the constructor descriptor and the {@code val$} captures are javac's plumbing.
  */
 class MergedBaseAnonymousDriftTest {
-	private static final Path MERGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Pattern ANONYMOUS = Pattern.compile("^(net/minecraft/|com/mojang/).*\\$\\d+\\.class$");
 
 	record Shape(String superName, Set<String> methods, String ctorDesc, Set<String> captures) {
@@ -68,7 +67,8 @@ class MergedBaseAnonymousDriftTest {
 	@Test
 	void theThreeBucketsAreExactlyThePinnedConstants() throws Exception {
 		Path vanilla = vanillaJar();
-		assumeTrue(Files.isRegularFile(MERGED) && Files.isRegularFile(vanilla), "staged merged base or stock 26.2 absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "staged merged base absent");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(vanilla), "stock 26.2 absent: " + vanilla);
 		Map<String, Shape> vanillaShapes = shapes(vanilla), mergedShapes = shapes(MERGED);
 		assertTrue(vanillaShapes.size() > 500, "this does not look like a full vanilla jar (" + vanillaShapes.size() + " anonymous classes)");
 

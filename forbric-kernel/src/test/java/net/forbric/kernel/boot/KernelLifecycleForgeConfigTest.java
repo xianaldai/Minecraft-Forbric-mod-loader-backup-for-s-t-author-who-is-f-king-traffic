@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.objectweb.asm.Opcodes.*;
 
 import java.io.IOException;
@@ -21,6 +20,8 @@ import java.util.Set;
 import java.util.jar.JarFile;
 
 import net.forbric.api.Side;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -154,9 +155,8 @@ class KernelLifecycleForgeConfigTest {
 
 	@Test
 	void realForgeCarrierHasTheTwoArgumentPrivateStaticOpenerAndTheExpectedTypeOrder() throws Exception {
-		String old = System.getenv("FORBRIC_OLD");
-		Path jar = Path.of(old == null || old.isBlank() ? "../forbric-loader" : old).resolve("run/forge-runtime/forge-runtime.jar");
-		assumeTrue(Files.isRegularFile(jar), "optional staged Forge carrier absent: " + jar);
+		Path jar = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "optional staged Forge carrier absent: " + jar);
 		try (JarFile carrier = new JarFile(jar.toFile())) {
 			ClassNode tracker = read(carrier, TRACKER.replace('.', '/'));
 			var openers = tracker.methods.stream().filter(m -> m.name.equals("openConfig")).toList();

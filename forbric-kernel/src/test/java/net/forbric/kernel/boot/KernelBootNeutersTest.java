@@ -2,7 +2,6 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -14,6 +13,8 @@ import net.forbric.api.Ecosystem;
 import net.forbric.api.ForeignType;
 import net.forbric.kernel.transform.AnchorSet;
 import net.forbric.kernel.transform.MethodBodyNeuter;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -29,8 +30,7 @@ import org.objectweb.asm.tree.MethodNode;
 class KernelBootNeutersTest {
 	private static final String REGISTRY = ForeignType.FLUID_INTERACTION_REGISTRY.binary(Ecosystem.FORGE);
 	private static final String CAN_INTERACT = "(Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;)Z";
-	private static final Path FORGE_CARRIER = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"))
-			.resolve("forge-runtime/forge-runtime.jar");
+	private static final Path FORGE_CARRIER = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
 
 	@Test void withTheRepairOnNoSideNeutersMinecraftForgesFluidRegistry() {
 		for (KernelBoot.Side side : KernelBoot.Side.values()) {
@@ -70,7 +70,7 @@ class KernelBootNeutersTest {
 	}
 
 	private static byte[] read(Path jar, String internalName) throws Exception {
-		assumeTrue(Files.isRegularFile(jar), jar + " absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), jar + " absent");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ZipEntry entry = zip.getEntry(internalName + ".class");
 			assertNotNull(entry, internalName + " in " + jar);

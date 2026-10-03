@@ -133,21 +133,27 @@ public final class KernelLoadReport {
 			if (clean && loadingFinished && reported.compareAndSet(false, true)) {
 				ForbricLog.info("[Forbric/Load] every mod finished loading");
 			}
+			// Mods the player switched off did not fail, so they leave the success line alone. They do keep the
+			// file: a jar sitting in mods/ that never loads is exactly what a player forgets they asked for.
+			List<String> disabled = DisabledMods.switchedOff();
 			// Suspicions alone are a clean boot and keep no file. Its presence is the signal -- push-and-run counts
 			// every load-report.txt as a named failure, the gate controls read "no file" as clean -- and fabric-api
 			// on its own brings two dozen preflight suspicions to every boot. They are in the machine report always,
 			// and in this file as notes beside a real failure, which is when someone is reading it to troubleshoot.
-			if (clean) {
+			if (clean && disabled.isEmpty()) {
 				if (file != null) Files.deleteIfExists(file);
 				lastRendered = null;
 				return;
 			}
 			// Noticed and not proved. Notes, not failures: they mark no mod and never stop the success line.
 			List<CompatibilityFinding> suspected = CompatibilityFindings.suspected();
-			String rendered = render(chinese(), failures, unattributed, suspected);
+			String rendered = render(chinese(), failures, unattributed, suspected, disabled);
 			synchronized (KernelLoadReport.class) {
 				if (rendered.equals(lastRendered)) return;
 				if (lastRendered != null && !rewriteEnabled()) return;
+				if (!disabled.isEmpty()) {
+					ForbricLog.info("[Forbric/Load] %s — details in .forbric-kernel/%s", switchedOffLine(false, disabled), FILE);
+				}
 				if (!failures.isEmpty()) {
 					List<String> ids = new ArrayList<>();
 					for (ModCatalog.Entry e : failures) ids.add(e.modId());
@@ -160,7 +166,8 @@ public final class KernelLoadReport {
 					ForbricLog.warn("[Forbric/Load] %d confirmed compatibility finding(s) belong to no installed mod: %s — "
 							+ "details in .forbric-kernel/%s", unattributed.size(), String.join(", ", keys), FILE);
 				}
-				reported.set(true);
+				// Only a failure takes the success line away; a file naming switched-off jars alone does not.
+				if (!clean) reported.set(true);
 				lastRendered = rendered;
 				if (file == null) return;
 				Files.createDirectories(file.getParent());
@@ -223,8 +230,14 @@ public final class KernelLoadReport {
 	 */
 	static String render(boolean zh, List<ModCatalog.Entry> failures, List<CompatibilityFinding> unattributed,
 			List<CompatibilityFinding> suspected) {
+		return render(zh, failures, unattributed, suspected, List.of());
+	}
+
+	/** @param disabled the jars {@link DisabledMods} switched off this boot, by file name */
+	static String render(boolean zh, List<ModCatalog.Entry> failures, List<CompatibilityFinding> unattributed,
+			List<CompatibilityFinding> suspected, List<String> disabled) {
 		StringBuilder sb = new StringBuilder();
-		boolean headline = !failures.isEmpty() || (unattributed.isEmpty() && suspected.isEmpty());
+		boolean headline = !failures.isEmpty() || (unattributed.isEmpty() && suspected.isEmpty() && disabled.isEmpty());
 		if (zh) {
 			sb.append("Forbric 加载报告\n");
 			sb.append("=================\n\n");
@@ -233,6 +246,12 @@ public final class KernelLoadReport {
 			sb.append("Forbric load report\n");
 			sb.append("===================\n\n");
 			if (headline) sb.append(failures.size()).append(" mod(s) did not finish loading this time.\n\n");
+		}
+		if (!disabled.isEmpty()) {
+			sb.append(switchedOffLine(zh, disabled)).append('\n');
+			sb.append(zh ? "它们这次没有加载。想重新启用哪个，就把它那一行从 mods 文件夹旁边的 " + DisabledMods.FILE + " 里删掉。\n\n"
+					: "They were not loaded. To turn one back on, delete its line from " + DisabledMods.FILE
+							+ ", next to your mods folder.\n\n");
 		}
 
 		for (ModCatalog.Entry e : failures) {
@@ -326,6 +345,12 @@ public final class KernelLoadReport {
 			sb.append("initialising. This records loading results; whether the game continues depends on the compatibility decision.\n");
 		}
 		return sb.toString();
+	}
+
+	/** The one line naming the switched-off jars; English is also what the log says, whatever the system language. */
+	static String switchedOffLine(boolean zh, List<String> disabled) {
+		return zh ? DisabledMods.FILE + " 里关掉了 " + disabled.size() + " 个 mod：" + String.join("、", disabled)
+				: disabled.size() + " mod(s) switched off in " + DisabledMods.FILE + ": " + String.join(", ", disabled);
 	}
 
 	/** One finding as a player reads it: who, what, why, and the id a log search or a bug report can quote. */

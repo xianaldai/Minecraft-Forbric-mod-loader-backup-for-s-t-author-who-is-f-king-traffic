@@ -448,10 +448,116 @@ After all subjects finish, run `mac/mixed.py` with the same `PERMOD_MC`, `PERMOD
 `FORBRIC_VERSION` and `FORBRIC_JAVA`. It checks kernel/input fingerprints, combines every strictly passing
 subject and its dependencies, tests 6,000 world ticks, then reloads the saved world. Its full pack manifest,
 reports and screenshots go to `mixed/`. `PERMOD_MIXED_OUT` and `PERMOD_MIXED_INSTANCE` select fresh
-evidence/instance names for a later candidate. Save verification uses `mac/world_save.py` for both save layouts: fresh level data, existing region data,
+evidence/instance names for a later candidate. `--subjects all` combines every subject in `manifest.json` instead,
+and needs no individual sweep at all: in place of the per-mod fingerprints it checks each jar's bytes against the
+digest the manifest records (`sha256` when a row has one, else Modrinth's `sha1` and `size`). Either way
+`result.json` names the mode and the SHA-256 of every jar, which must still match after the last session.
+Each session's evidence also keeps `forbric-mods.txt`, and `.forbric-kernel/crash-analysis.txt` and
+`merge-report.txt` when that session wrote them (a crash-analysis file is never counted as a crash report).
+Importing `mixed.py` starts nothing and reads no environment: `run(label, ticks, subjects, out, jvm, stall,
+timeout, grace)` is one session of the prepared instance with the subjects, extra JVM flags and the driver's
+`CLIENT_STALL`/`RUN_TIMEOUT`/`GRACE` all explicit, which is how the minimiser below drives it.
+`mac/test_mixed.py` runs it against a fake driver. Save verification uses `mac/world_save.py` for both save layouts: fresh level data, existing region data,
 and a fresh player or region write. `mac/test_world_save.py` rejects copied or incomplete saves. The disposable mixed instance disables pause on lost focus. A partial or failed first load leaves reload explicitly NOT_RUN.
 The runner clears only directories bearing its `.forbric-sweep-instance` marker. Use a new evidence folder
 for a new candidate; unfinished or differently fingerprinted individual results cannot feed a mixed test.
 
 `mac/dependency_selection.py` keeps already required API providers ahead of unrelated sampled hosts;
 `mac/test_archive.py` also verifies this selection rule.
+
+What a run says is decided in one place, `mac/sweep_verdict.py` (standard library only; it reads no file and no
+environment): `classify_run` (PASS, CRASH, STALL, STALL_IN_WORLD, NO_WORLD, NOT_DRAWN, FAIL), `mod_status` (a jar's
+worst row, its bundled rows included; ABSENT when the kernel never listed it), `subject_strict` (per-mod's strict
+pass) and `pack_strict` (mixed's). per-mod.py, mixed.py and the minimiser below all read runs through it.
+`mac/test_sweep_verdict.py` pins each outcome and compares every predicate, over input grids, with the code the two
+scripts carried before it moved here.
+
+## Minimise a failing pack
+
+`mac/ddmin_core.py` is the game-free half of replacing hand bisection (halving a failing mixed pack, or
+`--bisect` above) with delta debugging. It uses only the standard library and reads no environment or files.
+An oracle maps a jar list to FAIL (the full pack's failure signature), PASS, or UNRESOLVED (it failed some other
+way); only FAIL ever shrinks the set. `ddmin` is Zeller and Hildebrandt's ddmin2: subsets, then complements,
+then double the granularity. `one_minimal` removes single jars until none can go. `closed` adds every
+`closure.json` dependency to each run; dependencies are never minimised. `signature` names a failure by the
+crash report's top exception, with timestamps, paths, Mixin handler prefixes, hex and digits removed and a
+`Sources: a and b` list sorted; exit 78 is `POLICY_STOP:` plus the sorted keys of the confirmed required
+findings. `seeds` turns a run's own evidence (the clash `Sources`, `crash-analysis.txt` suspects, jars in the
+exception chain's frames, report rows that are not OK) into jars, mapping mod ids only through the report's
+`mods[]` rows. `minimise` runs the closed seed set first and starts ddmin there when it FAILs; runs are
+remembered by the closed configuration, so two subsets that launch the same jars run once. Nothing in it starts
+a client. `mac/test_ddmin.py` checks it with fake oracles and the fixtures in `mac/testdata/`; `python3 tools/dev.py
+tool-test` runs it with every other `mac/test_*.py`.
+
+`mac/ddmin.py` is the half that runs the game: every configuration is one `mixed.run` session in a fresh
+disposable instance, with the strict compatibility policy and short limits.
+
+    PERMOD_DATA=<data-dir> PERMOD_MC=<isolated root> FORBRIC_VERSION=<profile> FORBRIC_JAVA=<java 25> \
+      python3 run/compat/mac/ddmin.py --manifest <failing mixed run>/manifest.json [--out DIR] \
+      [--ticks 200] [--stall 120] [--timeout 420] [--grace 20] [--jvm=-D...] [--budget 80] \
+      [--no-seeds] [--iterate] [--narrow]
+
+- **Pack.** The jars are the manifest's rows, each checked against the manifest's digest like `mixed.py --subjects
+  all`; dependencies come from `PERMOD_DATA/closure.json`, which must hold every subject and no jar outside the pack.
+  The candidates ddmin may take out are the subjects (`popular`, `random`) plus any jar no subject needs; every
+  other jar only ever arrives through `closed`. The instance is `PERMOD_DATA/ddmin-inst` (`PERMOD_DDMIN_INSTANCE`),
+  prepared like per-mod's, with pause on lost focus off.
+- **Reference.** The whole pack is run first, with the same flags and limits as every later session, and that
+  session defines the failure: its signature (`ddmin_core.signature`; when no exception names it, the session's
+  outcome is added, e.g. `STALL EXIT:None` or `PASS EXIT:0 bad:mod=DEGRADED`, so a stall and a degraded mod stay
+  different failures) and its arbitration. A reference that passes strictly is `PASSED` (nothing to minimise). A
+  failure that needs more than 200 world ticks to appear needs `--ticks`.
+- **Verdicts.** A session is PASS when `sweep_verdict.pack_strict` passes, FAIL when its signature is the
+  reference's, UNRESOLVED otherwise — and UNRESOLVED whatever it printed when its arbitration differs from the
+  reference's: a mod id loaded from another jar, ecosystem or version (`compatibility-report.json` rows), an id the
+  reference did not load, or a different `forbric-mods.txt` choice. Duplicate builds make that happen: a subset
+  holding only `sodium-fabric` runs Fabric Sodium where the pack ran NeoForge Sodium, which is a different program.
+  `ddmin-result.json` records the reference's choices (`arbitration`: id, loader and copy); `merge-report.txt` is
+  kept as evidence but not compared, since it is written in the system language. When subsets hold both copies but
+  arbitration would choose the other one, `--jvm=-Dforbric.modOwner=<id>=<loader>` pins the reference's choice for
+  every session; a subset holding only the other copy stays UNRESOLVED.
+- **Seeds.** The reference's own evidence (`ddmin_core.seeds`) is tried first; `--no-seeds` starts from the whole
+  pack.
+- **Cache.** `<out>/ddmin/cache.jsonl` (out defaults to `PERMOD_DATA`) keeps every finished session keyed by the
+  installed kernel's SHA-256, the sorted SHA-256 of its jars, its JVM flags and the world ticks (which reach the game
+  as a JVM flag), so an interrupted or repeated minimisation launches only what it has not seen and the verdicts are
+  recomputed against each round's reference. A cache written by another kernel is refused; so is a kernel that
+  changes between or during sessions, and a jar whose bytes change before the result is written. Evidence for each
+  session is `<out>/ddmin/runs/<nnn>-<key>/` (mixed's evidence, crash-analysis.txt included).
+- **Budget.** `--budget` caps the game launches of one invocation (cache hits are free). Running out gives
+  `BUDGET` with the smallest failing configuration seen so far.
+- **`--iterate`.** After a round is `MINIMISED`, its minimal jars leave the candidates and the rest is run as the
+  next round's reference: its failure, whatever it is, is minimised next, against that round's own arbitration.
+  Rounds stop when a reference passes, the candidates run out, or a round does not finish. A minimal jar that other
+  candidates need comes back with them, so the next round may name one of its dependents.
+- **`--narrow`.** The closed minimal set is narrowed further, by ddmin over what stays enabled: first the mixin
+  configs (every other one goes into `-Dforbric.disableMixinConfigs`), then the mixin classes of those configs as
+  `config:Entry` (the rest into `-Dforbric.suppressMixins`). Configs are read as each loader declares them
+  (`fabric.mod.json` `mixins`, `[[mixins]]` in either `mods.toml`, a manifest's `MixinConfigs`), in nested jars too;
+  a server-only config or a config's `server` list is left out. With every config off first: a failure that survives
+  that needs none of them, and the result says so. `--narrow` owns those two properties; passing either in `--jvm`
+  is refused.
+
+`<out>/ddmin/ddmin-result.json` has the overall `status` (`MINIMISED`, `PASSED`, `BUDGET` or `NOT_REPRODUCED`;
+exit 0 for the first two), the kernel, manifest and closure SHA-256, the settings, launches and cache hits, and per
+round the reference, the seeds, every session with its verdict and signature (and winner differences), and
+`minimal` (the candidates) with `closed` (what to install to see the failure).
+
+Known answer, for the owner to run on the Mac (it needs the installed profile; nothing in CI or the tool tests
+launches a game): the 2026-10-01 sweep100 mixed pack (`reports/2026-10-01-sweep100/mixed-manifest.json`, 88
+subjects, 109 jars, with that sweep's data directory, whose `closure.json` is the one committed beside it) must
+reduce to `minimal` = {`chloride-NEOFORGE-mc26.2-v1.8.1.jar`, `cwb-4.1.0+26.2.jar`} and `closed` = those plus
+`sodium-neoforge-0.9.2+mc26.2.jar`, the pair Sodium refuses with `Multiple overrides for option
+'sodium:general.fullscreen_mode'! Sources: chloride and cwb`:
+
+    PERMOD_DATA=build/sweep100-mac-network PERMOD_MC=<isolated root> FORBRIC_VERSION=<profile> \
+      FORBRIC_JAVA=<java 25> python3 run/compat/mac/ddmin.py \
+      --manifest run/compat/reports/2026-10-01-sweep100/mixed-manifest.json --out build/sweep100-ddmin
+
+Against the fake game below that takes four launches with seeds (the pack, the seed pair with Sodium, each of the
+pair alone with its closure) and 30 with `--no-seeds`. On the game the count also depends on which jars the
+reference's evidence seeds (a subject whose row is not OK is seeded too). Both mods are in every configuration that
+FAILs, since only a session with both loaded can carry a signature that names both. It has not been run on the game
+yet.
+`mac/test_ddmin_driver.py` runs exactly this pack and closure, plus the cache, kernel refusal, arbitration, budget,
+`--iterate`, `--narrow` and command-line wiring, against a fake game behind `mixed.run` (no game files).

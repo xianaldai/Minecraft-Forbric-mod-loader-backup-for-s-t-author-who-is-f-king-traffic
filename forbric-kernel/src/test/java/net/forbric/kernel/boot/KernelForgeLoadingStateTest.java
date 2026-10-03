@@ -1,9 +1,10 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.nio.file.*;
 import java.util.zip.ZipFile;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.*;
@@ -34,8 +35,8 @@ class KernelForgeLoadingStateTest {
     }
 
     @Test void theActualForgeCarrierStillOwnsItsGuardAndFailurePaths() throws Exception {
-        Path jar = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/forge-runtime/forge-runtime.jar");
-        assumeTrue(Files.isRegularFile(jar));
+        Path jar = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
+        TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), jar + " absent");
         ClassNode node = new ClassNode();
         try (ZipFile zip = new ZipFile(jar.toFile())) {
             new ClassReader(zip.getInputStream(zip.getEntry("net/minecraftforge/fml/ModLoader.class")).readAllBytes()).accept(node, 0);

@@ -774,7 +774,7 @@ public final class MixinFit {
 	 * understand resolves to the first method, and to "resolved" if there is none to compare against — see the
 	 * conservatism note on the class.
 	 */
-	private static List<MethodNode> resolveSelector(ClassNode target, String selector,
+	static List<MethodNode> resolveSelector(ClassNode target, String selector,
 			Function<String, byte[]> resolver) {
 		if (selector == null || selector.isBlank()) return List.of();
 		String s = selector.trim();
@@ -798,6 +798,21 @@ public final class MixinFit {
 			return firstMethod(target, resolver);
 		}
 		return findMethods(target, name, desc, resolver);
+	}
+
+	/**
+	 * Whether {@link #resolveSelector} answers {@code selector} by name rather than with its conservative fallback (a
+	 * wildcard, a regex, a {@code desc=} clause, no name): only then is the method it returns the one Mixin binds.
+	 */
+	static boolean exactSelector(String selector) {
+		if (selector == null || selector.isBlank()) return false;
+		String s = selector.trim();
+		if (s.indexOf('*') >= 0) return false;
+		int semi = s.indexOf(';');
+		if (s.startsWith("L") && semi > 0) s = s.substring(semi + 1);
+		int paren = s.indexOf('(');
+		String name = paren >= 0 ? s.substring(0, paren) : s;
+		return !name.isEmpty() && name.charAt(0) != '/' && name.indexOf(' ') < 0 && name.indexOf('=') < 0;
 	}
 
 	private static List<MethodNode> firstMethod(ClassNode target, Function<String, byte[]> resolver) {

@@ -19,7 +19,6 @@ package net.forbric.kernel.runtime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.Method;
 import java.net.URL;
@@ -29,6 +28,8 @@ import java.nio.file.Path;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -38,7 +39,8 @@ import org.junit.jupiter.api.Test;
 class KernelSnippetsTest {
 	private static Class<?> load() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime").normalize();
-		assumeTrue(Files.isRegularFile(compiled.resolve("net/forbric/kernel/runtime/KernelSnippets.class")), "runtime helper not compiled");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled.resolve("net/forbric/kernel/runtime/KernelSnippets.class")),
+				"runtime helper not compiled");
 		URLClassLoader loader = new URLClassLoader(new URL[] { compiled.toUri().toURL() }, ClassLoader.getPlatformClassLoader());
 		return loader.loadClass("net.forbric.kernel.runtime.KernelSnippets");
 	}

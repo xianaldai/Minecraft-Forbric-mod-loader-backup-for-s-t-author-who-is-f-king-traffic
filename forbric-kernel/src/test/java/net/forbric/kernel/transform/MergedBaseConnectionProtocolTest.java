@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -47,6 +46,9 @@ import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Covers the {@code Connection.setupOutboundProtocol} repair: MinecraftForge's channels read a Forge-added
  * {@code outboundProtocol} field to pick the packet type for an outgoing payload, the merge dropped the lambda that
@@ -54,9 +56,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  * send from a Forbric client threw. The kernel stores the protocol at the head of the method instead.
  */
 class MergedBaseConnectionProtocolTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	private static final String CONNECTION = "net/minecraft/network/Connection";
 	private static final String PROTOCOL_INFO = "Lnet/minecraft/network/ProtocolInfo;";
@@ -65,7 +65,7 @@ class MergedBaseConnectionProtocolTest {
 
 	@Test
 	void theMergedSetupStoresForgesOutboundProtocolFirst() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] in = readClass(CONNECTION + ".class");
 		byte[] out = transform(in);
 		assertTrue(out != in, "the staged merged base must still need the repair — if it stopped, re-derive the test");
@@ -80,7 +80,7 @@ class MergedBaseConnectionProtocolTest {
 
 	@Test
 	void aSecondPassLeavesTheRepairedClassAlone() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] once = transform(readClass(CONNECTION + ".class"));
 		assertSame(once, transform(once), "a body that already stores the field is coherent and must not be touched");
 	}

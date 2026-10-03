@@ -19,7 +19,6 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -39,6 +38,9 @@ import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * The MinecraftForge half of the condition wrap — the third evaluator, and the one nothing had covered.
  *
@@ -47,8 +49,7 @@ import org.objectweb.asm.tree.MethodNode;
  * and it has to actually be strict. Both are read out of the staged bytes rather than assumed.
  */
 class MergedBaseForgeConditionsTest {
-	private static final Path STAGED =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path FORGE_CARRIER = STAGED.resolve("forge-runtime/forge-runtime.jar");
 	private static final Path MERGED_BASE = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String ENTRY = "net/minecraftforge/common/crafting/conditions/ICondition.class";
@@ -94,14 +95,14 @@ class MergedBaseForgeConditionsTest {
 	void minecraftForgesEvaluatorIsStillOnTheDatapackPathAtAll() throws Exception {
 		// The premise. If the merge ever stops carrying MinecraftForge's half of this method, the repair above is
 		// dead weight and should be removed rather than left looking useful.
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 
 		List<String> callers = new ArrayList<>();
 		for (String owner : List.of("net/minecraft/resources/ResourceManagerRegistryLoadTask",
 				"net/minecraft/world/level/storage/loot/LootPool")) {
 			ClassNode node = new ClassNode();
 			byte[] bytes = read(MERGED_BASE, owner + ".class");
-			assumeTrue(bytes != null, owner + " absent from this base");
+			assertTrue(bytes != null, "content drift: " + owner + " absent from this base");
 			new ClassReader(bytes).accept(node, 0);
 
 			for (MethodNode method : node.methods) {
@@ -156,9 +157,9 @@ class MergedBaseForgeConditionsTest {
 	}
 
 	private static byte[] original() throws IOException {
-		assumeTrue(Files.isRegularFile(FORGE_CARRIER), "staged MinecraftForge carrier absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE_CARRIER), "staged MinecraftForge carrier absent");
 		byte[] bytes = read(FORGE_CARRIER, ENTRY);
-		assumeTrue(bytes != null, "ICondition absent from this carrier");
+		assertTrue(bytes != null, "content drift: ICondition absent from this carrier");
 		return bytes;
 	}
 

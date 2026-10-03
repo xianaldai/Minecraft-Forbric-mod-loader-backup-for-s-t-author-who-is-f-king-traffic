@@ -18,7 +18,6 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,6 +37,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -74,7 +74,7 @@ import net.forbric.kernel.mixin.MergedBaseCalleeSwaps;
  * calls. Synthetic names ({@code access$N}, {@code lambda$…}) are renumbering, not swaps.
  */
 class MergedBaseCalleeSwapTest {
-	private static final Path RUN = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path RUN = TestFixtures.stagedRoot();
 	private static final Path MERGED = RUN.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path FORGE_RT = RUN.resolve("forge-runtime/forge-runtime.jar");
 	private static final Path NEO_RT = RUN.resolve("neoforge-runtime/neoforge-runtime.jar");
@@ -126,7 +126,8 @@ class MergedBaseCalleeSwapTest {
 	@Test
 	void theCensusOfCalleeSwapsIsExactlyThePinnedSet() throws Exception {
 		Path vanilla = vanillaJar();
-		assumeTrue(Files.isRegularFile(MERGED) && Files.isRegularFile(vanilla), "staged merged base or stock 26.2 absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "staged merged base absent");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(vanilla), "stock 26.2 absent: " + vanilla);
 		Set<String> found = new TreeSet<>();
 		for (Swap swap : swaps(vanilla)) found.add(swap.line());
 		assertEquals(PINNED, found, "descriptor-identical callee swaps between stock 26.2 and the merged base — re-derive, then decide");
@@ -140,8 +141,9 @@ class MergedBaseCalleeSwapTest {
 	@Test
 	void everyAdmittedSwapIsEitherRewrittenOrExplained() throws Exception {
 		Path vanilla = vanillaJar();
-		assumeTrue(Files.isRegularFile(MERGED) && Files.isRegularFile(vanilla) && Files.isRegularFile(FORGE_RT)
-				&& Files.isRegularFile(NEO_RT), "staged merged base, carriers or stock 26.2 absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED) && Files.isRegularFile(FORGE_RT)
+				&& Files.isRegularFile(NEO_RT), "staged merged base or carriers absent");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(vanilla), "stock 26.2 absent: " + vanilla);
 		Map<String, ClassNode> world = new HashMap<>();
 		List<String> admitted = new ArrayList<>();
 		for (Swap swap : swaps(vanilla)) {
@@ -155,7 +157,8 @@ class MergedBaseCalleeSwapTest {
 	@Test
 	void everyKnownRowIsAmongTheSwapsTheCensusFinds() throws Exception {
 		Path vanilla = vanillaJar();
-		assumeTrue(Files.isRegularFile(MERGED) && Files.isRegularFile(vanilla), "staged merged base or stock 26.2 absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "staged merged base absent");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(vanilla), "stock 26.2 absent: " + vanilla);
 		Set<String> found = new TreeSet<>();
 		for (Swap swap : swaps(vanilla)) found.add(swap.line());
 		for (MergedBaseCalleeSwaps.Swap row : MergedBaseCalleeSwaps.KNOWN) {
@@ -175,7 +178,8 @@ class MergedBaseCalleeSwapTest {
 	@Test
 	void everySubstitutionIsOneCallInAnOtherwiseUnchangedBody() throws Exception {
 		Path vanilla = vanillaJar();
-		for (Path jar : List.of(MERGED, vanilla, FORGE_PATCHED, NEO_PATCHED)) assumeTrue(Files.isRegularFile(jar), jar + " absent");
+		for (Path jar : List.of(MERGED, FORGE_PATCHED, NEO_PATCHED)) TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), jar + " absent");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(vanilla), vanilla + " absent");
 		assertTrue(!MergedBaseCalleeSwaps.SUBSTITUTED.isEmpty());
 		for (MergedBaseCalleeSwaps.Substitution row : MergedBaseCalleeSwaps.SUBSTITUTED) {
 			String where = row.target() + "." + row.method();

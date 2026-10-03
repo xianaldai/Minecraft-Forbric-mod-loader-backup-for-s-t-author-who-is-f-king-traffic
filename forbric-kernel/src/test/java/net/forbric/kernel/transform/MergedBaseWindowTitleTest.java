@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -42,20 +41,21 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * The window title. The merged base carries one loader's title patch, so it announced that loader on an instance
  * running all three; the brand and its separator go, the asterisk vanilla uses for a modified game stays.
  */
 class MergedBaseWindowTitleTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	private static final String MINECRAFT = "net/minecraft/client/Minecraft";
 
 	@Test
 	void noLoaderNamesTheWindowAnyMore() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] in = readClass(MINECRAFT + ".class");
 		MethodNode before = title(parse(in));
 		assertTrue(brands(before).size() == 1, "the merged base must still name one loader: " + brands(before));
@@ -73,7 +73,7 @@ class MergedBaseWindowTitleTest {
 
 	@Test
 	void aSecondPassLeavesTheRepairedTitleAlone() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] once = new ForbricMergedBaseCompatTransformer()
 				.transform(MINECRAFT.replace('/', '.'), readClass(MINECRAFT + ".class"), null);
 		assertSame(once, new ForbricMergedBaseCompatTransformer().transform(MINECRAFT.replace('/', '.'), once, null));

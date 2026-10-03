@@ -32,6 +32,7 @@ import org.objectweb.asm.Opcodes;
 
 import net.forbric.api.Ecosystem;
 import net.forbric.kernel.discovery.ForbricModDiscoverer;
+import net.forbric.kernel.discovery.MetadataFailures;
 import net.forbric.kernel.discovery.ModAnnotationScanner;
 import net.forbric.kernel.fabric.FabricModMetadataParser;
 import net.forbric.kernel.fabric.KernelModMetadata;
@@ -87,6 +88,19 @@ public final class MultiLoaderArbiter {
 		if (OWNERS.containsKey(key)) return OWNERS.get(key);
 
 		List<Ecosystem> declared = declaredBy(jar);
+		if (declared.size() > 1) {
+			// A family whose manifest cannot be read cannot load the jar either. Choosing it by preference left the
+			// jar to nobody: EntityCount ships a valid fabric.mod.json and a neoforge.mods.toml with the range
+			// "[26.2,26.23", NeoForge won the arbitration, NeoForge could not read it, and Fabric had been
+			// suppressed — on native Fabric the same file loads. Choose among the families that can be read.
+			java.util.Set<Ecosystem> unreadable = MetadataFailures.failedFamilies(jar);
+			List<Ecosystem> readable = declared.stream().filter(family -> !unreadable.contains(family)).toList();
+			if (!readable.isEmpty() && readable.size() < declared.size()) {
+				ForbricLog.info("[Forbric/MultiLoader] %s: the %s manifest cannot be read — choosing among %s",
+						jar.getFileName(), unreadable, readable);
+				declared = readable;
+			}
+		}
 		Ecosystem owner = null;
 		if (declared.size() == 1) {
 			owner = declared.get(0);

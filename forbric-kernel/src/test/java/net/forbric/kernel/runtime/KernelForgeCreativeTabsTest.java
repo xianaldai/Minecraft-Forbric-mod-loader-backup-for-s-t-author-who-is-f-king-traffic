@@ -10,7 +10,6 @@
 package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.InvocationTargetException;
@@ -27,6 +26,7 @@ import java.util.Map;
 
 import javax.tools.ToolProvider;
 
+import net.forbric.kernel.TestFixtures;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,7 +73,8 @@ class KernelForgeCreativeTabsTest {
 	private Fixture fixture(boolean hideForge) throws Exception {
 		Path runtime = Path.of(System.getProperty("forbric.test.runtimeClasses", "build/classes/java/runtime"))
 				.resolve(BRIDGE.replace('.', '/') + ".class");
-		assumeTrue(Files.isRegularFile(runtime), "compile the staged runtime source set before this test: " + runtime);
+		TestFixtures.require(TestFixtures.Fixture.GAME_SIDE, Files.isRegularFile(runtime),
+				"compile the staged runtime source set before this test: " + runtime);
 		Path classes = temporary.resolve("fixture-classes");
 		Files.createDirectories(classes);
 		List<String> arguments = new ArrayList<>(List.of("--release", "21", "-d", classes.toString()));

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.*;
 
+@ExecutesInjector(SpectreConfigContractInjector.class)
 @ResourceLock("mod-presence")
 class SpectreConfigContractInjectorTest {
     @AfterEach void clear() { ModPresence.publishForgeFamily(List.of()); ModPresence.publishFabric(List.of()); }

@@ -19,7 +19,6 @@ package net.forbric.kernel.classloading;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -102,7 +101,7 @@ class DelegationPolicyTest {
 	void everyPinnedForbricPackageExists() throws Exception {
 		Path root = Path.of(System.getProperty("user.dir"));
 		Path source = root.resolve("src/main/java/net/forbric/kernel/classloading/DelegationPolicy.java");
-		assumeTrue(Files.isRegularFile(source), "DelegationPolicy source not present");
+		assertTrue(Files.isRegularFile(source), "DelegationPolicy's source is part of this checkout: " + source);
 
 		Matcher pins = Pattern.compile("\"(net\\.forbric\\.[A-Za-z0-9_.]*)\\.\"").matcher(Files.readString(source));
 		List<String> missing = new ArrayList<>();

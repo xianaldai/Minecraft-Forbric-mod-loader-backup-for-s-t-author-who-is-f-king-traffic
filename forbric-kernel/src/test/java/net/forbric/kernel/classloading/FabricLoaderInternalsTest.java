@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.net.URL;
 import java.nio.file.Files;
@@ -55,7 +54,7 @@ class FabricLoaderInternalsTest {
 
 	@Test
 	void aForgeFamilyClassIsStillToldTheyDoNotExist() {
-		assumeTrue(LoaderProbePolicy.enabled(), "probe policy disabled by system property");
+		assertTrue(LoaderProbePolicy.enabled(), "the test JVM never sets -Dforbric.loaderProbes=off");
 		ClassLoader here = getClass().getClassLoader();
 
 		for (String marker : List.of(IMPL, LEGACY)) {
@@ -94,7 +93,8 @@ class FabricLoaderInternalsTest {
 	void everyCompiledInternalIsPinned() throws Exception {
 		Path root = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "main");
 		Path internals = root.resolve("net/fabricmc/loader");
-		assumeTrue(Files.isDirectory(internals), "compiled classes absent");
+		assertTrue(Files.isDirectory(internals),
+				"net/fabricmc/loader not found in the compiled src/main classes, which exist before any test runs");
 
 		List<String> unpinned;
 		try (Stream<Path> files = Files.walk(internals)) {

@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -29,14 +28,16 @@ import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * The two seams genuine Forge has inside {@code FluidRenderer.tesselate} and the merge lost: the model ask after
  * the lookup, and the tint ask where the model has no tint source. Both are re-inserted; the stack proof is
  * ASM's verifier over the rewritten method.
  */
 class MergedBaseForgeFluidModelsTest {
-	private static final Path MERGED_BASE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String RENDERER = "net/minecraft/client/renderer/block/FluidRenderer";
 	private static final String KERNEL = "net/forbric/kernel/runtime/KernelForgeFluids";
 	private static final String TESSELATE = "(Lnet/minecraft/client/renderer/block/BlockAndTintGetter;Lnet/minecraft/core/BlockPos;"
@@ -155,7 +156,7 @@ class MergedBaseForgeFluidModelsTest {
 	}
 
 	private static byte[] bytesOf(String internal) throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {
 			ZipEntry entry = zip.getEntry(internal + ".class");
 			assertNotNull(entry, internal);

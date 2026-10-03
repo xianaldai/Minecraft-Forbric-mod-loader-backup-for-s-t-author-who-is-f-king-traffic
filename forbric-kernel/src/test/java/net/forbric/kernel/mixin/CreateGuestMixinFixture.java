@@ -7,13 +7,14 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.function.Predicate;
 import javax.tools.ToolProvider;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class CreateGuestMixinFixture {
 	static ClassNode mixin(String name) throws Exception {
-		return CarpetMixinAdapterTest.from(Path.of(System.getProperty("forbric.createFlyJar",
+		return CarpetMixinAdapterTest.from(Fixture.THIRD_PARTY, Path.of(System.getProperty("forbric.createFlyJar",
 				"build/compat-inputs/create-fly/create-fly.jar")), name);
 	}
 	static URLClassLoader executable(Path root, ClassNode mixin, Map<String, String> sources,

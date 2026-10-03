@@ -211,8 +211,8 @@ server rejects `--gameDir`, so `KernelBoot` strips it on that side. The game ver
     mod that did not attach) is recorded while Mixin parses configs.
 16. `KernelRuntimeClasses.verify(loader)` — the kernel's own game side, through the finished pipeline.
 17. `PassiveSeeder.seedAll` — NeoForge `FMLLoader`, `ModList`, paths; MinecraftForge identity (idempotent).
-18. Audit reports, `KernelLoadReport.writeEvidence()`, then `CompatibilityDecision.requireContinuation(isClient)`
-    — the pre-game decision point (§12.4).
+18. Audit reports (among them `MixinOverlapLint`, §7.6), `KernelLoadReport.writeEvidence()`, then
+    `CompatibilityDecision.requireContinuation(isClient)` — the pre-game decision point (§12.4).
 19. `KernelFabricEcosystem.runPreLaunch()` — Fabric `preLaunch` entrypoints, after Mixin, before any game class.
 20. Load the entry class (`net.minecraft.server.dedicated.DedicatedServer` / `…client.gui.screens.TitleScreen`
     is the census landmark; the invoked class is the game's `Main`). If `LifecycleHookInjector` did not find its
@@ -349,6 +349,10 @@ classpath (first-URL-wins would otherwise let it shadow the winner and contribut
 - **Overrides** — `-Dforbric.modOwner=sodium=fabric,…` or `<rundir>/forbric-mods.txt` (`<mod id> = <loader>`, one
   per line; the kernel writes a commented template the first time an instance has duplicates). The command line
   wins over the file.
+- **Switched off** — `<rundir>/forbric-disabled.txt` lists jar file names in `mods/` (comments and bad lines as in
+  `forbric-mods.txt`). `DisabledMods` keeps those jars out of the scan, so they never become claims, and they go
+  into `Decision.suppressedJars` but never `rescueJars`; with `-Dforbric.crossJarArbitration=off` a decision
+  holding only them is still cached. `load-report.txt` names them.
 - **Residuals** — the losing ecosystem gets a presence-only alias so `isLoaded(id)` still answers
   (`Decision.aliases`); the other ecosystem's build of a mod that did load may lend a missing class as a last
   resort (`rescueJars`); `ArbitratedAwayClasses` measures what the losing build had that the winner lacks.
@@ -576,6 +580,26 @@ failure off the mod's row when a named kernel repair does *everything* that mixi
 the mod's own config plugin would have declined it; `ForeignMixinBreaks` records mixins written to attach to
 another mod that did not. `MixinCompatibility` carries one identity for a mixin from preflight to application.
 
+### 7.6 Cross-mod overlaps — `MixinOverlapLint`
+
+`MixinFit` judges one mixin against the base; two mods that each fit can still collide. `MixinOverlapLint` lists
+every handler's claim (target method, `@At` call, ordinal) and pairs claims of different mods — a bundled module
+counts as its installed jar, and two jars of one mod id as one mod:
+
+| Rule | Pair | Kind |
+| --- | --- | --- |
+| R1 | two `@Overwrite` of one method — one body survives: the higher priority, or the first at equal priority | conflict |
+| R2 | two `@Redirect` of one call, equal or open ordinals — Mixin keeps one | conflict |
+| R3 | an `@Overwrite` and another mod's injector in that method | conflict |
+| R4 | a `@Redirect` and another mod's `@WrapOperation`/`@ModifyExpressionValue` on one call | note |
+
+A wildcard/regex selector or a bare name on an unreadable target makes no claim; slices are not read. At boot
+(§3.2 step 18) it reads each config as `ForbricMixinService` served it to Mixin, after the kernel's drops, and
+records one `SUSPECTED` finding per mod and conflict, id `mixin-overlap:<owner>.<name><desc>[@<at>]`, the detail
+naming the other mod; it logs counts and elapsed ms (`-Dforbric.mixinOverlapLint=off` skips it). When a crash
+stack passes through a method with a recorded conflict, `CrashAttribution` names both mods. Offline:
+`MixinOverlapLint <merged-base.jar> <mods-dir> [--json out]` (jars found recursively).
+
 ## 8. Event bridges
 
 On the merged base the two Forge families' hooks competed for the same call sites and one won; the loser's hook
@@ -691,7 +715,8 @@ deferred-work failures, the static audits of §3.2, `KernelTransferInterop`, and
 | `load-report.txt` | at the pre-game boundary as evidence, again after the setup lifecycle, again at `ServerStartedEvent` (the world is up; integrated servers post it too) and when late findings arrive (`-Dforbric.loadReportRewrite=off` keeps the first write); a shutdown hook writes it if loading never finishes. In the system language |
 | `compatibility-report.json` | beside it, the machine-readable findings |
 | `merge-report.txt` | when two jars claimed one mod id (§4.3) |
-| `crash-analysis.txt` | after a crash report: which mods the stack points at (`CrashAttribution`; `-Dforbric.crashAnalysis=off`). The Forge `Suspected Mods:` line depends on a module layer the kernel does not build |
+| `crash-analysis.txt` | after a crash report: which mods the stack points at, including both mods of a mixin overlap in a method on the stack (`CrashAttribution`, §7.6; `-Dforbric.crashAnalysis=off`). The Forge `Suspected Mods:` line depends on a module layer the kernel does not build |
+| `crash-suspects.json` | beside it: `{schema:1, report, clash, suspects:[{modId,name,jar,reason,depth}]}`. On the next client launch, before arbitration, `CrashSuspectOffer` offers to start without those jars (for a clash, every side but the first-named), appends them to `<gameDir>/forbric-disabled.txt` on "Start without", and renames the file `crash-suspects.offered.json` whatever the answer. A server, a headless run and `-Dforbric.dependencyDialog=off` only log the lines |
 
 Working directories in the same place: `lib/` (extracted bundled jars), `jij/`, `jarjar/`, `candidates/`.
 
@@ -702,7 +727,9 @@ Working directories in the same place: `lib/` (extracted bundled jars), `jij/`, 
 the game runs with `-XstartOnFirstThread` and AWT cannot share thread one with GLFW. Parent and child share only
 the tab-separated file format in `DependencyReport`; strings are in `DialogLang` (system language,
 `-Dforbric.dialogLanguage=<code>` forces one). `-Dforbric.dependencyDialog=on` (default) | `off` | `dryRun` (forks
-the real child with AWT disabled — what gates assert on). The child times out after 10 minutes.
+the real child with AWT disabled — what gates assert on). The child times out after 10 minutes. The same child
+has a third window, `--isolation`: the crash-suspects offer of §12.2, whose exit code `2` means start without them;
+anything but its two explicit buttons starts with every mod.
 
 ### 12.4 Policy — `-Dforbric.compatibilityPolicy`
 
@@ -909,7 +936,8 @@ java -cp <boot-cp> net.forbric.kernel.boot.Main --scan --mods <dir> --report out
 | m18, m19, m20 | cross-ecosystem presence; a nested library initialised once; unmet dependency reaches the player |
 | m21, m26, m28, m29 | MinecraftForge setup, client registration events, configs + live file watcher, capabilities |
 | m22, m23 | quitting survives a replaced kernel jar; elytra flight |
-| m24, m30 | a failing mod, and a partly failing mod, attributed on every surface |
+| m24, m24b, m30 | a failing mod, a mod whose metadata cannot be read, and a partly failing mod, attributed on every surface |
+| m24c | a jar listed in `forbric-disabled.txt` is loaded by nobody and named in the load report; a server only logs the crash-suspects offer |
 | m25, m31, m32 | both biome-modifier pipelines; zero-mod worldgen parity with vanilla; a save opens with a mod removed |
 | m33, m39, m40, m52 | item/fluid/energy transfer across ecosystems; hoppers into Fabric storages |
 | m34 | ≥ 7200 s occupied simulation soak with retention checks |
@@ -919,8 +947,23 @@ java -cp <boot-cp> net.forbric.kernel.boot.Main --scan --mods <dir> --report out
   a Windows machine through the installed profile (`push-and-run.sh`, `win/*.py`, `pick_mods.py`, `evidence.py`),
   plus static tools (`abi-audit.py`, `field-drift.py`, `fapi-usage.py`, `hook-worklist.sh`, `repair-drift.sh`,
   `control-diff.sh` — same Fabric mods on native Fabric vs Forbric).
-- **CI** (`.github/workflows/build.yml`, JDK 21): job `kernel` runs `./gradlew jar test` in `forbric-kernel/` with
-  no staged artifacts; job `build` bootstraps and builds `forbric-loader/`.
+- **CI** (`.github/workflows/build.yml`): job `build` bootstraps and builds `forbric-loader/`. Job `kernel` (JDK 21,
+  no game files) runs `./gradlew build -Pforbric.skipBaseline=ci-unstaged` in `forbric-kernel/`: the boot side
+  compiles and the unit tests that need no game files run. About a third of the suite skips without game files,
+  and that skipped set must equal `src/test/skip-baseline/ci-unstaged.tsv` line for line (`skipRatchet`,
+  `tools/junit_report.py`): a test that starts skipping fails the job, and a line that stops skipping has to be
+  deleted. The run page shows tests / executed / skipped with the most common skip reasons, and the JUnit reports
+  are uploaded as `kernel-test-results`; regenerate the baseline from that artifact's `skips-actual-ci-unstaged.tsv`
+  or with `-Pforbric.writeSkipBaseline`. Job `kernel-prepared` (JDK 25) first builds the game files on the runner
+  with `tools/dev.py prepare --no-assets` (Minecraft from Mojang, Forge and NeoForge from their own mavens, the
+  merged base and carriers built there; only upstream downloads are cached and nothing derived is uploaded), then
+  runs the same suite plus `transferTest`. There about 150 tests still skip, nearly all needing third-party mod packs
+  that are not in this repository, held to `ci-prepared.tsv` the same way. Job `development-tools` runs
+  `tools/dev.py tool-test` and the packaged link gate on Windows, Linux and macOS. kernel-prepared then runs four
+  real dedicated-server gates on the same files: m1, m36, m46 and m53, whose mods are canaries built from this
+  repository. The other gates (client, third-party packs, soak) need the developer's Mac: `tools/nightly/` runs
+  them there every night from launchd (02:30, the soak on Sundays), commits each night's summary to the branch
+  `ci-results` and sets the commit status `nightly/dev-mac` on the tested commit.
 
 ## 17. System properties
 
@@ -963,6 +1006,7 @@ developer reaches for:
 | `forbric.mixinDiagnostics` | keep injection requirements strict to surface every misfit |
 | `forbric.mixinFit` | `strict`: also drop `PARTIAL` mixins |
 | `forbric.mixinFit.liveness` | `off`: injectors on uncalled methods count as resolved |
+| `forbric.mixinOverlapLint` | `off`: no cross-mod overlap findings at boot (§7.6) |
 | `forbric.guestMixinAdapter` | `off`: no derived drops, only the hand list |
 | `forbric.mergedBaseCompat` | `off`: drop the built-in incompatibility lists |
 | `forbric.disableMixinConfigs`, `forbric.enableMixinConfigs` | csv of configs to disable / force on |

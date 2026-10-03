@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -39,6 +38,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import net.forbric.api.DiscoveredMod;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * The Forge-family mods that came out of another mod's jar are in the seeded NeoForge {@code LoadingModList}, as
@@ -200,7 +201,8 @@ class PassiveSeederNestedModsTest {
 	}
 
 	private URLClassLoader neoForgeLoader() throws Exception {
-		assumeTrue(Files.isRegularFile(PassiveSeederLoadingModListTest.NEO_RUNTIME), "staged neoforge-runtime.jar absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(PassiveSeederLoadingModListTest.NEO_RUNTIME),
+				"staged neoforge-runtime.jar absent");
 		Path stubs = PassiveSeederLoadingModListTest.loggingStubs(tmp.resolve("stubs"));
 		return new URLClassLoader(new URL[] {stubs.toUri().toURL(), PassiveSeederLoadingModListTest.NEO_RUNTIME.toUri()
 				.toURL()}, ClassLoader.getPlatformClassLoader());

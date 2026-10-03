@@ -17,7 +17,6 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -51,7 +50,9 @@ class KernelRegistrationIsolationTest {
 		// attribute events, the spawn-placement event, BlockEntityTypeAddBlocksEvent and the modded creative-tab
 		// categories. The one WARN that reported it blamed the window rather than the call.
 		MethodNode window = method("net/forbric/kernel/boot/KernelLifecycle", "registerNeoForgeContent");
-		assumeTrue(window != null, "KernelLifecycle not compiled yet");
+		assertTrue(window != null,
+				"KernelLifecycle.registerNeoForgeContent not found in the compiled src/main classes, which exist "
+						+ "before any test runs");
 
 		// "Is it inside SOME try block" is not the question, and asking it is how this assertion was toothless
 		// for its first draft: the whole window body already sits in one. The question is whether the handler
@@ -67,7 +68,9 @@ class KernelRegistrationIsolationTest {
 		// If registerAll ever loses ITS handler, the assertion above is still green while the same class of
 		// failure is back -- so the model is pinned as well as the copy.
 		MethodNode window = method("net/forbric/kernel/boot/KernelLifecycle", "registerNeoForgeContent");
-		assumeTrue(window != null, "KernelLifecycle not compiled yet");
+		assertTrue(window != null,
+				"KernelLifecycle.registerNeoForgeContent not found in the compiled src/main classes, which exist "
+						+ "before any test runs");
 
 		assertTrue(isolatedFrom(window, "registerAll", "register"),
 				"KernelEventSubscribers.registerAll is guarded for the same reason and its comment says so");
@@ -80,7 +83,9 @@ class KernelRegistrationIsolationTest {
 		// skip fill() entirely, losing every Forge custom registry in the instance -- including those created by
 		// listeners that had already run.
 		MethodNode fire = method("net/forbric/kernel/boot/KernelForgeBaseline", "fireNewRegistryEvent");
-		assumeTrue(fire != null, "KernelForgeBaseline not compiled yet");
+		assertTrue(fire != null,
+				"KernelForgeBaseline.fireNewRegistryEvent not found in the compiled src/main classes, which exist "
+						+ "before any test runs");
 
 		// The post is reflective -- KernelForgeModContext.single(bus.getClass(), "post").invoke(...) -- so it is
 		// located by the resolver call, not by a method named "post", which does not exist in the bytecode.

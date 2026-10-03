@@ -20,14 +20,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -46,11 +42,13 @@ import net.fabricmc.api.EnvType;
 import net.forbric.api.DiscoveredMod;
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ModPresence;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /** Both families' {@code ModList.isLoaded} gains the cross-ecosystem answer, and nothing else moves. */
+@ExecutesInjector(ForeignModPresenceInjector.class)
 class ForeignModPresenceInjectorTest {
-	private static final Path STAGE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run")
-			.normalize();
+	private static final Path STAGE = TestFixtures.stagedRoot();
 	private static final Path NEOFORGE = STAGE.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final Path FORGE = STAGE.resolve("forge-runtime/forge-runtime.jar");
 	private static final String PRESENCE = "net/forbric/api/ModPresence";
@@ -91,13 +89,13 @@ class ForeignModPresenceInjectorTest {
 
 	@Test
 	void theRealNeoForgeModListIsRewrittenAndStillVerifies() throws Exception {
-		assumeTrue(Files.isRegularFile(NEOFORGE), "staged NeoForge runtime absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE), "staged NeoForge runtime absent — skipping real-bytecode check");
 		assertRewritten(NEO_MOD_LIST, readClass(NEOFORGE, "net/neoforged/fml/ModList.class"));
 	}
 
 	@Test
 	void theRealMinecraftForgeModListIsRewrittenAndStillVerifies() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE), "staged MinecraftForge runtime absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE), "staged MinecraftForge runtime absent — skipping real-bytecode check");
 		assertRewritten(FORGE_MOD_LIST, readClass(FORGE, "net/minecraftforge/fml/ModList.class"));
 	}
 
@@ -172,14 +170,8 @@ class ForeignModPresenceInjectorTest {
 		}.load();
 	}
 
-	private static byte[] readClass(Path jar, String entry) throws Exception {
-		try (ZipFile zip = new ZipFile(jar.toFile())) {
-			ZipEntry e = zip.getEntry(entry);
-			assumeTrue(e != null, entry + " absent from " + jar.getFileName());
-			try (InputStream in = zip.getInputStream(e)) {
-				return in.readAllBytes();
-			}
-		}
+	private static byte[] readClass(Path jar, String entry) {
+		return TestFixtures.requireEntry(Fixture.STAGED, jar, entry);
 	}
 
 	private static ClassNode parse(byte[] bytes) {

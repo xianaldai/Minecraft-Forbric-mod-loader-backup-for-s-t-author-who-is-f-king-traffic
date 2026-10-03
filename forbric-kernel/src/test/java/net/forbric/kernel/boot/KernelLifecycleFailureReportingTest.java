@@ -19,7 +19,6 @@ package net.forbric.kernel.boot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,7 +49,9 @@ class KernelLifecycleFailureReportingTest {
 	@Test
 	void anInvocationThatThrewIsWarnedAboutRatherThanDebugged() throws Exception {
 		List<String> levels = logLevelsIn("invokeGameDataOn");
-		assumeTrue(!levels.isEmpty(), "KernelLifecycle not compiled yet");
+		assertTrue(!levels.isEmpty(),
+				"A log call in KernelLifecycle.invokeGameDataOn not found in the compiled src/main classes, which "
+						+ "exist before any test runs");
 		assertEquals("warn", levels.get(levels.size() - 1),
 				"the LAST reporting path in invokeGameDataOn is the one where the hook exists and threw, and it must "
 						+ "WARN — every caller is a whole feature (the registry bake, the freeze, the attribute and "
@@ -63,7 +64,9 @@ class KernelLifecycleFailureReportingTest {
 	@Test
 	void aBusThatFailedToStartIsWarnedAboutRatherThanDebugged() throws Exception {
 		List<String> starter = logLevelsIn("startBus");
-		assumeTrue(!starter.isEmpty(), "KernelLifecycle not compiled yet");
+		assertTrue(!starter.isEmpty(),
+				"A log call in KernelLifecycle.startBus not found in the compiled src/main classes, which exist "
+						+ "before any test runs");
 		assertEquals("warn", starter.get(starter.size() - 1),
 				"the LAST reporting path in startBus is the bus that is present and failed to start, which leaves "
 						+ "every game-event listener of that family, in every mod, on a bus nothing dispatches — "
@@ -80,7 +83,8 @@ class KernelLifecycleFailureReportingTest {
 	@Test
 	void modBusEventsAreDeliveredPerContainerRatherThanThroughTheAbortingFanOut() throws Exception {
 		ClassNode node = compiled();
-		assumeTrue(node != null, "KernelLifecycle not compiled yet");
+		assertTrue(node != null,
+				"KernelLifecycle not found in the compiled src/main classes, which exist before any test runs");
 		MethodNode post = node.methods.stream().filter(m -> "postModBusEvent".equals(m.name)).findFirst()
 				.orElseThrow(() -> new AssertionError("postModBusEvent is gone"));
 
@@ -114,7 +118,8 @@ class KernelLifecycleFailureReportingTest {
 	@Test
 	void modBusEventsAreDeliveredPhaseByPhase() throws Exception {
 		ClassNode node = compiled();
-		assumeTrue(node != null, "KernelLifecycle not compiled yet");
+		assertTrue(node != null,
+				"KernelLifecycle not found in the compiled src/main classes, which exist before any test runs");
 		MethodNode deliver = node.methods.stream().filter(m -> "deliverModBusEvent".equals(m.name)).findFirst()
 				.orElseThrow(() -> new AssertionError("deliverModBusEvent is gone"));
 		boolean priority = false;

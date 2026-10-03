@@ -2,7 +2,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
@@ -22,6 +21,7 @@ import java.util.Map;
 import java.util.Set;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
@@ -42,7 +42,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  */
 @ResourceLock("system-properties")
 class ClientPartTrackingInjectorTest {
-	private static final Path STAGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"));
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path NEO = STAGED.resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
 	private static final Path NEO_CARRIER = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
@@ -143,8 +143,8 @@ class ClientPartTrackingInjectorTest {
 		private final Method start;
 
 		Game(boolean repaired) throws Exception {
-			assumeTrue(Runtime.version().feature() >= 25, "the merged game is class-file 69, which only Java 25 links");
-			for (Path jar : List.of(MERGED, NEO_CARRIER, FORGE_CARRIER)) assumeTrue(Files.isRegularFile(jar), jar + " absent");
+			TestFixtures.require(Fixture.JAVA_25, Runtime.version().feature() >= 25, "the merged game is class-file 69, which only Java 25 links");
+			for (Path jar : List.of(MERGED, NEO_CARRIER, FORGE_CARRIER)) TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), jar + " absent");
 			Map<String, byte[]> defined = new HashMap<>();
 			byte[] callbacks = NativeCoremodParityTest.read(MERGED, CALLBACKS);
 			defined.put(dotted(CALLBACKS), repaired ? new ClientPartTrackingInjector().transform(ClientPartTrackingInjector.CALLBACKS, callbacks, null) : callbacks);
@@ -169,7 +169,7 @@ class ClientPartTrackingInjectorTest {
 					"io/netty/netty-common", "io/netty/netty-buffer", "org/joml/joml", "com/mojang/authlib",
 					"org/apache/commons/commons-lang3", "com/mojang/logging")) {
 				Path library = newestUnder(pattern);
-				assumeTrue(library != null, "no " + pattern + " jar in the local Minecraft libraries");
+				TestFixtures.require(Fixture.MC_LIBRARIES, library != null, "no " + pattern + " jar in the local Minecraft libraries");
 				urls.add(library.toUri().toURL());
 			}
 			// Netty's codecs moved between releases (netty-codec, then netty-codec-base); whichever this install has.

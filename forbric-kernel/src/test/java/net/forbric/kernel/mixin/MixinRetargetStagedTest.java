@@ -17,8 +17,8 @@
 package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -29,6 +29,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -38,8 +39,7 @@ import org.junit.jupiter.api.Test;
  * {@code @Local}s that only the stub's parameter list carries.
  */
 class MixinRetargetStagedTest {
-	private static final Path MERGED_BASE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").normalize();
 	private static final Path CLIENT_MODS = Path.of(System.getProperty("user.dir"), "run", "client-kernel", "mods").normalize();
 
 	private static final String SIMPLE_CONTAINER_MIXIN = "net/fabricmc/fabric/mixin/transfer/SimpleContainerMixin.class";
@@ -102,7 +102,7 @@ class MixinRetargetStagedTest {
 	// ---------------------------------------------------------------------------------------------------------------
 
 	private static Function<String, byte[]> mergedResolver() {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		return name -> {
 			try {
 				return readFromJar(MERGED_BASE, name);
@@ -114,9 +114,13 @@ class MixinRetargetStagedTest {
 
 	private static byte[] nested(String module, String entry) throws Exception {
 		Path fabricApi = fabricApiJar();
-		assumeTrue(fabricApi != null, "fabric-api jar absent from run/client-kernel/mods");
+		TestFixtures.require(Fixture.STAGED, fabricApi != null, "fabric-api jar absent from run/client-kernel/mods");
 		byte[] bytes = readFromNestedJar(fabricApi, module, entry);
-		assumeTrue(bytes != null, entry + " absent from the nested " + module);
+		// The pinned build is the one these verdicts were read from; another fabric-api in the pack may lack the entry.
+		if (fabricApi.getFileName().toString().equals(TestFixtures.FABRIC_API_JAR)) {
+			assertNotNull(bytes, entry + " absent from the nested " + module + " of " + fabricApi);
+		}
+		TestFixtures.require(Fixture.THIRD_PARTY, bytes != null, entry + " absent from the nested " + module);
 		return bytes;
 	}
 

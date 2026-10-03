@@ -18,7 +18,6 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -109,7 +108,9 @@ class TransformerAnchorCensusTest {
 
 		java.nio.file.Path compiled = java.nio.file.Path.of(System.getProperty("user.dir"), "build", "classes", "java", "main",
 				"net", "forbric", "kernel", "transform", "ForbricMergedBaseCompatTransformer.class");
-		assumeTrue(java.nio.file.Files.isRegularFile(compiled), "transform classes not compiled yet");
+		assertTrue(java.nio.file.Files.isRegularFile(compiled),
+				"ForbricMergedBaseCompatTransformer not found in the compiled src/main classes, which exist before "
+						+ "any test runs");
 		org.objectweb.asm.tree.ClassNode node = new org.objectweb.asm.tree.ClassNode();
 		new org.objectweb.asm.ClassReader(java.nio.file.Files.readAllBytes(compiled)).accept(node, 0);
 		List<String> called = new ArrayList<>();
@@ -128,7 +129,8 @@ class TransformerAnchorCensusTest {
 	@Test
 	void everyTransformerInThisPackageOverridesAnchors() throws Exception {
 		List<Class<?>> types = allTransformerClasses();
-		assumeTrue(!types.isEmpty(), "transform classes not compiled yet");
+		assertTrue(!types.isEmpty(),
+				"A transformer class not found in the compiled src/main classes, which exist before any test runs");
 		assertTrue(types.stream().anyMatch(t -> t.getName().equals("net.forbric.kernel.access.AccessTransformer")),
 				"the access package is in the census");
 
@@ -150,7 +152,8 @@ class TransformerAnchorCensusTest {
 	@Test
 	void noTransformerAnswersWithNothing() throws Exception {
 		List<ClassTransformer> found = instantiateAll();
-		assumeTrue(!found.isEmpty(), "transform classes not compiled yet");
+		assertTrue(!found.isEmpty(),
+				"A transformer class not found in the compiled src/main classes, which exist before any test runs");
 
 		assertEquals(List.of(), census(found),
 				"overriding anchors() and then returning AnchorSet.undeclared() says nothing either");

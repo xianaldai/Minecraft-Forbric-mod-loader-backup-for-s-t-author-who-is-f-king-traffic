@@ -18,7 +18,6 @@ package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.Method;
 import java.net.URL;
@@ -28,6 +27,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -50,7 +50,6 @@ class WorldgenAuditNormalisationTest {
 	@Test
 	void anEmptyTailAndAKeyOrderAreNotADifference() throws Exception {
 		Method normalise = normaliser();
-		assumeTrue(normalise != null, "the game-side set is not compiled");
 
 		assertEquals(normalise(normalise, "{\"features\":[[\"a\"],[],[]]}"),
 				normalise(normalise, "{\"features\":[[\"a\"]]}"),
@@ -66,7 +65,6 @@ class WorldgenAuditNormalisationTest {
 	@Test
 	void aContainerThatLostSomethingStillDiffers() throws Exception {
 		Method normalise = normaliser();
-		assumeTrue(normalise != null, "the game-side set is not compiled");
 
 		assertNotEquals(normalise(normalise, "{\"spawners\":{\"monster\":[\"zombie\",\"creeper\"]}}"),
 				normalise(normalise, "{\"spawners\":{\"monster\":[\"zombie\"]}}"),
@@ -84,10 +82,10 @@ class WorldgenAuditNormalisationTest {
 
 	private static Method normaliser() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime").normalize();
-		if (!Files.isDirectory(compiled)) return null;
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "the game-side set is not compiled");
 
 		Path gson = newestUnder("com/google/code/gson");
-		if (gson == null) return null;
+		TestFixtures.require(Fixture.MC_LIBRARIES, gson != null, "no gson jar in the local Minecraft libraries");
 		// Only the small class and gson: the normaliser is deliberately free of every game type, so the thing
 		// under test can be loaded without staging the merged base or either carrier.
 		List<URL> urls = List.of(compiled.toUri().toURL(), gson.toUri().toURL());
@@ -103,7 +101,7 @@ class WorldgenAuditNormalisationTest {
 	private static Path newestUnder(String pattern) throws Exception {
 		Path libraries = TestFixtures.minecraftDir().resolve("libraries").resolve(pattern.replace('/', java.io.File.separatorChar));
 		if (!Files.isDirectory(libraries)) {
-			libraries = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "downloads").normalize();
+			libraries = TestFixtures.stagedRoot().resolve("downloads");
 			if (!Files.isDirectory(libraries)) return null;
 		}
 		try (var walk = Files.walk(libraries)) {

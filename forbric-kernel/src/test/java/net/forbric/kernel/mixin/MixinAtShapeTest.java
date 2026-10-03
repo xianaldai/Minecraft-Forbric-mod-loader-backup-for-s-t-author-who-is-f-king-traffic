@@ -18,7 +18,6 @@ package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -28,6 +27,8 @@ import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.AnnotationVisitor;
@@ -81,15 +82,16 @@ class MixinAtShapeTest {
 	@Test
 	void architecturysNaturalSpawnerRedirectIsUnwrapped() throws Exception {
 		Path mods = Path.of(System.getProperty("user.dir"), "build", "compat-inputs", "popular", "mods").normalize();
-		assumeTrue(Files.isDirectory(mods), "popular inputs absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isDirectory(mods), "popular inputs absent");
 		Path jar = null;
 		try (Stream<Path> list = Files.list(mods)) {
 			jar = list.filter(p -> p.getFileName().toString().startsWith("architectury-fabric-")).findFirst().orElse(null);
 		}
-		assumeTrue(jar != null, "architectury-fabric not staged");
+		TestFixtures.require(Fixture.THIRD_PARTY, jar != null, "architectury-fabric not staged");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ZipEntry entry = zip.getEntry("dev/architectury/mixin/fabric/MixinNaturalSpawner.class");
-			assumeTrue(entry != null, "MixinNaturalSpawner is gone from architectury");
+			// Whichever architectury-fabric build is staged, not a pinned one: a build without the mixin is another fixture.
+			TestFixtures.require(Fixture.THIRD_PARTY, entry != null, "MixinNaturalSpawner is gone from architectury");
 			ClassNode node = new ClassNode();
 			try (InputStream in = zip.getInputStream(entry)) {
 				new ClassReader(in).accept(node, 0);

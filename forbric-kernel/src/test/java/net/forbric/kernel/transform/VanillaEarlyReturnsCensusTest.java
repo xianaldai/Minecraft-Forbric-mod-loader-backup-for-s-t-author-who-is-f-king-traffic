@@ -2,7 +2,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -21,6 +20,7 @@ import java.util.zip.ZipFile;
 
 import net.fabricmc.api.EnvType;
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -46,16 +46,14 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  * <p>Regenerate with {@code FORBRIC_WRITE_EARLY_RETURNS=1} after a base rebuild.
  */
 class VanillaEarlyReturnsCensusTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path VANILLA = TestFixtures.vanillaJar();
 	private static final String CAMERA_UPDATE = "net/minecraft/client/Camera#update(Lnet/minecraft/client/DeltaTracker;)V";
 
 	@Test
 	void theShippedTableIsExactlyWhatTheArtifactsSay() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
-		assumeTrue(Files.isRegularFile(VANILLA), "no vanilla 26.2 jar at " + VANILLA);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(VANILLA), "no vanilla 26.2 jar at " + VANILLA);
 
 		TreeSet<String> rows = new TreeSet<>();
 		int folded = 0;
@@ -119,7 +117,7 @@ class VanillaEarlyReturnsCensusTest {
 	 */
 	@Test
 	void everySplitIsOneTheVerifierAccepts() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
 		Map<String, Map<String, Map<String, List<String>>>> table = VanillaEarlyReturns.table();
 		assertFalse(table.isEmpty(), "the shipped table is empty");
 

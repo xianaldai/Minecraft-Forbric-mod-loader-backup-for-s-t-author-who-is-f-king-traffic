@@ -12,7 +12,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
-import org.junit.jupiter.api.Assumptions;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.ClassNode;
@@ -26,15 +26,17 @@ import net.forbric.api.Ecosystem;
  * on an argument that no longer holds.
  */
 class MergedBaseAbsorbedCallsTest {
-	private static final String OLD = System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader");
-	private static final Path MERGED = Path.of(OLD, "run/merged-base/patched-mc-merged-26.2.jar");
-	private static final Path NEO_RT = Path.of(OLD, "run/neoforge-runtime/neoforge-runtime.jar");
+	private static final Path STAGED = TestFixtures.stagedRoot();
+	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path NEO_RT = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final Path VANILLA = TestFixtures.vanillaJar();
-	private static final Path FORGE = Path.of(OLD, "run/forge-patched/patched-mc-forge-26.2.jar");
-	private static final Path NEOFORGE = Path.of(OLD, "run/neoforge-patched/patched-mc-neoforge-26.2.jar");
+	private static final Path FORGE = STAGED.resolve("forge-patched/patched-mc-forge-26.2.jar");
+	private static final Path NEOFORGE = STAGED.resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
 
 	@Test void everyReviewedRowStillDescribesTheStagedJars() throws Exception {
-		for (Path jar : List.of(MERGED, NEO_RT, VANILLA, FORGE, NEOFORGE)) Assumptions.assumeTrue(Files.isRegularFile(jar), jar + " required");
+		for (Path jar : List.of(MERGED, NEO_RT, VANILLA, FORGE, NEOFORGE)) {
+			TestFixtures.require(jar == VANILLA ? Fixture.MC_LIBRARIES : Fixture.STAGED, Files.isRegularFile(jar), jar + " required");
+		}
 		for (MergedBaseAbsorbedCalls.Absorbed row : MergedBaseAbsorbedCalls.KNOWN) {
 			String where = row.owner() + "#" + row.method();
 			MethodNode merged = method(MERGED, row.owner(), row.method());

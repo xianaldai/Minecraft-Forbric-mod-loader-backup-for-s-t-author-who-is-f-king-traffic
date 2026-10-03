@@ -2,7 +2,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -23,6 +22,8 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
 import org.objectweb.asm.util.TraceClassVisitor;
 
 import net.fabricmc.api.EnvType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 class PortalSpawnInjectorTest {
 	private final PortalSpawnInjector injector = new PortalSpawnInjector();
@@ -118,8 +119,8 @@ class PortalSpawnInjectorTest {
 	private static byte[] write(ClassNode n) { ClassWriter w = new ClassWriter(0); n.accept(w); return w.toByteArray(); }
 	private static String trace(ClassNode n) { StringWriter out = new StringWriter(); n.accept(new TraceClassVisitor(new PrintWriter(out))); return out.toString(); }
 	private static byte[] staged(String jar, String entry) throws Exception {
-		String old = System.getenv("FORBRIC_OLD"); Path run = old == null ? Path.of("..", "forbric-loader", "run") : Path.of(old, "run");
-		Path path = run.resolve(jar); assumeTrue(Files.isRegularFile(path), "staged artifact absent: " + path);
+		Path run = TestFixtures.stagedRoot();
+		Path path = run.resolve(jar); TestFixtures.require(Fixture.STAGED, Files.isRegularFile(path), "staged artifact absent: " + path);
 		try (ZipFile zip = new ZipFile(path.toFile())) { return zip.getInputStream(zip.getEntry(entry + ".class")).readAllBytes(); }
 	}
 }

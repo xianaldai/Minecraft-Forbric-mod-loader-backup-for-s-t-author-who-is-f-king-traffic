@@ -19,16 +19,12 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -37,6 +33,9 @@ import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
+
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * The two NeoForge worldgen call sites the kernel redirects instead of neutering.
@@ -51,8 +50,7 @@ import org.objectweb.asm.tree.MethodNode;
  * own business, and is visible in the log lines it prints with counts in them.
  */
 class MergedBaseWorldgenDriversTest {
-	private static final Path STAGED =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path MERGED_BASE = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path NEO_CARRIER = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final String KERNEL = "net/forbric/kernel/runtime/KernelNeoWorldgen";
@@ -101,7 +99,7 @@ class MergedBaseWorldgenDriversTest {
 
 	@Test
 	void neoForgesModifierPassIsGuardedAtItsCallSite() throws Exception {
-		assumeTrue(Files.isRegularFile(NEO_CARRIER), "staged NeoForge carrier absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEO_CARRIER), "staged NeoForge carrier absent");
 		ClassNode node = repaired(NEO_CARRIER, "net/neoforged/neoforge/server/ServerLifecycleHooks.class");
 
 		boolean guarded = false;
@@ -125,7 +123,6 @@ class MergedBaseWorldgenDriversTest {
 	@Test
 	void aSecondPassChangesNothingFurther() throws Exception {
 		byte[] source = bytes(MERGED_BASE, "net/minecraft/world/level/levelgen/feature/MonsterRoomFeature.class");
-		assumeTrue(source != null, "MonsterRoomFeature absent from this base");
 		String binary = "net.minecraft.world.level.levelgen.feature.MonsterRoomFeature";
 		byte[] once = new ForbricMergedBaseCompatTransformer().transform(binary, source, null);
 		byte[] twice = new ForbricMergedBaseCompatTransformer().transform(binary, once, null);
@@ -133,9 +130,7 @@ class MergedBaseWorldgenDriversTest {
 	}
 
 	private static ClassNode repaired(Path jar, String entry) throws IOException {
-		assumeTrue(Files.isRegularFile(jar), "staged artifact absent: " + jar);
 		byte[] source = bytes(jar, entry);
-		assumeTrue(source != null, entry + " absent from " + jar.getFileName());
 		String binary = entry.substring(0, entry.length() - ".class".length()).replace('/', '.');
 		ClassNode node = new ClassNode();
 		new ClassReader(new ForbricMergedBaseCompatTransformer().transform(binary, source, null)).accept(node, 0);
@@ -143,13 +138,6 @@ class MergedBaseWorldgenDriversTest {
 	}
 
 	private static byte[] bytes(Path jar, String entry) throws IOException {
-		if (!Files.isRegularFile(jar)) return null;
-		try (ZipFile zip = new ZipFile(jar.toFile())) {
-			ZipEntry e = zip.getEntry(entry);
-			if (e == null) return null;
-			try (InputStream in = zip.getInputStream(e)) {
-				return in.readAllBytes();
-			}
-		}
+		return TestFixtures.requireEntry(Fixture.STAGED, jar, entry);
 	}
 }

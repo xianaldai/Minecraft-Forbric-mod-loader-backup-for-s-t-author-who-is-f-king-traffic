@@ -12,6 +12,7 @@ import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.*;
 
+@ExecutesInjector(AxeStripCallbacksInjector.class)
 @ResourceLock("system-properties")
 class AxeStripCallbacksInjectorTest {
     @TempDir Path root;

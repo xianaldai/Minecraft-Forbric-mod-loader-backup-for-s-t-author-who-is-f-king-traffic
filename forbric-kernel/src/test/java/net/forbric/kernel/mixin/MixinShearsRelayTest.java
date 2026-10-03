@@ -8,8 +8,9 @@ import java.util.List;
 import java.util.zip.ZipFile;
 
 import net.forbric.api.Ecosystem;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.Opcodes;
@@ -153,7 +154,7 @@ class MixinShearsRelayTest {
 	}
 
 	private static ClassNode read(String name) throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(BCLIB), "sweep pack absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(BCLIB), "sweep pack absent");
 		try (ZipFile zip = new ZipFile(BCLIB.toFile())) {
 			return MixinFit.parse(zip.getInputStream(zip.getEntry(SHEARS + name + ".class")).readAllBytes());
 		}

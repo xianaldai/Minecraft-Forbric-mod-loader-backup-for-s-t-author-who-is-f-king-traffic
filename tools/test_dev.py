@@ -68,6 +68,32 @@ class DevelopmentWorkflowTest(unittest.TestCase):
             dev.fetch('https://fixture.invalid/data', target, hashlib.sha1(b'cached').hexdigest(), size=6)
         request.assert_not_called()
 
+    def test_no_assets_prepares_libraries_without_fetching_any_asset(self):
+        mc, natives = self.root / 'mc', self.root / 'natives'
+        version = mc / f'versions/{dev.MC_VERSION}/{dev.MC_VERSION}.json'
+        version.parent.mkdir(parents=True)
+        version.write_text(json.dumps({'libraries': [], 'assetIndex': {
+            'id': '30', 'url': 'https://piston-meta.mojang.com/index.json', 'sha1': '0' * 40, 'size': 2}}))
+        fetched = []
+
+        def fake_fetch(url, target, *rest, **options):
+            fetched.append(url)
+            target = Path(target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps({'objects': {'a': {'hash': 'ab' + '0' * 38, 'size': 1}}}) if 'index' in url else 'x')
+
+        with patch.object(dev, 'fetch', side_effect=fake_fetch):
+            dev.stage_minecraft(mc, natives, 'x86_64', assets=False)
+        self.assertFalse([u for u in fetched if 'resources.download.minecraft.net' in u or 'index' in u], fetched)
+        self.assertTrue(dev.assets_skipped(mc))
+        self.assertTrue(any('jline' in u for u in fetched), 'the console libraries are still needed: ' + str(fetched))
+
+        fetched.clear()
+        with patch.object(dev, 'fetch', side_effect=fake_fetch):
+            dev.stage_minecraft(mc, natives, 'x86_64', assets=True)
+        self.assertTrue(any('index' in u for u in fetched) and any('resources.download.minecraft.net' in u for u in fetched), fetched)
+        self.assertFalse(dev.assets_skipped(mc), 'a full prepare removes the marker')
+
     def test_verified_download_replaces_bad_cache(self):
         target = self.root / 'artifact.jar'
         target.write_bytes(b'bad')

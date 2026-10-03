@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.lang.reflect.Constructor;
@@ -38,12 +37,13 @@ import java.util.zip.ZipOutputStream;
 
 import com.electronwill.nightconfig.core.UnmodifiableConfig;
 import com.electronwill.nightconfig.toml.TomlParser;
-import net.forbric.kernel.TestFixtures;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import net.forbric.api.DiscoveredMod;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.discovery.ForbricModDiscoverer;
 import net.forbric.kernel.metadata.forge.FmlConfigElements;
 
@@ -56,8 +56,8 @@ import net.forbric.kernel.metadata.forge.FmlConfigElements;
  * <p>The oracle is MinecraftForge's {@code NightConfigWrapper} from the same carrier, over the same parsed file.
  */
 class PassiveSeederForgeConfigTest {
-	private static final Path FORGE_RUNTIME = Path.of(System.getenv().getOrDefault("FORBRIC_OLD",
-			System.getProperty("user.dir") + "/../forbric-loader"), "run", "forge-runtime", "forge-runtime.jar").normalize();
+	private static final Path FORGE_RUNTIME =
+			TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar").normalize();
 
 	@TempDir
 	Path tmp;
@@ -154,10 +154,11 @@ class PassiveSeederForgeConfigTest {
 	 * classes so there is one night-config — as at runtime.
 	 */
 	private URLClassLoader forgeLoader() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE_RUNTIME), "staged forge-runtime.jar absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE_RUNTIME), "staged forge-runtime.jar absent");
 		Path guava = newestLibrary("com/google/guava/guava");
 		Path lang = newestLibrary("org/apache/commons/commons-lang3");
-		assumeTrue(guava != null && lang != null, "no Guava / Commons Lang in the local Minecraft library tree");
+		TestFixtures.require(Fixture.MC_LIBRARIES, guava != null && lang != null,
+				"no Guava / Commons Lang in the local Minecraft library tree");
 		Path stubs = PassiveSeederLoadingModListTest.loggingStubs(tmp.resolve("stubs"));
 		return new URLClassLoader(new URL[] {stubs.toUri().toURL(), FORGE_RUNTIME.toUri().toURL(), guava.toUri().toURL(),
 				lang.toUri().toURL()}, PassiveSeederForgeConfigTest.class.getClassLoader());

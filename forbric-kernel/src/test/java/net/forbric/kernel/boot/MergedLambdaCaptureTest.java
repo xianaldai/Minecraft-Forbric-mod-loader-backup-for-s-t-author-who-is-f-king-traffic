@@ -17,7 +17,6 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -30,6 +29,8 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Handle;
@@ -63,8 +64,7 @@ import org.objectweb.asm.tree.VarInsnNode;
  * must be true is true of the jar either way. Skips when the three jars are not staged.
  */
 class MergedLambdaCaptureTest {
-	private static final Path STAGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"))
-			.toAbsolutePath().normalize();
+	private static final Path STAGED = TestFixtures.stagedRoot().toAbsolutePath().normalize();
 	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path NEO = patched("patched-mc-neoforge-26.2.jar", "neoforge-patched");
 	private static final Path FORGE = patched("patched-mc-forge-26.2.jar", "forge-patched");
@@ -83,7 +83,7 @@ class MergedLambdaCaptureTest {
 
 	@Test
 	void noCapturedLambdaComesFromTheOtherSideOfTheMerge() throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED) && Files.isRegularFile(NEO) && Files.isRegularFile(FORGE),
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED) && Files.isRegularFile(NEO) && Files.isRegularFile(FORGE),
 				"the merged base and both patched sides must be staged");
 
 		Map<String, byte[]> merged = classesIn(MERGED);
@@ -137,7 +137,8 @@ class MergedLambdaCaptureTest {
 				}
 			}
 		}
-		assumeTrue(twoSided > 1000, "the staged jars do not look like a full merge (" + twoSided + " two-sided)");
+		// The three jars are staged, so a small count is a merge that changed under the test, not a missing fixture.
+		assertTrue(twoSided > 1000, "the staged jars do not look like a full merge (" + twoSided + " two-sided)");
 		assertTrue(wrong.isEmpty(), "a captured lambda came from the other compile, so its call site silently runs "
 				+ "the wrong body: " + wrong);
 	}

@@ -18,7 +18,6 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,6 +37,9 @@ import java.util.zip.ZipFile;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Re-derives the set of ancestors the merge took away, and asserts the transformer's list EQUALS it.
  *
@@ -51,8 +53,7 @@ import org.objectweb.asm.ClassReader;
  * loads, and a coverage assertion passes that happily.
  */
 class MergedBaseLostAncestorsTest {
-	private static final Path RUN = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run")
-			.normalize();
+	private static final Path RUN = TestFixtures.stagedRoot();
 	private static final Path MERGED = RUN.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path FORGE_BASE = RUN.resolve("forge-patched/patched-mc-forge-26.2.jar");
 	private static final Path NEO_BASE = RUN.resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
@@ -62,7 +63,7 @@ class MergedBaseLostAncestorsTest {
 
 	@Test
 	void theTransformersListIsExactlyWhatTheArtifactsSay() throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED) && Files.isRegularFile(FORGE_BASE)
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED) && Files.isRegularFile(FORGE_BASE)
 						&& Files.isRegularFile(NEO_BASE) && Files.isRegularFile(FORGE_RT)
 						&& Files.isRegularFile(NEO_RT),
 				"the merged base, both patched sides and both carriers must be staged");
@@ -109,7 +110,7 @@ class MergedBaseLostAncestorsTest {
 	 */
 	@Test
 	void theTypeItemStackKeptIsNotInTheList() throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED) && Files.isRegularFile(FORGE_RT) && Files.isRegularFile(NEO_RT),
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED) && Files.isRegularFile(FORGE_RT) && Files.isRegularFile(NEO_RT),
 				"staged jars absent");
 		Map<String, String> merged = supers(MERGED, FORGE_RT, NEO_RT);
 
@@ -127,7 +128,7 @@ class MergedBaseLostAncestorsTest {
 	 */
 	@Test
 	void everyStructuralConflictTheBuilderReportedIsAccountedFor() throws IOException {
-		assumeTrue(Files.isRegularFile(CONFLICTS) && Files.isRegularFile(MERGED)
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(CONFLICTS) && Files.isRegularFile(MERGED)
 				&& Files.isRegularFile(FORGE_RT) && Files.isRegularFile(NEO_RT), "the merge report is absent");
 		Map<String, String> merged = supers(MERGED, FORGE_RT, NEO_RT);
 		for (String owner : List.copyOf(merged.keySet())) {

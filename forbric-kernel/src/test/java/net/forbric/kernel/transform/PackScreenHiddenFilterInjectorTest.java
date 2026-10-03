@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -39,6 +38,9 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Covers the restored hidden-pack filter.
  *
@@ -48,13 +50,11 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  * resource-pack screen that they did not add and cannot remove.
  */
 class PackScreenHiddenFilterInjectorTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	@Test
 	void theStagedScreenStillForEachesWithoutFiltering() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		MethodNode update = update(parse(readClass()));
 		assertNotNull(update, "updateList must still exist with that descriptor");
 		assertEquals(0, countCall(update, "filter"),
@@ -64,7 +64,7 @@ class PackScreenHiddenFilterInjectorTest {
 
 	@Test
 	void theFilterIsRestoredAheadOfTheForEach() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		byte[] in = readClass();
 		byte[] out = transform(in);
 		assertTrue(out != in, "the staged base must still need the repair");
@@ -80,7 +80,7 @@ class PackScreenHiddenFilterInjectorTest {
 	/** The predicate must be the interface's own {@code notHidden}, which is the method the merge orphaned. */
 	@Test
 	void thePredicateIsTheOrphanedNotHiddenMethod() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		MethodNode update = update(parse(transform(readClass())));
 		InvokeDynamicInsnNode indy = null;
 		for (AbstractInsnNode insn : update.instructions) {
@@ -96,14 +96,14 @@ class PackScreenHiddenFilterInjectorTest {
 
 	@Test
 	void aSecondPassLeavesTheFilteredMethodAlone() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		byte[] once = transform(readClass());
 		assertSame(once, transform(once), "a body that already filters is coherent and must not be touched");
 	}
 
 	@Test
 	void anyOtherClassIsHandedBackUntouched() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		byte[] other = readClass("net/minecraft/client/gui/screens/ChatScreen.class");
 		assertSame(other, new PackScreenHiddenFilterInjector()
 				.transform("net.minecraft.client.gui.screens.ChatScreen", other, null));

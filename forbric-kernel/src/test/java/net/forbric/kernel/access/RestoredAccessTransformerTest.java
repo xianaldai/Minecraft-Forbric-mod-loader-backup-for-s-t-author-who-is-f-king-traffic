@@ -5,6 +5,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.function.Supplier;
 import net.fabricmc.api.EnvType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.transform.TransformContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -64,14 +66,9 @@ class RestoredAccessTransformerTest {
 	}
 
 	@Test void actualMergedFeatureFieldIsReconciledAfterItsDescriptorRepair() throws Exception {
-		var staged = java.nio.file.Path.of(System.getenv("FORBRIC_OLD") == null ? "../forbric-loader"
-				: System.getenv("FORBRIC_OLD"), "run/merged-base/patched-mc-merged-26.2.jar");
-		org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.isRegularFile(staged), "staged merged base absent");
+		var staged = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 		String owner = "net/minecraft/world/level/chunk/ChunkGenerator";
-		byte[] original;
-		try (var jar = new java.util.zip.ZipFile(staged.toFile()); var in = jar.getInputStream(jar.getEntry(owner + ".class"))) {
-			original = in.readAllBytes();
-		}
+		byte[] original = TestFixtures.requireEntry(Fixture.STAGED, staged, owner + ".class");
 		String rules = "accessWidener v2 named\naccessible field " + owner + " featuresPerStep " + SUPPLIER
 				+ "\nmutable field " + owner + " featuresPerStep " + SUPPLIER + "\n";
 		var aw = ClassTweakerTransformer.createFrom(List.of(new ClassTweakerTransformer.File("fabric-biome-api.jar",

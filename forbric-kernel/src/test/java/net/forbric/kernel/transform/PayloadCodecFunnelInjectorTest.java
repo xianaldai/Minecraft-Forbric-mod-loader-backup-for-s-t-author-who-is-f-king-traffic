@@ -2,7 +2,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,19 +20,22 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * On the real merged CustomPacketPayload: NeoForge's codec overload goes through vanilla's from outside a build,
  * vanilla's hands back to NeoForge's inside one, and both keep their own bodies after the prologue.
  */
 @ResourceLock("system-properties")
 class PayloadCodecFunnelInjectorTest {
-	private static final Path MERGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"))
+	private static final Path MERGED = TestFixtures.stagedRoot()
 			.resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	@AfterEach void reset() { System.clearProperty(PayloadCodecFunnelInjector.PROPERTY); }
 
 	@Test void neoForgesOverloadGoesThroughVanillasAndVanillasHandsBack() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED), "merged base not staged: " + MERGED);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "merged base not staged: " + MERGED);
 		byte[] original = NativeCoremodParityTest.read(MERGED, PayloadCodecFunnelInjector.OWNER);
 		byte[] out = new PayloadCodecFunnelInjector().transform(PayloadCodecFunnelInjector.TARGET, original, null);
 		assertNotSame(original, out);

@@ -1,7 +1,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,6 +10,8 @@ import java.util.zip.ZipFile;
 
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ForeignType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -53,9 +54,8 @@ class ForgeBlockTintInjectorTest {
 	}
 
 	@Test void theActualMergedClassHasExactlyThisSeam() throws Exception {
-		Path stage = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"));
-		Path jar = stage.resolve("run/merged-base/patched-mc-merged-26.2.jar");
-		assumeTrue(Files.isRegularFile(jar), "requires merged base");
+		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "requires merged base");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			byte[] before = zip.getInputStream(zip.getEntry(ForgeBlockTintInjector.TARGET.replace('.', '/') + ".class")).readAllBytes();
 			assertEquals(1, posts(createDefault(before), ForeignType.FML_MOD_LOADER.internal(Ecosystem.NEOFORGE)));
@@ -69,7 +69,7 @@ class ForgeBlockTintInjectorTest {
 
 	@Test void typedFunnelPostsNeoBeforeAskingForgeWithTheEventsBlockColors() throws Exception {
 		Path runtime = Path.of("build/classes/java/runtime", ForgeBlockTintInjector.HOOK + ".class");
-		assumeTrue(Files.isRegularFile(runtime), "requires runtime source set");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(runtime), "requires runtime source set");
 		ClassNode node = parse(Files.readAllBytes(runtime));
 		MethodNode method = node.methods.stream().filter(m -> m.name.equals("postBlockTintSources")).findFirst().orElseThrow();
 		assertEquals(ForgeBlockTintInjector.POST, method.desc);

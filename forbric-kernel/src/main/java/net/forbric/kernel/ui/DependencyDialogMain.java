@@ -70,7 +70,9 @@ import javax.swing.UIManager;
  * guards. That is a measurement of that one call, not a claim that AWT is never loaded.
  *
  * <p>Exit code IS the answer: {@code 0} continue, {@code 1} quit. Anything else the parent reads as continue,
- * because a dialog that fails must not be able to stop a launch that would otherwise have worked.
+ * because a dialog that fails must not be able to stop a launch that would otherwise have worked. The crash-suspects
+ * offer ({@code --isolation}) adds {@code 2}, start without the suspects; any other answer there, a closed window
+ * included, starts the game with every mod, which is what would have happened without the offer.
  *
  * <h2>What the player is shown</h2>
  *
@@ -102,6 +104,8 @@ public final class DependencyDialogMain {
 	public static final int CONTINUE = 0;
 	/** The player chose to quit and go install something. */
 	public static final int QUIT = 1;
+	/** The crash-suspects offer only: start without the mods the last crash pointed at. */
+	public static final int WITHOUT = 2;
 
 	/**
 	 * How many findings the summary names before it hands the rest to the details.
@@ -152,6 +156,10 @@ public final class DependencyDialogMain {
 		avoidOverlayRenderingCorruption();
 		if (args.length > 1 && "--compatibility".equals(args[1])) {
 			confirmationMain(Path.of(args[0]));
+			return;
+		}
+		if (args.length > 1 && "--isolation".equals(args[1])) {
+			isolationMain(Path.of(args[0]));
 			return;
 		}
 		if (args.length < 1) System.exit(CONTINUE);
@@ -207,6 +215,78 @@ public final class DependencyDialogMain {
 	private static int showCompatibility(DialogLang lang, DependencyReport.Confirmation confirmation) {
 		return showContent(lang, confirmationBlocks(lang, confirmation), confirmationDetails(lang, confirmation),
 				lang.get("compat.title"), true);
+	}
+
+	private static void isolationMain(Path report) {
+		int answer = CONTINUE;
+		try {
+			DependencyReport.Isolation isolation = DependencyReport.readIsolation(report);
+			if (isolation.without().isEmpty()) { System.exit(CONTINUE); return; }
+			DialogLang lang = DialogLang.ofSystem();
+			try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); }
+			catch (Exception ignored) { }
+			int[] result = { CONTINUE };
+			SwingUtilities.invokeAndWait(() -> result[0] = showContent(lang, isolationBlocks(lang, isolation),
+					isolationDetails(lang, isolation), lang.get("isolation.title"),
+					content -> isolationPane(lang, isolation, content), value -> isolationAnswerFrom(lang, isolation, value)));
+			answer = result[0];
+		} catch (Throwable unavailable) {
+			// No answer switches nothing off: the game starts with every mod, as it would have without the offer.
+		}
+		System.exit(answer);
+	}
+
+	/**
+	 * The offer's text: what the crash pointed at, what starting without it does and how to undo it, then the
+	 * caveat — which also says that closing the window changes nothing.
+	 */
+	static List<String> isolationBlocks(DialogLang lang, DependencyReport.Isolation isolation) {
+		StringBuilder summary = new StringBuilder(isolation.kept().isEmpty() ? lang.get("isolation.intro")
+				: lang.get("isolation.intro.clash", isolation.kept())).append("\n\n");
+		int shown = Math.min(isolation.without().size(), SUMMARY_BULLETS);
+		for (int i = 0; i < shown; i++) {
+			DependencyReport.IsolationRow row = isolation.without().get(i);
+			summary.append(BULLET).append(lang.get("isolation.bullet", row.name(), row.jar())).append('\n');
+		}
+		if (isolation.without().size() > shown) {
+			summary.append(MORE).append(lang.get("summary.more", isolation.without().size() - shown)).append('\n');
+		}
+		return List.of(summary.toString(), lang.get("isolation.without"), lang.get("isolation.note"));
+	}
+
+	static String isolationDetails(DialogLang lang, DependencyReport.Isolation isolation) {
+		StringBuilder text = new StringBuilder();
+		for (DependencyReport.IsolationRow row : isolation.without()) {
+			text.append("  ").append(row.name()).append("  (").append(row.modId()).append(")\n")
+					.append("      ").append(row.jar()).append("\n\n");
+		}
+		return text.append(lang.get("isolation.details.report", isolation.report())).append('\n').toString();
+	}
+
+	/**
+	 * Start without them, start with everything, quit — in that order. The first is the keyboard default: it is
+	 * what the window offers, and it is undone by deleting a line. Quit never is, for the reason {@link #options}
+	 * gives.
+	 */
+	static Object[] isolationOptions(DialogLang lang, DependencyReport.Isolation isolation) {
+		List<String> names = new ArrayList<>();
+		for (DependencyReport.IsolationRow row : isolation.without()) if (!names.contains(row.name())) names.add(row.name());
+		String named = names.size() <= 3 ? String.join(", ", names) : String.join(", ", names.subList(0, 3)) + " …";
+		return new Object[] { lang.get("button.isolation.without", named), lang.get("button.isolation.everything"),
+				lang.get("button.quit") };
+	}
+
+	static JOptionPane isolationPane(DialogLang lang, DependencyReport.Isolation isolation, Component content) {
+		Object[] options = isolationOptions(lang, isolation);
+		return new JOptionPane(content, JOptionPane.WARNING_MESSAGE, JOptionPane.DEFAULT_OPTION, null, options, options[0]);
+	}
+
+	/** Only the two explicit buttons change anything; a closed window or Escape starts with every mod. */
+	static int isolationAnswerFrom(DialogLang lang, DependencyReport.Isolation isolation, Object value) {
+		Object[] options = isolationOptions(lang, isolation);
+		if (options[0].equals(value)) return WITHOUT;
+		if (options[2].equals(value)) return QUIT;
+		return CONTINUE;
 	}
 
 	/**
@@ -278,6 +358,13 @@ public final class DependencyDialogMain {
 
 	private static int showContent(DialogLang lang, List<String> spoken, String detail, String title,
 			boolean confirmation) {
+		return showContent(lang, spoken, detail, title,
+				content -> confirmation ? confirmationPane(lang, content) : optionPane(lang, content),
+				value -> confirmation ? confirmationAnswerFrom(lang, value) : answerFrom(lang, value));
+	}
+
+	private static int showContent(DialogLang lang, List<String> spoken, String detail, String title,
+			java.util.function.Function<Component, JOptionPane> paneFor, java.util.function.ToIntFunction<Object> answer) {
 
 		Font prose = legible(String.join("\n", spoken), 13, false);
 		JPanel content = new JPanel(new BorderLayout(0, 12));
@@ -318,7 +405,7 @@ public final class DependencyDialogMain {
 		content.add(below, BorderLayout.CENTER);
 		budget(headScroll, details, toggle);
 
-		JOptionPane pane = confirmation ? confirmationPane(lang, content) : optionPane(lang, content);
+		JOptionPane pane = paneFor.apply(content);
 		JDialog dialog = pane.createDialog(null, title);
 		// createDialog fixes the size; forty findings want a window the player can drag bigger.
 		dialog.setResizable(true);
@@ -345,7 +432,7 @@ public final class DependencyDialogMain {
 		dialog.setVisible(true);
 		dialog.dispose();
 
-		return confirmation ? confirmationAnswerFrom(lang, pane.getValue()) : answerFrom(lang, pane.getValue());
+		return answer.applyAsInt(pane.getValue());
 	}
 
 	static JOptionPane confirmationPane(DialogLang lang, Component content) {

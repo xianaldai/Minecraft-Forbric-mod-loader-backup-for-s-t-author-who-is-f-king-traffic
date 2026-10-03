@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -36,6 +35,7 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
+import net.forbric.kernel.TestFixtures;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
@@ -151,7 +151,8 @@ class PostMixinFixupsAliasTargetTest {
 				}
 			}
 		}
-		assumeTrue(!mixins.isEmpty(), "no fabric-registry-sync in the compatibility packs on this machine");
+		// This class has its own Fixture, hence the qualified name.
+		TestFixtures.require(TestFixtures.Fixture.THIRD_PARTY, !mixins.isEmpty(), "no fabric-registry-sync in the compatibility packs on this machine");
 		for (Map.Entry<String, byte[]> mixin : mixins.entrySet()) {
 			byte[] bytes = mixin.getValue();
 			byte[] out = PostMixinFixups.askTheRegistryWhetherAnAliasTargetExists(bytes);

@@ -53,6 +53,7 @@ import org.objectweb.asm.tree.VarInsnNode;
  * extra injection site and duplicate every conditional overlay — wrong instead of crashed. That property is
  * asserted directly rather than left to the doc comment.
  */
+@ExecutesInjector({NullPackGuardInjector.class, PackOverlayMutabilityInjector.class})
 class PackRepairInjectorsTest {
 	private static final String PACK = "net/minecraft/server/packs/repository/Pack";
 	private static final String REPOSITORY = "net/minecraft/server/packs/repository/PackRepository";

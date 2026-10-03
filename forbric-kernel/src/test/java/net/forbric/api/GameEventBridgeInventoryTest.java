@@ -19,8 +19,8 @@ package net.forbric.api;
 import net.forbric.kernel.TestFixtures;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -45,6 +45,9 @@ import org.objectweb.asm.tree.MethodNode;
  * bridge installed without being declared is one the verify pass cannot notice is missing.
  */
 class GameEventBridgeInventoryTest {
+	/** GameEventMultiplexer is src/main, compiled before any test runs: reading nothing out of it is a broken read. */
+	private static final String NO_BRIDGE_READ = "no GameEventBridge read found in the compiled GameEventMultiplexer";
+
 	@Test
 	void everyGameBusBridgeInTheInventoryIsActuallyInstalled() throws Exception {
 		Set<GameEventBridge> declared = EnumSet.noneOf(GameEventBridge.class);
@@ -53,7 +56,7 @@ class GameEventBridgeInventoryTest {
 		}
 
 		List<String> installed = bridgesNamedBy("install");
-		assumeTrue(!installed.isEmpty(), "GameEventMultiplexer not compiled yet");
+		assertTrue(!installed.isEmpty(), NO_BRIDGE_READ);
 
 		List<String> missing = new ArrayList<>();
 		for (GameEventBridge bridge : declared) {
@@ -83,7 +86,7 @@ class GameEventBridgeInventoryTest {
 		// about install() reported it as uncovered when it is not — the first version of this test did exactly
 		// that, which is the same shape as asserting on where a line is printed rather than on what is true.
 		List<String> installed = bridgesNamedAnywhereInTheMultiplexer();
-		assumeTrue(!installed.isEmpty(), "GameEventMultiplexer not compiled yet");
+		assertTrue(!installed.isEmpty(), NO_BRIDGE_READ);
 
 		List<String> uncovered = new ArrayList<>();
 		for (GameEventBridge bridge : GameEventBridge.values()) {
@@ -102,7 +105,7 @@ class GameEventBridgeInventoryTest {
 	@Test
 	void theServerStartingAndStoppedHooksAreBridged() throws Exception {
 		List<String> installed = bridgesNamedBy("install");
-		assumeTrue(!installed.isEmpty(), "GameEventMultiplexer not compiled yet");
+		assertTrue(!installed.isEmpty(), NO_BRIDGE_READ);
 
 		assertTrue(installed.contains("SERVER_STARTING"),
 				"MinecraftForge's handleServerStarting is the only thing that calls "
@@ -122,7 +125,7 @@ class GameEventBridgeInventoryTest {
 	@Test
 	void allFourTicksAreBridgedNotJustTheServerOne() throws Exception {
 		List<String> installed = bridgesNamedBy("install");
-		assumeTrue(!installed.isEmpty(), "GameEventMultiplexer not compiled yet");
+		assertTrue(!installed.isEmpty(), NO_BRIDGE_READ);
 
 		for (String tick : List.of("SERVER_TICK_PRE", "SERVER_TICK_POST", "LEVEL_TICK_PRE", "LEVEL_TICK_POST",
 				"PLAYER_TICK_PRE", "PLAYER_TICK_POST", "CLIENT_TICK_PRE", "CLIENT_TICK_POST",
@@ -144,7 +147,7 @@ class GameEventBridgeInventoryTest {
 	@Test
 	void commandsAndThePlayerLifecycleAreBridged() throws Exception {
 		List<String> installed = bridgesNamedBy("install");
-		assumeTrue(!installed.isEmpty(), "GameEventMultiplexer not compiled yet");
+		assertTrue(!installed.isEmpty(), NO_BRIDGE_READ);
 
 		for (String bridge : List.of("REGISTER_COMMANDS", "PLAYER_LOGGED_IN", "PLAYER_LOGGED_OUT",
 				"PLAYER_RESPAWN", "PLAYER_CHANGED_DIMENSION")) {
@@ -161,7 +164,7 @@ class GameEventBridgeInventoryTest {
 	@Test
 	void theCancellableEntityEventsAreBridged() throws Exception {
 		List<String> installed = bridgesNamedBy("install");
-		assumeTrue(!installed.isEmpty(), "GameEventMultiplexer not compiled yet");
+		assertTrue(!installed.isEmpty(), NO_BRIDGE_READ);
 
 		for (String bridge : List.of("LIVING_DEATH", "LIVING_DROPS", "ENTITY_JOIN_LEVEL")) {
 			assertTrue(installed.contains(bridge),
@@ -201,7 +204,7 @@ class GameEventBridgeInventoryTest {
 	@Test
 	void theScreenMouseFamilyIsBridgedNotJustTheFrameAndTheTick() throws Exception {
 		List<String> installed = bridgesNamedBy("install");
-		assumeTrue(!installed.isEmpty(), "GameEventMultiplexer not compiled yet");
+		assertTrue(!installed.isEmpty(), NO_BRIDGE_READ);
 
 		for (String bridge : List.of("SCREEN_MOUSE_PRESSED_PRE", "SCREEN_MOUSE_RELEASED_PRE",
 				"SCREEN_MOUSE_DRAG_PRE", "SCREEN_MOUSE_SCROLL_POST")) {
@@ -222,10 +225,12 @@ class GameEventBridgeInventoryTest {
 	 */
 	@Test
 	void noClientGameBusBridgeIsAuditedAsBridgedWhileThatPassIsNotLate() throws Exception {
-		assumeTrue(!GameEventBridge.Pass.CLIENT_GAME_BUS.lateInstalled(),
-				"CLIENT_GAME_BUS is late now, so a bridged row would be safe");
+		// Pinned rather than skipped on: once the pass is late a bridged row is safe and nothing is left to check,
+		// so the change that makes it late deletes this test instead of leaving it to skip where nobody looks.
+		assertFalse(GameEventBridge.Pass.CLIENT_GAME_BUS.lateInstalled(),
+				"CLIENT_GAME_BUS is late now, so a bridged row would be safe: delete this test");
 		Path audit = Path.of("src/main/java/net/forbric/kernel/boot/DeadEventAudit.java");
-		assumeTrue(Files.exists(audit), "DeadEventAudit source not present");
+		assertTrue(Files.exists(audit), "DeadEventAudit's source is part of this checkout: " + audit);
 		String bridged = Files.readString(audit);
 		bridged = bridged.substring(bridged.indexOf("private static Map<String, GameEventBridge> bridged()"));
 		bridged = bridged.substring(0, bridged.indexOf("\n\tprivate DeadEventAudit()"));
@@ -271,7 +276,8 @@ class GameEventBridgeInventoryTest {
 		// The tooltip seam is the same shape: the transformer writes the call, and the game-side class is the only
 		// place that knows a tooltip was really built and the event really posted.
 		recorded.addAll(bridgesRecordedBy(runtimeCompiled("KernelItemTooltips")));
-		assumeTrue(!recorded.isEmpty(), "transformers not compiled yet");
+		// The transformers are src/main too, compiled before any test runs.
+		assertTrue(!recorded.isEmpty(), "no EventBridges.installed call found in the compiled transformers");
 
 		List<String> missing = new ArrayList<>();
 		for (GameEventBridge bridge : GameEventBridge.values()) {

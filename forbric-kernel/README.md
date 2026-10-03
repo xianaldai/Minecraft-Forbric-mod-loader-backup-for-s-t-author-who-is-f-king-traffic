@@ -92,6 +92,7 @@ onwards as unfinished long after their gates were passing — so the scripts the
 | `gate-m12` … `gate-m16` | multiplayer over a real socket, an anti-cheat's opinion, a pure Fabric server, both Forge families' networking |
 | `gate-m17` | the installer, resolved and launched the way a launcher does it |
 | `gate-m24` | a mod that fails on purpose: the others still load and the failure is attributed |
+| `gate-m24c` | a jar listed in `forbric-disabled.txt` is loaded by nobody and named in `load-report.txt`; the control loads it |
 | `gate-m25-worldgen` | biome modifier canaries of both Forge families leave distinct blocks in saved regions |
 | `gate-m26-forgeclient` | the Forge client receives key, renderer, tint, tooltip, geometry-loader and creative-tab registration events, and the CLIENT_INIT/REGISTRATION bridge inventory reports complete |
 | `gate-m27-frame` | the 97-jar client produces a fresh, non-black Minecraft screenshot |

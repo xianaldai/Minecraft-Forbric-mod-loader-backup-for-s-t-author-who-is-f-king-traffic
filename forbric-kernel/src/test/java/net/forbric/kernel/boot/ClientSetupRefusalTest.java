@@ -27,6 +27,8 @@ import org.objectweb.asm.tree.TryCatchBlockNode;
 import net.forbric.api.CompatibilityFinding;
 import net.forbric.api.CompatibilityFindings;
 import net.forbric.api.ModCatalog;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.ui.CompatibilityDecision;
 
 /**
@@ -46,12 +48,8 @@ class ClientSetupRefusalTest {
 	}
 
 	private static Path merged() {
-		String old = System.getenv("FORBRIC_OLD");
-		Path root = Path.of(old == null || old.isBlank() ? System.getProperty("user.dir") + "/../forbric-loader" : old, "run");
-		Path jar = root.resolve("merged-base/patched-mc-merged-26.2.jar").normalize();
-		boolean present = Files.isRegularFile(jar);
-		if ("1".equals(System.getenv("FORBRIC_COMPAT_FIXTURES_REQUIRED"))) assertTrue(present, "staged merged base absent: " + jar);
-		org.junit.jupiter.api.Assumptions.assumeTrue(present, "staged merged base absent");
+		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").normalize();
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged merged base absent");
 		return jar;
 	}
 

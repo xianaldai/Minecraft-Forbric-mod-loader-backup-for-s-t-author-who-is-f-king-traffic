@@ -22,6 +22,11 @@ public final class CompatibilityFindings {
 	public static synchronized void observeInitializationFailures() {
 		for (ModCatalog.Entry entry : ModCatalog.unclassifiedFailures()) {
 			if (entry.status() != ModCatalog.Status.FAILED) continue;
+			// A jar whose metadata could not be read already carries its classified finding (metadata:<family>);
+			// its row exists only so that finding has somewhere to show. A second, catalog-derived one would count
+			// the same loss twice.
+			if (FINDINGS.values().stream().anyMatch(f -> f.modId().equals(entry.modId())
+					&& f.id().startsWith("metadata:") && f.confirmedRequired())) continue;
 			for (CompatibilityFinding observed : initializationFindings(entry)) {
 				CompatibilityFinding prior = FINDINGS.get(observed.key());
 				if (prior != null && prior.confidence() == observed.confidence() && prior.required() == observed.required()

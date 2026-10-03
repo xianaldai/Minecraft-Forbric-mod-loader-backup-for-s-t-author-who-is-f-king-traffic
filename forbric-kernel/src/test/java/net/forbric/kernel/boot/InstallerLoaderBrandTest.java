@@ -19,7 +19,6 @@ package net.forbric.kernel.boot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -78,8 +77,9 @@ class InstallerLoaderBrandTest {
 	 */
 	@Test
 	void theInstallersOwnVersionIsReadFromItsManifestAndNeverGuessed() throws Exception {
-		assumeTrue(Files.isRegularFile(GUI_SOURCE), "installer module absent — skipping (" + GUI_SOURCE + ")");
-		assumeTrue(Files.isRegularFile(INSTALLER_BUILD), "installer build file absent");
+		assertTrue(Files.isRegularFile(GUI_SOURCE), "the installer module is part of this checkout: " + GUI_SOURCE);
+		assertTrue(Files.isRegularFile(INSTALLER_BUILD),
+				"the installer module is part of this checkout: " + INSTALLER_BUILD);
 
 		String gradle = Files.readString(INSTALLER_BUILD, StandardCharsets.UTF_8);
 		assertTrue(gradle.contains("'Implementation-Version': project.version"),
@@ -126,8 +126,8 @@ class InstallerLoaderBrandTest {
 	}
 
 	private static String source() throws Exception {
-		assumeTrue(Files.isRegularFile(INSTALLER_SOURCE),
-				"installer module absent — skipping the profile pin (" + INSTALLER_SOURCE + ")");
+		assertTrue(Files.isRegularFile(INSTALLER_SOURCE),
+				"the installer module is part of this checkout: " + INSTALLER_SOURCE);
 		return Files.readString(INSTALLER_SOURCE, StandardCharsets.UTF_8);
 	}
 }

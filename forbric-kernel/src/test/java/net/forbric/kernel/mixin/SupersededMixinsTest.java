@@ -28,6 +28,8 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -123,9 +125,8 @@ class SupersededMixinsTest {
 	 */
 	@Test
 	void theProofMatchesWhatTheRealRepairWritesIntoTheRealClass() throws Exception {
-		Path carrier = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"),
-				"run", "neoforge-runtime", "neoforge-runtime.jar").normalize();
-		org.junit.jupiter.api.Assumptions.assumeTrue(Files.isRegularFile(carrier), "staged NeoForge carrier absent");
+		Path carrier = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "staged NeoForge carrier absent");
 		byte[] original;
 		try (var zip = new java.util.zip.ZipFile(carrier.toFile())) {
 			var entry = zip.getEntry("net/neoforged/neoforge/common/conditions/ConditionalOps.class");
@@ -153,9 +154,8 @@ class SupersededMixinsTest {
 	/** The hopper entry's proof matches what HopperFabricStorageInjector writes into the real merged hopper. */
 	@Test
 	void theHopperProofMatchesWhatTheRealRepairWritesIntoTheRealClass() throws Exception {
-		java.nio.file.Path merged = java.nio.file.Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"),
-				"merged-base/patched-mc-merged-26.2.jar");
-		org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.isRegularFile(merged), "actual game required");
+		java.nio.file.Path merged = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+		TestFixtures.require(Fixture.STAGED, java.nio.file.Files.isRegularFile(merged), "actual game required");
 		byte[] original;
 		try (var zip = new java.util.zip.ZipFile(merged.toFile())) {
 			original = zip.getInputStream(zip.getEntry("net/minecraft/world/level/block/entity/HopperBlockEntity.class")).readAllBytes();

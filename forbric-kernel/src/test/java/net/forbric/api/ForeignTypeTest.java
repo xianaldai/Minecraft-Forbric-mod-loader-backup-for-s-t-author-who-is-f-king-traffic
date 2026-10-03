@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -118,7 +117,7 @@ class ForeignTypeTest {
 	@Test
 	void noConceptIsStillWrittenOutUnderBothFamiliesOutsideThisEnum() throws Exception {
 		Path kernel = Path.of(System.getProperty("user.dir"), "src", "main", "java", "net", "forbric", "kernel");
-		assumeTrue(Files.isDirectory(kernel), "kernel sources not present");
+		assertTrue(Files.isDirectory(kernel), "the kernel sources are part of this checkout: " + kernel);
 
 		Pattern literal = Pattern.compile("\"(net[./](?:minecraftforge|neoforged)[A-Za-z0-9_./$]*)\"");
 		Map<String, Map<Ecosystem, String>> byTail = new TreeMap<>();

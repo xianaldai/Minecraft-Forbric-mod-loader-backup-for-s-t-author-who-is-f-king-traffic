@@ -12,6 +12,8 @@ import java.util.zip.ZipOutputStream;
 
 import net.forbric.api.DiscoveredMod;
 import net.forbric.api.Ecosystem;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.objectweb.asm.ClassWriter;
@@ -68,9 +70,8 @@ class FrapiRendererEvidenceTest {
 	@Test void theRealSodiumBuildsAreToldApart() throws Exception {
 		Path mods = Path.of(System.getProperty("user.dir"), "run", "client-merged-pack", "mods").normalize();
 		Path neo = mods.resolve("sodium-neoforge-0.9.1+mc26.2.jar"), fabric = mods.resolve("[钠] sodium-fabric-0.9.1+mc26.2.jar");
-		boolean present = Files.isRegularFile(neo) && Files.isRegularFile(fabric);
-		if ("1".equals(System.getenv("FORBRIC_COMPAT_FIXTURES_REQUIRED"))) assertTrue(present, "sodium fixtures absent: " + mods);
-		if (!present) return;
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(neo) && Files.isRegularFile(fabric),
+				"sodium fixtures absent: " + mods);
 		assertFalse(FrapiRendererEvidence.registersRenderer(neo));
 		assertTrue(FrapiRendererEvidence.registersRenderer(fabric));
 	}

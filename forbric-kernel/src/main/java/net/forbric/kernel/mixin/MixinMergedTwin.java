@@ -149,7 +149,15 @@ public final class MixinMergedTwin {
 	 */
 	static void unpinInjectionPointOwners(ClassNode mixin, Set<String> twinned) {
 		List<String> prefixes = new ArrayList<>();
-		for (String owner : twinned) prefixes.add(owner.replace('.', '/') + ".");
+		for (String owner : twinned) {
+			String internal = owner.replace('.', '/');
+			// Both spellings Mixin accepts for an owner: `owner/Name.method(desc)` and `Lowner/Name;method(desc)`.
+			// The second is what MinecraftDev writes and most mods ship (fabric-networking-api-v1's
+			// CustomPayloadStreamCodecMixin on CustomPacketPayload$1 among them); matching only the first left those
+			// pinned to the half nothing runs, with the handler merged and never called.
+			prefixes.add(internal + ".");
+			prefixes.add("L" + internal + ";");
+		}
 		int unpinned = 0;
 		for (MethodNode method : mixin.methods) {
 			unpinned += unpinAll(method.visibleAnnotations, prefixes);

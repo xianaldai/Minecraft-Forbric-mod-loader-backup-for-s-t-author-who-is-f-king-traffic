@@ -19,15 +19,10 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -37,6 +32,9 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * The repair for fabric-api's half-applied condition mixin, and the premise that makes it necessary.
  *
@@ -45,9 +43,7 @@ import org.objectweb.asm.tree.MethodNode;
  * Unrepaired, one condition-gated data file whose condition is false stops the server starting.
  */
 class MergedBaseSkipMarkerTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String ENTRY = "net/minecraft/server/packs/resources/SimpleJsonResourceReloadListener.class";
 	private static final String BINARY = "net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener";
 	private static final String KERNEL = "net/forbric/kernel/runtime/KernelFabricConditions";
@@ -130,13 +126,6 @@ class MergedBaseSkipMarkerTest {
 	}
 
 	private static byte[] bytes() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
-		try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {
-			ZipEntry entry = zip.getEntry(ENTRY);
-			assumeTrue(entry != null, "SimpleJsonResourceReloadListener absent from this base");
-			try (InputStream in = zip.getInputStream(entry)) {
-				return in.readAllBytes();
-			}
-		}
+		return TestFixtures.requireEntry(Fixture.STAGED, MERGED_BASE, ENTRY);
 	}
 }

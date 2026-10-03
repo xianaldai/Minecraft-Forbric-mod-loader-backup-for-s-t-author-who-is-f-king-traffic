@@ -1,7 +1,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
@@ -16,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
@@ -33,7 +33,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  */
 @ResourceLock("system-properties")
 class FabricFuelValuesInjectorTest {
-	private static final Path RUN = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"));
+	private static final Path RUN = TestFixtures.stagedRoot();
 	private static final Path NEO_RT = RUN.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final Path MERGED = RUN.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String HOOKS = "net/neoforged/neoforge/common/DataMapHooks";
@@ -207,13 +207,14 @@ class FabricFuelValuesInjectorTest {
 
 		Game(boolean shortCircuit, boolean headCancel) throws Exception {
 			Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime").normalize();
-			assumeTrue(Files.isDirectory(compiled) && Files.isRegularFile(MERGED), "the game side or the merged game is absent");
+			TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "the game side is absent");
+			TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "the merged game is absent");
 			byte[] original = NativeCoremodParityTest.read(MERGED, FUEL_VALUES);
 			byte[] woven = shortCircuit ? FabricFuelValuesInjector.shortCircuitTheBody(original) : original;
 			byte[] bytes = headCancel ? cancelledAtHead(woven) : withReturnHook(woven);
 			byte[] hookBytes = returnHookClass();
 			Path forge = RUN.resolve("merged-base/forge-runtime-interop.jar");
-			assumeTrue(Files.isRegularFile(NEO_RT) && Files.isRegularFile(forge), "the carriers are absent");
+			TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEO_RT) && Files.isRegularFile(forge), "the carriers are absent");
 			List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), MERGED.toUri().toURL(),
 					NEO_RT.toUri().toURL(), forge.toUri().toURL()));
 			urls.addAll(libraries());
@@ -341,7 +342,7 @@ class FabricFuelValuesInjectorTest {
 	private static List<URL> libraries() throws Exception {
 		Path libraries = TestFixtures.minecraftDir().resolve("libraries");
 		Path versionJson = libraries.getParent().resolve("versions/26.2/26.2.json");
-		assumeTrue(Files.isRegularFile(versionJson), "no 26.2 version JSON beside the local Minecraft libraries");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(versionJson), "no 26.2 version JSON beside the local Minecraft libraries");
 		List<URL> urls = new ArrayList<>();
 		java.util.regex.Matcher path = java.util.regex.Pattern.compile("\"path\"\\s*:\\s*\"([^\"]+\\.jar)\"")
 				.matcher(Files.readString(versionJson, StandardCharsets.UTF_8));

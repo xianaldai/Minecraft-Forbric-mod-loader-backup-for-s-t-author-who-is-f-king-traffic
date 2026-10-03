@@ -18,13 +18,14 @@ package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.Set;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -44,7 +45,7 @@ class KernelNeoConfigLoadShapeTest {
 
 	@Test
 	void theEarlyPassOpensPerConfigAndBothPassesMarkTheCatalogue() throws Exception {
-		assumeTrue(Files.isRegularFile(COMPILED), "runtime helper not compiled");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(COMPILED), "runtime helper not compiled");
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(COMPILED)).accept(node, 0);
 		for (MethodNode m : node.methods) {

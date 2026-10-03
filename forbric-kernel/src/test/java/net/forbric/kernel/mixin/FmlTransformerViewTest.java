@@ -17,11 +17,11 @@
 package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.lang.reflect.Field;
@@ -49,6 +49,8 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.spongepowered.asm.mixin.transformer.IMixinTransformer;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.classloading.LoaderProbePolicy;
 import net.forbric.kernel.transform.FmlContextLoaderRewriter;
 import net.forbric.kernel.transform.ModuleClassLoaderInitInjector;
@@ -65,7 +67,7 @@ import net.forbric.kernel.transform.ModuleClassLoaderInitInjector;
  * makes, field for field.
  */
 class FmlTransformerViewTest {
-	private static final Path STAGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run");
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final String PROBE = "com.example.libjf.MixinPlugin";
 	private static final String TRANSFORMING_LOADER = "net/neoforged/fml/classloading/transformation/TransformingClassLoader";
 
@@ -122,7 +124,8 @@ class FmlTransformerViewTest {
 
 	@Test
 	void withoutTheInitialiserFixTheViewCannotExistAndTheCastFailsAsBefore() throws Exception {
-		assumeTrue(!Object.class.getModule().isOpen("java.lang.invoke",
+		// build.gradle starts the test JVM without NeoForge's --add-opens, which is the launch this case is about.
+		assertFalse(Object.class.getModule().isOpen("java.lang.invoke",
 				getClass().getClassLoader().getUnnamedModule()), "this JVM opened java.lang.invoke");
 		MixinWeaverSlot.install(kernelWeaver);
 		try (GameLoader game = new GameLoader(false, rewritten(plugin()))) {
@@ -180,7 +183,8 @@ class FmlTransformerViewTest {
 	void theKernelWeavesWithWhatTheSlotHolds() throws Exception {
 		Path compiled = Path.of("build", "classes", "java", "main", "net", "forbric", "kernel", "mixin",
 				"KernelMixinBootstrap.class");
-		assumeTrue(Files.isRegularFile(compiled), "main classes not compiled yet");
+		assertTrue(Files.isRegularFile(compiled),
+				"KernelMixinBootstrap not found in the compiled src/main classes, which exist before any test runs");
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(compiled)).accept(node, 0);
 		List<String> weaving = new ArrayList<>();
@@ -273,9 +277,11 @@ class FmlTransformerViewTest {
 		private static URL[] urls() throws Exception {
 			Path compiled = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
 			Path carrier = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
-			assumeTrue(Files.isDirectory(compiled) && Files.isRegularFile(carrier), "staged runtime classes/carrier absent");
+			TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "staged runtime classes/carrier absent");
+			TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "staged runtime classes/carrier absent");
+			// A compileOnly dependency build.gradle resolves and hands every test run, staged or not.
 			String log4j = System.getProperty("forbric.log4jApiForTests", "");
-			assumeTrue(!log4j.isEmpty() && Files.isRegularFile(Path.of(log4j)), "log4j-api absent");
+			assertTrue(!log4j.isEmpty() && Files.isRegularFile(Path.of(log4j)), "log4j-api absent: '" + log4j + "'");
 			return new URL[] {compiled.toUri().toURL(), carrier.toUri().toURL(), Path.of(log4j).toUri().toURL()};
 		}
 

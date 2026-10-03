@@ -17,7 +17,6 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -47,10 +46,11 @@ import org.objectweb.asm.tree.MethodInsnNode;
 
 import net.forbric.api.Ecosystem;
 import net.forbric.api.Side;
+import net.forbric.kernel.TestFixtures;
 
 @ResourceLock("system-properties")
 class KernelForgeInternalSubscribersTest {
-    private static final Path FORGE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/forge-runtime/forge-runtime.jar");
+    private static final Path FORGE = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
     private static final String GROUP = "net/minecraftforge/eventbus/api/bus/BusGroup";
     private static final String LOGIC = KernelForgeInternalSubscribers.FML_LOGIC.replace('.', '/');
     private static final String CONTEXT = "net/minecraftforge/fml/ModLoadingContext";
@@ -59,7 +59,8 @@ class KernelForgeInternalSubscribersTest {
 
     @Test
     void realCarrierContainsTwoClientSubscribersWithTheirActualEventsAndNativeRegistrar() throws Exception {
-        assumeTrue(Files.isRegularFile(FORGE), "staged Forge carrier absent");
+        // Qualified: this class has its own Fixture record.
+        TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(FORGE), "staged Forge carrier absent");
         var subscribers = KernelForgeInternalSubscribers.scan(List.of(FORGE, FORGE));
         var internal = subscribers.stream().filter(s -> s.family() == Ecosystem.FORGE && "forge".equals(s.modId())).toList();
         assertEquals(Set.of("net.minecraftforge.client.ClientForgeMod", "net.minecraftforge.client.model.data.ModelDataManager"),

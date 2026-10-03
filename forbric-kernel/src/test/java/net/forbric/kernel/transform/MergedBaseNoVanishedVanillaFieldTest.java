@@ -18,7 +18,6 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,6 +33,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.ClassNode;
@@ -67,9 +67,7 @@ import org.objectweb.asm.tree.FieldNode;
  * <p>The comparison is made AFTER the kernel's compat transformer has run, because that is what the game sees.
  */
 class MergedBaseNoVanishedVanillaFieldTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	/**
 	 * Stock Minecraft, from the same local install the staged artifacts were derived from — the same lookup the
@@ -90,8 +88,8 @@ class MergedBaseNoVanishedVanillaFieldTest {
 
 	@Test
 	void noVanillaFieldDescriptorHasVanishedBeyondTheKnownSet() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping whole-artifact scan");
-		assumeTrue(Files.isRegularFile(VANILLA),
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping whole-artifact scan");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(VANILLA),
 				"stock 26.2 absent at " + VANILLA + " — set MC_DIR to a Minecraft install to run this scan");
 
 		List<String> vanished = new ArrayList<>();

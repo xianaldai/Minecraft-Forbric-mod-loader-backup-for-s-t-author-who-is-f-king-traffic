@@ -2,7 +2,7 @@ package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.AbstractInsnNode;
@@ -28,8 +30,7 @@ import org.objectweb.asm.tree.TypeInsnNode;
  */
 class KernelForgeCapabilitiesShapeTest {
 	private static final Path RUNTIME = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
-	private static final Path FORGE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"forge-runtime", "forge-runtime.jar").normalize();
+	private static final Path FORGE = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
 	private static final Map<String, String> TWINS = Map.of(
 			"KernelForgeCapabilities$Entities", "net/minecraftforge/common/capabilities/CapabilityProvider$Entities",
 			"KernelForgeCapabilities$BlockEntities", "net/minecraftforge/common/capabilities/CapabilityProvider$BlockEntities",
@@ -37,10 +38,12 @@ class KernelForgeCapabilitiesShapeTest {
 
 	@Test
 	void eachComposedProviderFiresAndAsksExactlyWhatTheCarriersOwnDoes() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE), "staged Forge carrier absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE), "staged Forge carrier absent");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(RUNTIME.resolve("net/forbric/kernel/runtime")),
+				"runtime not compiled: " + RUNTIME);
 		for (Map.Entry<String, String> twin : TWINS.entrySet()) {
 			Path compiled = RUNTIME.resolve("net/forbric/kernel/runtime/" + twin.getKey() + ".class");
-			assumeTrue(Files.isRegularFile(compiled), "runtime not compiled: " + compiled);
+			assertTrue(Files.isRegularFile(compiled), "the compiled game side has no " + compiled);
 			ClassNode ours = parse(Files.readAllBytes(compiled));
 			ClassNode theirs = parse(bytesOf(twin.getValue()));
 			assertEquals("net/minecraftforge/common/capabilities/CapabilityProvider$AsField", superOf(ours),

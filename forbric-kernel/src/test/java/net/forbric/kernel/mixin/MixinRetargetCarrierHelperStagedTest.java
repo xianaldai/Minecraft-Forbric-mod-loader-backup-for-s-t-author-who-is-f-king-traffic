@@ -2,8 +2,9 @@ package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -17,16 +18,16 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import net.forbric.api.Ecosystem;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * The carrier-helper rules over the REAL mixins of the sweep90 pack and the REAL merged base: the mods that paid for
  * them, and fabric-rendering-v1's HudMixin, whose four R3 moves out of the same dispatcher must not change.
  */
 class MixinRetargetCarrierHelperStagedTest {
-	private static final Path MERGED_BASE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
-	private static final Path NEO_RUNTIME = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"neoforge-runtime", "neoforge-runtime.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").normalize();
+	private static final Path NEO_RUNTIME = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
 	private static final Path SWEEP = Path.of(System.getProperty("user.dir"), "build", "compat-inputs", "sweep90", "mods").normalize();
 	private static final String G = "(Lnet/minecraft/client/gui/GuiGraphicsExtractor;)V";
 
@@ -94,7 +95,7 @@ class MixinRetargetCarrierHelperStagedTest {
 	@Test
 	void puzzleslibsFogColourFollowsTheSetIntoClientHooks() throws Exception {
 		Function<String, byte[]> merged = mergedResolver();
-		assumeTrue(Files.isRegularFile(NEO_RUNTIME), "staged neoforge-runtime.jar absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEO_RUNTIME), "staged neoforge-runtime.jar absent");
 		Function<String, byte[]> resolver = name -> {
 			byte[] bytes = merged.apply(name);
 			if (bytes != null) return bytes;
@@ -135,7 +136,7 @@ class MixinRetargetCarrierHelperStagedTest {
 	// ---------------------------------------------------------------------------------------------------------------
 
 	static Function<String, byte[]> mergedResolver() {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		return name -> {
 			try {
 				return readFromJar(MERGED_BASE, name);
@@ -146,14 +147,15 @@ class MixinRetargetCarrierHelperStagedTest {
 	}
 
 	static byte[] fromJar(Path jar, String entry) throws Exception {
-		assumeTrue(Files.isRegularFile(jar), jar + " absent (symlink build/compat-inputs from the main checkout)");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(jar), jar + " absent (symlink build/compat-inputs from the main checkout)");
+		// Every caller names one exact release, so a jar that is here without the mixin has drifted.
 		byte[] bytes = readFromJar(jar, entry);
-		assumeTrue(bytes != null, entry + " absent from " + jar.getFileName());
+		assertNotNull(bytes, entry + " absent from " + jar.getFileName());
 		return bytes;
 	}
 
 	static byte[] nested(Path outer, String modulePrefix, String entry) throws Exception {
-		assumeTrue(Files.isRegularFile(outer), outer + " absent (symlink build/compat-inputs from the main checkout)");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(outer), outer + " absent (symlink build/compat-inputs from the main checkout)");
 		try (ZipFile zip = new ZipFile(outer.toFile())) {
 			for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
 				ZipEntry nested = e.nextElement();
@@ -170,8 +172,7 @@ class MixinRetargetCarrierHelperStagedTest {
 				}
 			}
 		}
-		assumeTrue(false, entry + " absent from the nested " + modulePrefix);
-		return null;
+		return fail(entry + " absent from the nested " + modulePrefix + " of " + outer.getFileName());
 	}
 
 	private static byte[] readFromJar(Path jar, String entry) throws Exception {

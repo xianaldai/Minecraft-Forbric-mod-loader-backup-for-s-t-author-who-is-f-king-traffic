@@ -1,6 +1,7 @@
 package net.forbric.kernel.transform;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -12,7 +13,6 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassReader;
@@ -24,7 +24,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
 /** NeoForge's coremod rewrites, done by the kernel, on the real merged classes. */
 @ResourceLock("system-properties")
 class NativeCoremodParityTest {
-	private static final Path STAGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"));
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path FORGE = STAGED.resolve("merged-base/forge-runtime-interop.jar");
 	private static final Path VANILLA = TestFixtures.vanillaJar();
@@ -96,7 +96,7 @@ class NativeCoremodParityTest {
 	}
 
 	@Test void theTargetListIsNeoForgesAndMinecraftForgesLessTheTrialSpawner() throws Exception {
-		TestFixtures.requireFiles("staged MinecraftForge carrier", FORGE);
+		TestFixtures.requireFiles(Fixture.STAGED, "staged MinecraftForge carrier", FORGE);
 		try (ZipFile zip = new ZipFile(FORGE.toFile())) {
 			Set<String> forge = new TreeSet<>();
 			String json = new String(zip.getInputStream(zip.getEntry("coremods/finalize_spawn_targets.json")).readAllBytes());
@@ -107,7 +107,7 @@ class NativeCoremodParityTest {
 			assertEquals(expected, forge);
 		}
 		Optional<Path> neo = Files.isDirectory(NEO_COREMODS) ? Files.walk(NEO_COREMODS).filter(p -> p.getFileName().toString().startsWith("net.neoforged.neoforge-coremods-")).findFirst() : Optional.empty();
-		Assumptions.assumeTrue(neo.isPresent(), "native NeoForge coremods jar absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, neo.isPresent(), "native NeoForge coremods jar absent");
 		try (ZipFile zip = new ZipFile(neo.get().toFile())) {
 			Set<String> listed = new TreeSet<>();
 			String json = new String(zip.getInputStream(zip.getEntry("net/neoforged/neoforge/coremods/finalize_spawn_targets.json")).readAllBytes());
@@ -118,7 +118,7 @@ class NativeCoremodParityTest {
 	}
 
 	@Test void vanillasShapeAndTheSwitchesLeaveClassesAlone() throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(VANILLA), "vanilla 26.2 absent");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(VANILLA), "vanilla 26.2 absent");
 		byte[] vanillaPot = read(VANILLA, POT);
 		assertSame(vanillaPot, NativeCoremodParity.apply(POT, vanillaPot), "vanilla's getter reads the field; nothing to route");
 		for (String property : List.of(NativeCoremodParity.PROPERTY, NativeCoremodParity.FLOWER_POT)) {
@@ -173,12 +173,19 @@ class NativeCoremodParityTest {
 		ClassNode node = new ClassNode(); new ClassReader(bytes).accept(node, 0); return node;
 	}
 
-	static byte[] read(Path jar, String internalName) throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(jar), jar + " absent");
-		try (ZipFile zip = new ZipFile(jar.toFile())) {
-			ZipEntry entry = zip.getEntry(internalName + ".class");
-			assertNotNull(entry, internalName + " in " + jar);
-			return zip.getInputStream(entry).readAllBytes();
-		}
+	/** One class of {@code jar}, which some thirty transform tests read through here; a jar present without it fails. */
+	static byte[] read(Path jar, String internalName) {
+		return TestFixtures.requireEntry(fixtureOf(jar), jar, internalName + ".class");
+	}
+
+	/**
+	 * Which fixture {@code jar} is, from where it lives: the callers pass staged carriers, the local vanilla jar and
+	 * pinned mod jars through the one helper, and each is missing on a different kind of machine.
+	 */
+	static Fixture fixtureOf(Path jar) {
+		Path at = jar.toAbsolutePath().normalize();
+		if (at.startsWith(TestFixtures.stagedRoot().toAbsolutePath().normalize())) return Fixture.STAGED;
+		if (at.startsWith(TestFixtures.minecraftDir().toAbsolutePath().normalize())) return Fixture.MC_LIBRARIES;
+		return Fixture.THIRD_PARTY;
 	}
 }

@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -27,10 +26,13 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 
 /** Real carrier bytecode: the two Forge builder repairs, the two splices into NeoForge's pass, and the switch. */
 class ForgeWorldModifierInjectorTest {
-	private static final Path RUN = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path RUN = TestFixtures.stagedRoot();
 	private static final Path FORGE = RUN.resolve("forge-runtime/forge-runtime.jar");
 	private static final Path NEO = RUN.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final Path MERGED = RUN.resolve("merged-base/patched-mc-merged-26.2.jar");
@@ -188,7 +190,7 @@ class ForgeWorldModifierInjectorTest {
 	}
 
 	private static byte[] bytesOf(Path jar, String internal) throws Exception {
-		assumeTrue(Files.isRegularFile(jar), "staged artifact absent: " + jar);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged artifact absent: " + jar);
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ZipEntry entry = zip.getEntry(internal + ".class");
 			assertNotNull(entry, internal + " not in " + jar.getFileName());

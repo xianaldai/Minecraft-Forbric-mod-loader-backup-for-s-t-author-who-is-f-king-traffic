@@ -1,7 +1,6 @@
 package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -9,6 +8,7 @@ import java.util.List;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
@@ -24,7 +24,7 @@ class MixinSubtypeOwnerRetargetTest {
 	@AfterEach void reset() { System.clearProperty(MixinSubtypeOwnerRetarget.PROPERTY); }
 
 	private static ClassNode litho() throws Exception {
-		assumeTrue(Files.isRegularFile(LITHO), "lithostitched's Fabric jar required");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(LITHO), "lithostitched's Fabric jar required");
 		try (ZipFile zip = new ZipFile(LITHO.toFile())) {
 			return MixinFit.parse(zip.getInputStream(zip.getEntry(MIXIN + ".class")).readAllBytes());
 		}
@@ -32,9 +32,8 @@ class MixinSubtypeOwnerRetargetTest {
 
 	/** The target as ForbricMixinService reads it: with its local variable table (the fixture skips debug info). */
 	private static ClassNode withLocals(boolean vanilla) throws Exception {
-		Path jar = vanilla ? TestFixtures.vanillaJar()
-				: Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/merged-base/patched-mc-merged-26.2.jar");
-		assumeTrue(Files.isRegularFile(jar), "actual game required");
+		Path jar = vanilla ? TestFixtures.vanillaJar() : TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+		TestFixtures.require(vanilla ? Fixture.MC_LIBRARIES : Fixture.STAGED, Files.isRegularFile(jar), "actual game required");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ClassNode node = new ClassNode();
 			new org.objectweb.asm.ClassReader(zip.getInputStream(zip.getEntry(TARGET + ".class")).readAllBytes()).accept(node, 0);
@@ -65,7 +64,7 @@ class MixinSubtypeOwnerRetargetTest {
 
 	@Test void codecDoesNotRedeclareParse() throws Exception {
 		Path dfu = TestFixtures.minecraftDir().resolve("libraries/com/mojang/datafixerupper");
-		assumeTrue(Files.isDirectory(dfu), "Minecraft's DataFixerUpper required");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isDirectory(dfu), "Minecraft's DataFixerUpper required");
 		Path jar;
 		try (var files = Files.walk(dfu)) { jar = files.filter(p -> p.toString().endsWith(".jar")).sorted().reduce((a, b) -> b).orElseThrow(); }
 		try (ZipFile zip = new ZipFile(jar.toFile())) {

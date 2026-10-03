@@ -9,6 +9,8 @@ import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -23,8 +25,7 @@ class EnergyUnitsTest {
 
 	@BeforeAll static void load() throws Exception {
 		boolean gameSide = Files.isRegularFile(RUNTIME.resolve("net/forbric/kernel/runtime/transfer/EnergyUnits.class"));
-		if ("1".equals(System.getenv("FORBRIC_COMPAT_FIXTURES_REQUIRED"))) assertTrue(gameSide, "game-side classes were not compiled");
-		org.junit.jupiter.api.Assumptions.assumeTrue(gameSide, "no staged game jars, so no game side was built");
+		TestFixtures.require(Fixture.GAME_SIDE, gameSide, "no staged game jars, so no game side was built");
 		units = Class.forName("net.forbric.kernel.runtime.transfer.EnergyUnits", true,
 				new URLClassLoader(new URL[] {RUNTIME.toUri().toURL()}, null));
 	}

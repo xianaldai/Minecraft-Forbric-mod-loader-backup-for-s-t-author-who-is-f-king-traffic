@@ -19,7 +19,6 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -41,6 +40,8 @@ import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 import net.fabricmc.api.EnvType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * Every fixed-target claim of the compat transformer, fed its real target from the staged merged base or carrier:
@@ -48,7 +49,7 @@ import net.fabricmc.api.EnvType;
  * ledger names that claim and no other — which is the whole reason claims exist.
  */
 class MergedBaseRepairClaimsStagedTest {
-	private static final Path RUN = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path RUN = TestFixtures.stagedRoot();
 	private static final List<Path> JARS = List.of(RUN.resolve("merged-base/patched-mc-merged-26.2.jar"),
 			RUN.resolve("neoforge-runtime/neoforge-runtime.jar"), RUN.resolve("forge-runtime/forge-runtime.jar"));
 	private static final TransformContext CTX = new TransformContext(EnvType.CLIENT, false, "intermediary");
@@ -57,7 +58,7 @@ class MergedBaseRepairClaimsStagedTest {
 
 	@Test
 	void everyClaimLandsOnItsStagedTargetAndTheLedgerIsClean() throws Exception {
-		assumeTrue(JARS.stream().allMatch(Files::isRegularFile), "staged merged base or carriers absent");
+		TestFixtures.require(Fixture.STAGED, JARS.stream().allMatch(Files::isRegularFile), "staged merged base or carriers absent");
 		TransformChain chain = new TransformChain();
 		ForbricMergedBaseCompatTransformer compat = new ForbricMergedBaseCompatTransformer(MergedBaseRepairClaimsStagedTest::bytesOf);
 		chain.register(TransformPhase.COREMOD, compat);
@@ -75,7 +76,7 @@ class MergedBaseRepairClaimsStagedTest {
 
 	@Test
 	void whenOneRepairDeclinesTheLedgerNamesExactlyThatClaim() throws Exception {
-		assumeTrue(JARS.stream().allMatch(Files::isRegularFile), "staged merged base or carriers absent");
+		TestFixtures.require(Fixture.STAGED, JARS.stream().allMatch(Files::isRegularFile), "staged merged base or carriers absent");
 		TransformChain chain = new TransformChain();
 		ForbricMergedBaseCompatTransformer compat = new ForbricMergedBaseCompatTransformer(MergedBaseRepairClaimsStagedTest::bytesOf);
 		chain.register(TransformPhase.COREMOD, compat);

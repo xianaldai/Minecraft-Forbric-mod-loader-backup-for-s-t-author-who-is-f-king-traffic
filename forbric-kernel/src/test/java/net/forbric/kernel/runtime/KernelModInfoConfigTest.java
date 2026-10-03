@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
@@ -46,6 +45,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import net.forbric.api.DiscoveredMod;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.discovery.ForbricModDiscoverer;
 import net.forbric.kernel.metadata.forge.FmlConfigElements;
 
@@ -60,7 +61,7 @@ import net.forbric.kernel.metadata.forge.FmlConfigElements;
  * off {@code getConfig()}, and got a mod that declared none.
  */
 class KernelModInfoConfigTest {
-	private static final Path STAGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run");
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path NEC = Path.of("build/compat-inputs/sweep90/mods/notenoughcrashes-neoforge-4.4.9+26.2.jar");
 	private static final Path PUZZLES = Path.of("run/client-popular/mods/PuzzlesLib-v26.2.4-mc26.2.x-NeoForge.jar");
 
@@ -79,7 +80,7 @@ class KernelModInfoConfigTest {
 	 */
 	@Test
 	void notEnoughCrashesDescribesAKernelModAsNeoForgeLetsIt() throws Exception {
-		assumeTrue(Files.isRegularFile(NEC), "the sweep's Not Enough Crashes jar is not here");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(NEC), "the sweep's Not Enough Crashes jar is not here");
 		DiscoveredMod declared = new ForbricModDiscoverer().discoverJar(NEC).get(0);
 		try (URLClassLoader runtime = runtimeLoader(); URLClassLoader nec = new URLClassLoader(new URL[] {NEC.toUri().toURL()}, runtime)) {
 			Method toCommon = Class.forName("fudge.notenoughcrashes.forge.platform.ForgePlatform", true, nec)
@@ -101,10 +102,10 @@ class KernelModInfoConfigTest {
 	/** Puzzles Lib's own {@code NeoForgeModContainer} on a kernel mod info built from its real jar. */
 	@Test
 	void puzzlesLibReadsItsAuthorsAndHomepage() throws Exception {
-		assumeTrue(Files.isRegularFile(PUZZLES), "the popular pack's Puzzles Lib jar is not here");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(PUZZLES), "the popular pack's Puzzles Lib jar is not here");
 		DiscoveredMod declared = new ForbricModDiscoverer().discoverJar(PUZZLES).get(0);
 		Path guava = KernelForgeModInfoTest.newestUnder("com/google/guava/guava");
-		assumeTrue(guava != null, "no Guava in the local Minecraft library tree");
+		TestFixtures.require(Fixture.MC_LIBRARIES, guava != null, "no Guava in the local Minecraft library tree");
 		try (URLClassLoader runtime = runtimeLoader();
 				URLClassLoader puzzles = new URLClassLoader(new URL[] {PUZZLES.toUri().toURL(), guava.toUri().toURL()}, runtime)) {
 			Class<?> iModInfo = Class.forName("net.neoforged.neoforgespi.language.IModInfo", false, runtime);
@@ -239,7 +240,8 @@ class KernelModInfoConfigTest {
 	private static URLClassLoader runtimeLoader() throws Exception {
 		Path compiled = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
 		Path carrier = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
-		assumeTrue(Files.isDirectory(compiled) && Files.isRegularFile(carrier), "staged runtime classes/carrier absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "staged carrier absent");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "staged runtime classes absent");
 		List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), carrier.toUri().toURL()));
 		return new URLClassLoader(urls.toArray(new URL[0]), KernelModInfoConfigTest.class.getClassLoader());
 	}

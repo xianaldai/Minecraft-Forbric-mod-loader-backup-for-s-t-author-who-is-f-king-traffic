@@ -66,7 +66,8 @@ class KernelEventSubscribersTest {
 		// The loop consults it: a bytecode pin, since registerAll needs a live game loader to drive.
 		java.nio.file.Path compiled = java.nio.file.Path.of(System.getProperty("user.dir"), "build", "classes", "java", "main",
 				"net", "forbric", "kernel", "boot", "KernelEventSubscribers.class");
-		org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.isRegularFile(compiled));
+		assertTrue(java.nio.file.Files.isRegularFile(compiled),
+				"KernelEventSubscribers not found in the compiled src/main classes, which exist before any test runs");
 		org.objectweb.asm.tree.ClassNode node = new org.objectweb.asm.tree.ClassNode();
 		new org.objectweb.asm.ClassReader(java.nio.file.Files.readAllBytes(compiled)).accept(node, 0);
 		boolean asked = false;

@@ -132,6 +132,7 @@ public final class FabricModDiscovery {
 					}
 				} catch (Exception failed) {
 					ForbricLog.warn("[Forbric/Fabric] could not read selected candidate %s: %s", node.path(), String.valueOf(failed));
+					recordUnreadable(node.path(), failed);
 				}
 				visited.add(node.path()); iterator.remove(); progress = true;
 			}
@@ -141,6 +142,18 @@ public final class FabricModDiscovery {
 				break;
 			}
 		}
+	}
+
+	/**
+	 * A fabric.mod.json that would not parse used to cost its mod with one WARN line and nothing on any report. An
+	 * unreadable zip is not recorded: that is not a metadata problem, and nothing in it could be named.
+	 */
+	private static void recordUnreadable(Path jar, Exception error) {
+		if (error instanceof IOException) return;
+		String message = error.getMessage();
+		net.forbric.kernel.discovery.MetadataFailures.record(new net.forbric.kernel.discovery.MetadataFailures.Failure(
+				jar, net.forbric.api.Ecosystem.FABRIC, MANIFEST, List.of(),
+				message == null || message.isBlank() ? error.getClass().getSimpleName() : message.strip()));
 	}
 
 	/** Reads one jar; if it is a Fabric mod, registers it and recurses into its nested jars. */
@@ -156,6 +169,7 @@ public final class FabricModDiscovery {
 			}
 		} catch (Exception e) {
 			ForbricLog.warn("[Forbric/Fabric] could not read %s: %s", jar.getFileName(), String.valueOf(e));
+			recordUnreadable(jar, e);
 			return;
 		}
 

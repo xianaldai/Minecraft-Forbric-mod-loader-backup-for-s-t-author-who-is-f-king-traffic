@@ -19,14 +19,9 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -36,6 +31,9 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * The lookup that used to kill the client over a Fabric mod adding a reload listener the way Fabric mods do.
  *
@@ -44,9 +42,7 @@ import org.objectweb.asm.tree.MethodNode;
  * class's point is that the listener still runs.
  */
 class MergedBaseClientReloadNamesTest {
-	private static final Path NEO_CARRIER =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "neoforge-runtime",
-					"neoforge-runtime.jar").normalize();
+	private static final Path NEO_CARRIER = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final String ENTRY = "net/neoforged/neoforge/client/event/AddClientReloadListenersEvent.class";
 	private static final String BINARY = "net.neoforged.neoforge.client.event.AddClientReloadListenersEvent";
 	private static final String KERNEL = "net/forbric/kernel/runtime/KernelClientReloadNames";
@@ -105,13 +101,6 @@ class MergedBaseClientReloadNamesTest {
 	}
 
 	private static byte[] original() throws IOException {
-		assumeTrue(Files.isRegularFile(NEO_CARRIER), "staged NeoForge carrier absent");
-		try (ZipFile zip = new ZipFile(NEO_CARRIER.toFile())) {
-			ZipEntry entry = zip.getEntry(ENTRY);
-			assumeTrue(entry != null, "AddClientReloadListenersEvent absent from this carrier");
-			try (InputStream in = zip.getInputStream(entry)) {
-				return in.readAllBytes();
-			}
-		}
+		return TestFixtures.requireEntry(Fixture.STAGED, NEO_CARRIER, ENTRY);
 	}
 }

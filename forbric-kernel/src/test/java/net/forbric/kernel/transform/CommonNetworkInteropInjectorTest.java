@@ -22,7 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -46,15 +45,16 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * The once-per-configuration-phase guard on NeoForge's {@code initializeOtherConnection} call sites in the client
  * configuration listener: an unguarded site gets {@code initializedConnection} checked in front of its
  * {@code isOther} test, a site NeoForge already guards is left alone, and the real merged class still verifies.
  */
 class CommonNetworkInteropInjectorTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String LISTENER = "net/minecraft/client/multiplayer/ClientConfigurationPacketListenerImpl";
 	private static final String LISTENER_NAME = LISTENER.replace('/', '.');
 	private static final String CONNECTION_TYPE = "net/neoforged/neoforge/network/connection/ConnectionType";
@@ -90,7 +90,7 @@ class CommonNetworkInteropInjectorTest {
 
 	@Test
 	void theRealMergedListenerGetsExactlyTwoNewGuardsAndVerifies() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] in = readClass(LISTENER + ".class");
 		ClassNode before = parse(in);
 		byte[] out = new CommonNetworkInteropInjector().transform(LISTENER_NAME, in, null);
@@ -125,8 +125,7 @@ class CommonNetworkInteropInjectorTest {
 
 	/** NeoForge's own guard: {@code runConnectionInitialization} consults {@code isConnectionInitialized}. */
 	private static boolean neoForgeGuardsInitialisationItself() throws Exception {
-		java.nio.file.Path carrier = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-				"neoforge-runtime", "neoforge-runtime.jar").normalize();
+		java.nio.file.Path carrier = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
 		if (!Files.isRegularFile(carrier)) return true; // nothing staged to contradict it
 		try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(carrier.toFile())) {
 			java.util.zip.ZipEntry e = zip.getEntry(
@@ -160,7 +159,7 @@ class CommonNetworkInteropInjectorTest {
 	 */
 	@Test
 	void thePlayServerHandlerFallsThroughToNeoForge() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		// The rewrite is behind a switch that defaults OFF — see playFallThroughEnabled for why — so the test
 		// turns it on for itself. What is asserted is the SHAPE of the rewrite when it does run, which is what a
 		// future edit could break without anyone noticing.
@@ -230,7 +229,7 @@ class CommonNetworkInteropInjectorTest {
 
 	@Test
 	void theMergedConnectionStartsForgesNetworkingWhenItGoesActive() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		String connection = "net/minecraft/network/Connection";
 		ClassNode node = transformed(connection);
 		MethodNode active = method(node, "channelActive", "(Lio/netty/channel/ChannelHandlerContext;)V");
@@ -253,7 +252,7 @@ class CommonNetworkInteropInjectorTest {
 
 	@Test
 	void theMergedServerGathersForgesConfigurationTasksAfterNeoForges() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		ClassNode node = transformed("net/minecraft/server/network/ServerConfigurationPacketListenerImpl");
 		MethodNode run = method(node, "runConfiguration", "()V");
 
@@ -272,7 +271,7 @@ class CommonNetworkInteropInjectorTest {
 
 	@Test
 	void configurationTasksStartThroughForgesContextInstead() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		ClassNode node = transformed("net/minecraft/server/network/ServerConfigurationPacketListenerImpl");
 		MethodNode start = method(node, "startNextTask", "()V");
 
@@ -303,7 +302,7 @@ class CommonNetworkInteropInjectorTest {
 
 	@Test
 	void theClientRunsForgesConfigurationCompleteBeforeItEntersPlay() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		ClassNode node = transformed("net/minecraft/client/multiplayer/ClientConfigurationPacketListenerImpl");
 		MethodNode finished = method(node, "handleConfigurationFinished",
 				"(Lnet/minecraft/network/protocol/configuration/ClientboundFinishConfigurationPacket;)V");
@@ -332,7 +331,7 @@ class CommonNetworkInteropInjectorTest {
 	 */
 	@Test
 	void everyHookSplicedIntoTheRealListenersResolves() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		for (String entry : List.of(
 				"net/minecraft/network/Connection",
 				"net/minecraft/server/network/ServerConfigurationPacketListenerImpl",

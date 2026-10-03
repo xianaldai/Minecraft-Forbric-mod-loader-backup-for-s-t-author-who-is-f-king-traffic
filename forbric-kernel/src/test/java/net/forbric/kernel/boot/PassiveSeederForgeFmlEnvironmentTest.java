@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.net.URL;
@@ -30,6 +29,7 @@ import java.nio.file.Path;
 
 import net.forbric.api.Side;
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -54,8 +54,8 @@ import org.objectweb.asm.Opcodes;
  * <p>Self-skips when the carrier is not staged.
  */
 class PassiveSeederForgeFmlEnvironmentTest {
-	private static final Path FORGE_RUNTIME = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"),
-			"forge-runtime", "forge-runtime.jar").toAbsolutePath().normalize();
+	private static final Path FORGE_RUNTIME = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar")
+			.toAbsolutePath().normalize();
 
 	@TempDir
 	Path tmp;
@@ -114,7 +114,8 @@ class PassiveSeederForgeFmlEnvironmentTest {
 		ClassLoader cl = forgeLoader();
 		PassiveSeeder.seedForgeFmlLoader(cl, tmp, Side.CLIENT);
 
-		assumeTrue(!Files.isRegularFile(tmp.resolve("config").resolve("fml.toml")),
+		// This loader never carries what the tail needs, so a finished seed means the carrier changed under the test.
+		assertFalse(Files.isRegularFile(tmp.resolve("config").resolve("fml.toml")),
 				"the full seed succeeded here, so there is no partial failure to check");
 		assertFalse(PassiveSeeder.forgeIdentitySeeded(),
 				"the tail of the seed failed, so the next call must retry it — arming the guard here would make "
@@ -158,7 +159,7 @@ class PassiveSeederForgeFmlEnvironmentTest {
 	 * {@code com.mojang.logging} without shipping them; empty stand-ins satisfy the static initializers.
 	 */
 	private ClassLoader forgeLoader() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE_RUNTIME),
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE_RUNTIME),
 				"staged forge-runtime.jar absent — skipping the real-bytecode FMLEnvironment check");
 		Path stubs = Files.createDirectories(tmp.resolve("stubs"));
 		writeClass(stubs, "org/slf4j/Logger", emptyInterface("org/slf4j/Logger"));
@@ -169,11 +170,11 @@ class PassiveSeederForgeFmlEnvironmentTest {
 		// the logging types above, except gson is far too large to stand in for. Taken from the Minecraft library
 		// tree the staged artifacts came from, and skipped when that tree is not here.
 		Path gson = newestGson();
-		assumeTrue(gson != null, "gson absent from the Minecraft library tree — skipping");
+		TestFixtures.require(Fixture.MC_LIBRARIES, gson != null, "gson absent from the Minecraft library tree — skipping");
 		ClassLoader cl = new URLClassLoader(
 				new URL[] {stubs.toUri().toURL(), FORGE_RUNTIME.toUri().toURL(), gson.toUri().toURL()},
 				ClassLoader.getPlatformClassLoader());
-		assumeTrue(hasFmlEnvironment(cl), "this carrier has no MinecraftForge FMLEnvironment");
+		assertTrue(hasFmlEnvironment(cl), "this carrier has no MinecraftForge FMLEnvironment");
 		return cl;
 	}
 

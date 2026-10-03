@@ -23,7 +23,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -39,6 +38,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 
 /** Exercises the runtime API through reflection without adding the game-side source set to the test classpath. */
@@ -182,7 +183,7 @@ class ForgeClientReloadCaptureTest {
 	private static RuntimeApi runtime() throws Exception {
 		Path compiled = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
 		String binary = "net.forbric.kernel.runtime.ForgeClientReloadCapture";
-		assumeTrue(Files.isRegularFile(compiled.resolve(binary.replace('.', '/') + ".class")),
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled.resolve(binary.replace('.', '/') + ".class")),
 				"runtime capture class has not been compiled");
 		URLClassLoader loader = new URLClassLoader(new URL[] {compiled.toUri().toURL()},
 				ClassLoader.getPlatformClassLoader());

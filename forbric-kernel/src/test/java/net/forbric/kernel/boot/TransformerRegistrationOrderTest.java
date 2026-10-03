@@ -2,7 +2,6 @@ package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,7 +41,8 @@ class TransformerRegistrationOrderTest {
 	private static List<String> transformerConstructionOrder() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "main",
 				"net", "forbric", "kernel", "boot", "KernelBoot.class");
-		assumeTrue(Files.isRegularFile(compiled), "KernelBoot not compiled yet");
+		assertTrue(Files.isRegularFile(compiled),
+				"KernelBoot not found in the compiled src/main classes, which exist before any test runs");
 		ClassNode cn = new ClassNode();
 		new ClassReader(Files.readAllBytes(compiled)).accept(cn, ClassReader.SKIP_FRAMES | ClassReader.SKIP_DEBUG);
 		List<String> order = new ArrayList<>();
@@ -71,7 +71,7 @@ class TransformerRegistrationOrderTest {
 	@Test
 	void theLoaderProbeRewriterIsStillTheFirstTransformerConstructed() throws Exception {
 		List<String> order = transformerConstructionOrder();
-		assumeTrue(!order.isEmpty(), "no transformers found — launch() did not compile the way this expects");
+		assertTrue(!order.isEmpty(), "no transformers found — launch() did not compile the way this expects");
 		// "Registered first in the phase: it rewrites only Class.forName call sites, so nothing later in the
 		// chain can be looking at what it edits." Anything registered ahead of it can.
 		assertEquals("net/forbric/kernel/transform/LoaderProbeRewriter", order.get(0),
@@ -84,7 +84,9 @@ class TransformerRegistrationOrderTest {
 		List<String> order = transformerConstructionOrder();
 		int composition = order.indexOf("net/forbric/kernel/transform/ForgeCapabilityCompositionTransformer");
 		int compat = order.indexOf("net/forbric/kernel/transform/ForbricMergedBaseCompatTransformer");
-		assumeTrue(composition >= 0 && compat >= 0, "one of the two is no longer constructed in launch()");
+		// Both are src/main and constructed by every launch() today; retiring one retires this test with it.
+		assertTrue(composition >= 0 && compat >= 0,
+				"one of the two is no longer constructed in launch(). Full order: " + order);
 		// The compat transformer's addTheMissingCapabilityLifecycleStubs stands down when composition has
 		// already run. Reversed, it adds bare-return stubs the composition then has to work around, and its own
 		// claim ledger records a repair that did nothing useful.
@@ -96,7 +98,7 @@ class TransformerRegistrationOrderTest {
 	@Test
 	void eachMultipartRepairIsConstructedExactlyOnce() throws Exception {
 		List<String> order = transformerConstructionOrder();
-		assumeTrue(!order.isEmpty(), "no transformers found — launch() did not compile the way this expects");
+		assertTrue(!order.isEmpty(), "no transformers found — launch() did not compile the way this expects");
 		// These registrations are the whole fix: without the client part tracking a NeoForge mod's multipart entity
 		// disconnects the client on sight, and without the Forge part tracking a MinecraftForge one throws in the
 		// server's tracking callbacks and the server cannot stop. Each repair's own test constructs it directly, so a

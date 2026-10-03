@@ -13,8 +13,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.BiPredicate;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -27,7 +28,8 @@ class KernelShearsTest {
 	@BeforeEach void load() throws Exception {
 		String extras = System.getProperty("forbric.mixinExtrasForTests", "");
 		Path runtime = Path.of(System.getProperty("forbric.test.runtimeClasses", "build/classes/java/runtime"));
-		Assumptions.assumeTrue(!extras.isEmpty() && Files.isDirectory(runtime), "game-side classes and MixinExtras required");
+		assertFalse(extras.isEmpty(), "Gradle hands every test task MixinExtras, from nestedMods, as forbric.mixinExtrasForTests");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(runtime), "game-side classes required");
 		loader = new URLClassLoader(new URL[] { runtime.toUri().toURL(), Path.of(extras).toUri().toURL() }, ClassLoader.getPlatformClassLoader());
 		operation = loader.loadClass("com.llamalad7.mixinextras.injector.wrapoperation.Operation");
 		relay = loader.loadClass("net.forbric.kernel.runtime.KernelShears")

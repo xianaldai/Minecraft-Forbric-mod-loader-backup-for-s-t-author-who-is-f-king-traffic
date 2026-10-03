@@ -19,7 +19,6 @@ package net.forbric.kernel.mixin;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,6 +26,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.Opcodes;
@@ -47,9 +48,7 @@ import org.objectweb.asm.tree.ClassNode;
  */
 @ResourceLock("system-properties")
 class MixinMergedTwinTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").normalize();
 	private static final String TARGET = "net.minecraft.network.protocol.common.custom.CustomPacketPayload$1";
 
 	@Test
@@ -152,7 +151,7 @@ class MixinMergedTwinTest {
 
 	@Test
 	void theMergedBaseReallyCarriesTheTwinThisIsAbout() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {
 			assertNotNull(zip.getEntry(TARGET.replace('.', '/') + ".class"), "the vanilla-named half must exist");
 			assertNotNull(zip.getEntry((TARGET + MixinMergedTwin.NEO_SUFFIX).replace('.', '/') + ".class"),

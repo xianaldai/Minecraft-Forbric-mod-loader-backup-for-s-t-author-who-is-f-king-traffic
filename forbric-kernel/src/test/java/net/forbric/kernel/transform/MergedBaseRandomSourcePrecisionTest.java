@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.lang.invoke.MethodHandle;
@@ -41,6 +40,9 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Covers putting the game's random sources back in double precision.
  *
@@ -56,9 +58,7 @@ import org.objectweb.asm.tree.MethodNode;
  * generated ones, where vanilla against itself differed in 0 and 10.
  */
 class MergedBaseRandomSourcePrecisionTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final List<String> SOURCES = List.of(
 			"net/minecraft/world/level/levelgen/XoroshiroRandomSource",
 			"net/minecraft/world/level/levelgen/BitRandomSource");
@@ -69,7 +69,7 @@ class MergedBaseRandomSourcePrecisionTest {
 
 	@Test
 	void theMergedBaseScalesItsRandomBitsInFloatAndTheRepairPutsItBackInDouble() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
 		for (String source : SOURCES) {
 			byte[] before = entry(source + ".class");
 			assertTrue(scalesInFloat(read(before)), source + " no longer carries the float-rounded nextDouble() this "

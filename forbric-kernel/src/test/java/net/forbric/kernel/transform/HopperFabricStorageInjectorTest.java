@@ -12,8 +12,8 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassReader;
@@ -26,7 +26,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
 /** NeoForge's hopper asking Fabric's item storage lookup, on the real merged HopperBlockEntity. */
 @ResourceLock("system-properties")
 class HopperFabricStorageInjectorTest {
-	private static final Path STAGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"));
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path NEO = STAGED.resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
 	private static final Path FORGE = STAGED.resolve("forge-patched/patched-mc-forge-26.2.jar");
@@ -43,7 +43,7 @@ class HopperFabricStorageInjectorTest {
 		assertEquals(0, calls(eject, HOPPER, "getAttachedContainer"));
 		assertEquals(1, calls(suck, HOPPER, "getSourceContainerOrHandler"));
 		assertEquals(0, calls(suck, HOPPER, "getSourceContainer"));
-		Assumptions.assumeTrue(Files.isRegularFile(FABRIC_API), "the pack's fabric-api is absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(FABRIC_API), "the pack's fabric-api is absent");
 		byte[] mixin = nested(FABRIC_API, "fabric-transfer-api-v1", "net/fabricmc/fabric/mixin/transfer/HopperBlockEntityMixin.class");
 		assertNotNull(mixin);
 		List<String> targets = new ArrayList<>();

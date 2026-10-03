@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -51,22 +50,23 @@ import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Pins the one javac switch map the merge lost, the census that says it is the only one, and the mapping read
  * off MinecraftForge's own holder class.
  */
 class MergedBaseLostSwitchMapTest {
-	private static final Path MERGED_BASE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
-	private static final Path FORGE_PATCHED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"forge-patched", "patched-mc-forge-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path FORGE_PATCHED = TestFixtures.stagedRoot().resolve("forge-patched/patched-mc-forge-26.2.jar");
 	private static final ForbricMergedBaseCompatTransformer.LostSwitchMap FURNACE =
 			ForbricMergedBaseCompatTransformer.LOST_SWITCH_MAPS.get(0);
 
 	/** Across the WHOLE merged base: every {@code $SwitchMap$} read whose holder no longer declares the field. */
 	@Test
 	void theCensusOfLostSwitchMapsIsExactlyTheTable() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		Map<String, String> lost = new TreeMap<>();    // "holder.field" -> user
 		try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {
 			for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
@@ -99,7 +99,7 @@ class MergedBaseLostSwitchMapTest {
 	/** The case numbering is javac's and lives only in MinecraftForge's holder class; read it back from there. */
 	@Test
 	void theMappingMatchesMinecraftForgesOwnHolderClass() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE_PATCHED), "Forge-patched base absent (dev-only pin)");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE_PATCHED), "Forge-patched base absent (dev-only pin)");
 		ClassNode holder = parse(bytesOf(FORGE_PATCHED, FURNACE.holder()));
 		MethodNode clinit = holder.methods.stream().filter(m -> "<clinit>".equals(m.name)).findFirst().orElseThrow();
 		Map<Integer, String> mapping = new TreeMap<>();
@@ -220,7 +220,7 @@ class MergedBaseLostSwitchMapTest {
 	}
 
 	private static byte[] bytesOf(Path jar, String internal) throws Exception {
-		assumeTrue(Files.isRegularFile(jar), "staged jar absent: " + jar);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged jar absent: " + jar);
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ZipEntry entry = zip.getEntry(internal + ".class");
 			assertNotNull(entry, internal);

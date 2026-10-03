@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -43,9 +42,12 @@ import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /** Both carriers' LootModifierManager after the repair: NeoForge's synthesized prepare, MinecraftForge's wrapped one. */
 class MergedBaseLootModifierIndexTest {
-	private static final Path RUN = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path RUN = TestFixtures.stagedRoot();
 	private static final Path FORGE_RT = RUN.resolve("forge-runtime/forge-runtime.jar");
 	private static final Path NEO_RT = RUN.resolve("neoforge-runtime/neoforge-runtime.jar");
 
@@ -112,7 +114,7 @@ class MergedBaseLootModifierIndexTest {
 	}
 
 	private static byte[] bytesOf(Path jar, String internal) throws Exception {
-		assumeTrue(Files.isRegularFile(jar), "staged carrier absent: " + jar);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged carrier absent: " + jar);
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ZipEntry entry = zip.getEntry(internal + ".class");
 			assertNotNull(entry, internal);

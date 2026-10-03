@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -37,14 +36,16 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /** The merged FeatureFlags.<clinit> calls NeoForge's modded-flag loader once; after the repair it calls the kernel's. */
 class MergedBaseFeatureFlagsTest {
-	private static final Path MERGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-			"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	@Test
 	void theModdedFlagLoaderCallIsSentToTheKernel() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "staged merged base absent");
 		byte[] original;
 		try (ZipFile zip = new ZipFile(MERGED.toFile())) {
 			ZipEntry entry = zip.getEntry(ForbricMergedBaseCompatTransformer.FEATURE_FLAGS + ".class");

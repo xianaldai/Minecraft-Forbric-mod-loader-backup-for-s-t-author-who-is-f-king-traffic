@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -45,6 +44,9 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Lowering an atlas's mip level to fit its smallest sprite is vanilla behaviour. MinecraftForge patches
  * {@code SpriteLoader.stitch} to gate it on {@code ForgeConfig.CLIENT.allowMipmapLowering()}, whose default is
@@ -57,15 +59,13 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  */
 @ResourceLock("system-properties")
 class MergedBaseMipmapLoweringTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String SPRITE_LOADER = "net/minecraft/client/renderer/texture/SpriteLoader";
 	private static final String FORGE_CLIENT = "net/minecraftforge/common/ForgeConfig$Client";
 
 	@Test
 	void theRealMergedBaseHasTheGateAndLosesItAndStaysVerifiable() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		ClassNode before = parse(readClass(SPRITE_LOADER + ".class"));
 		assertEquals(1, gateCount(before),
 				"the merged base must still carry MinecraftForge's opt-in gate — if it stopped, re-derive this test");

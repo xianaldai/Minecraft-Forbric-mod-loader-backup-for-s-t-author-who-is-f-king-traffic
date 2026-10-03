@@ -143,6 +143,7 @@ public final class KernelBoot {
 	 */
 	public static void launch(Side side, String[] args) throws Throwable {
 		net.forbric.api.CompatibilityFindings.reset();
+		net.forbric.kernel.discovery.MetadataFailures.reset();
 		net.forbric.kernel.ui.CompatibilityDecision.reset();
 		net.forbric.kernel.mixin.MixinCompatibility.reset();
 		List<URL> owned = new ArrayList<>();
@@ -201,6 +202,10 @@ public final class KernelBoot {
 
 		Path gameDir = extractGameDir(gameArgs, side.stripGameDir);
 		String gameVersion = detectGameVersion(gameJar);
+
+		// After a crash the last run attributed, offer to start without its suspects. Here, before arbitration,
+		// because "start without" is a line in forbric-disabled.txt and arbitration is what reads that file.
+		if (!CrashSuspectOffer.run(gameDir, side == Side.CLIENT)) return;
 
 		// Two separate jars can declare the SAME mod id — inevitable the moment a Fabric pack and a NeoForge pack
 		// are merged. MultiLoaderArbiter cannot see that (it is keyed by jar path), and left alone both jars enter
@@ -284,6 +289,9 @@ public final class KernelBoot {
 		// registered: every mod adding blocks to a block entity type got a ClassCastException from NeoForge itself
 		// (tofucraft on the popular pack). The genuine loader registers it like any mod's.
 		forgeMixinDecls.addAll(discoverForgeMixinConfigs(runtimeJars, "runtime jar"));
+		// Every jar has been read and has an owner. A manifest that could not be read cost that jar alone; say
+		// which, at the same weight as any other mod that did not load (see MetadataFailures).
+		net.forbric.kernel.discovery.MetadataFailures.recordFindings(MultiLoaderArbiter::ownerOf, runtimeJars);
 
 		// Fabric mods (+ extracted JiJ children). Also Mojmap on this game version. Creates the FabricLoader.
 		List<Path> fabricJars = KernelFabricEcosystem.build(fabricScan, side.envType, gameDir, gameVersion,
@@ -1070,6 +1078,10 @@ public final class KernelBoot {
 		PassiveSeeder.seedAll(loader, gameDir, side.api());
 		FabricApiModuleLossAudit.report(side.api());
 		FieldDriftAudit.report();
+		// After Mixin has read every config (on registration, in KernelMixinBootstrap.init) and the adapter has dropped
+		// what it drops from them: the lint reads each config as Mixin was served it, so a mixin the kernel removed is not
+		// half of an overlap. Before writeEvidence, so its findings are in the first report.
+		net.forbric.kernel.mixin.MixinOverlapLint.reportRegistered();
 		AbiLinkAudit.report();
 		// Evidence, not the end of loading: no mod has initialised yet, so this boundary may name what already
 		// failed but must not be the one that says every mod finished loading.
@@ -1501,7 +1513,7 @@ public final class KernelBoot {
 	 * to one boolean. Nothing else on the boot path ever reads Forge-family metadata again (the {@code @Mod} pass is
 	 * a separate ASM scan that never opens a manifest), so that was the only place they could be captured.
 	 */
-	private record ForgeFamilyMods(List<Path> jars, List<KernelForgeFamilyMixins.ForgeMixinConfig> mixinConfigs) {
+	record ForgeFamilyMods(List<Path> jars, List<KernelForgeFamilyMixins.ForgeMixinConfig> mixinConfigs) {
 	}
 
 	/** The mixin configs declared by JarJar-extracted nested jars. Same pass, applied to the children. */
@@ -1522,8 +1534,8 @@ public final class KernelBoot {
 		for (Path jar : jars) {
 			try {
 				collectForgeFamily(discoverer, jar, ignored, configs);
-			} catch (IOException e) {
-				ForbricLog.warn("could not inspect %s %s: %s", what, jar.getFileName(), e.getMessage());
+			} catch (IOException | RuntimeException e) {
+				ForbricLog.warn("could not inspect %s %s: %s", what, jar.getFileName(), String.valueOf(e));
 			}
 		}
 		return configs;
@@ -1543,7 +1555,7 @@ public final class KernelBoot {
 		return urls;
 	}
 
-	private static ForgeFamilyMods discoverForgeFamilyModJars(Path modsDir,
+	static ForgeFamilyMods discoverForgeFamilyModJars(Path modsDir,
 			DuplicateModArbiter.Decision dupes) {
 		List<Path> jars = new ArrayList<>();
 		List<KernelForgeFamilyMixins.ForgeMixinConfig> configs = new ArrayList<>();
@@ -1560,10 +1572,12 @@ public final class KernelBoot {
 					ForbricLog.debug("[Forbric/DupeId] skipping Forge-family jar %s — superseded", jar.getFileName());
 					continue;
 				}
+				// One jar's problem stays that jar's: anything it throws costs it, not the boot. A manifest that
+				// cannot be read does not even get here — discovery records it in MetadataFailures.
 				try {
 					collectForgeFamily(discoverer, jar, jars, configs);
-				} catch (IOException e) {
-					ForbricLog.warn("could not inspect mod jar %s: %s", jar.getFileName(), e.getMessage());
+				} catch (IOException | RuntimeException e) {
+					ForbricLog.warn("could not inspect mod jar %s: %s", jar.getFileName(), String.valueOf(e));
 				}
 			}
 		} catch (IOException e) {
@@ -1588,6 +1602,8 @@ public final class KernelBoot {
 				var entry = zip.getJarEntry(family == Ecosystem.NEOFORGE ? "META-INF/neoforge.mods.toml" : "META-INF/mods.toml");
 				if (entry != null) try (var in = zip.getInputStream(entry)) {
 					tomls.put(family, net.forbric.kernel.metadata.forge.ModsTomlParser.parse(in));
+				} catch (RuntimeException unreadable) {
+					// Discovery below records this manifest's failure and yields no mods for its family.
 				}
 			}
 		}

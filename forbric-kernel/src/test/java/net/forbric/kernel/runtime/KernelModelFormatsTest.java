@@ -19,9 +19,9 @@ package net.forbric.kernel.runtime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -39,6 +39,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -62,8 +63,7 @@ import net.forbric.kernel.transform.ModelFormatFunnelInjector;
  */
 @org.junit.jupiter.api.parallel.ResourceLock("system-properties")
 class KernelModelFormatsTest {
-	private static final Path STAGED =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path MERGED_BASE = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path NEO_CARRIER = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
 	/** The merged base names MinecraftForge types in signatures, so reflecting on it needs this carrier too. */
@@ -236,11 +236,11 @@ class KernelModelFormatsTest {
 	}
 
 	private Game game(boolean funnelled, boolean fabricApi) throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE) && Files.isRegularFile(NEO_CARRIER)
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE) && Files.isRegularFile(NEO_CARRIER)
 				&& Files.isRegularFile(FORGE_CARRIER), "staged game jars absent");
-		assumeTrue(Files.isDirectory(RUNTIME.resolve("net/forbric/kernel/runtime")), "game side not compiled");
-		assumeTrue(Files.isRegularFile(FABRIC_API), "staged fabric-api absent at " + FABRIC_API);
-		byte[] shipped = entry(NEO_CARRIER, TARGET + ".class");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(RUNTIME.resolve("net/forbric/kernel/runtime")), "game side not compiled");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(FABRIC_API), "staged fabric-api absent at " + FABRIC_API);
+		byte[] shipped = TestFixtures.requireEntry(Fixture.STAGED, NEO_CARRIER, TARGET + ".class");
 		byte[] bytes = funnelled ? new ModelFormatFunnelInjector().transform(DESERIALIZER, shipped, null) : shipped;
 
 		List<URL> urls = new ArrayList<>(List.of(RUNTIME.toUri().toURL(), MERGED_BASE.toUri().toURL(),
@@ -256,7 +256,7 @@ class KernelModelFormatsTest {
 		try (ZipFile zip = new ZipFile(FABRIC_API.toFile())) {
 			ZipEntry nested = zip.stream().filter(e -> e.getName().startsWith("META-INF/jars/fabric-model-loading-api-v1-"))
 					.findFirst().orElse(null);
-			assumeTrue(nested != null, "this fabric-api does not nest fabric-model-loading-api-v1");
+			assertNotNull(nested, "content drift: " + FABRIC_API + " does not nest fabric-model-loading-api-v1");
 			try (InputStream in = zip.getInputStream(nested)) {
 				Files.copy(in, out);
 			}
@@ -266,7 +266,7 @@ class KernelModelFormatsTest {
 
 	private static List<URL> minecraftLibraries() throws IOException {
 		Path version = MC.resolve("versions/26.2/26.2.json");
-		assumeTrue(Files.isRegularFile(version), "Minecraft 26.2 version json absent");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(version), "Minecraft 26.2 version json absent");
 		var json = com.electronwill.nightconfig.json.JsonFormat.fancyInstance().createParser()
 				.parse(Files.newBufferedReader(version));
 		List<URL> urls = new ArrayList<>();
@@ -278,16 +278,6 @@ class KernelModelFormatsTest {
 			}
 		}
 		return urls;
-	}
-
-	private static byte[] entry(Path jar, String name) throws IOException {
-		try (ZipFile zip = new ZipFile(jar.toFile())) {
-			ZipEntry entry = zip.getEntry(name);
-			assumeTrue(entry != null, name + " absent from " + jar);
-			try (InputStream in = zip.getInputStream(entry)) {
-				return in.readAllBytes();
-			}
-		}
 	}
 
 	/** Parent-first everywhere except NeoForge's deserializer, which is defined from the bytes under test. */

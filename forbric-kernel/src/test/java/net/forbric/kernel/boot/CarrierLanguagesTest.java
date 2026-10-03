@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -33,6 +32,8 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
@@ -164,7 +165,7 @@ class CarrierLanguagesTest {
 	void everyCarriersLoaderAndTableAreWhereTheTableSaysTheyAre() throws IOException {
 		Path neoforge = staged("neoforge-runtime", "neoforge-runtime.jar");
 		Path forge = staged("forge-runtime", "forge-runtime.jar");
-		assumeTrue(Files.isRegularFile(neoforge) && Files.isRegularFile(forge),
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(neoforge) && Files.isRegularFile(forge),
 				"staged carriers absent: " + neoforge + " / " + forge);
 
 		List<String> wrong = new ArrayList<>();
@@ -187,7 +188,7 @@ class CarrierLanguagesTest {
 	}
 
 	private static Path staged(String dir, String jar) {
-		return Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", dir, jar).normalize();
+		return TestFixtures.stagedRoot().resolve(dir).resolve(jar).normalize();
 	}
 
 	private static boolean hasMethod(Path jar, String binary, String name, String descriptor) throws IOException {

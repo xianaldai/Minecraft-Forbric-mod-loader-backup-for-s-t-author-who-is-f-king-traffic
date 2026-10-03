@@ -96,9 +96,17 @@ public final class ForgeMetadataMapper {
 			List<UnifiedDependency> deps = new ArrayList<>();
 
 			for (ForgeDependency dep : mod.getDependencies()) {
+				String predicate;
+				try {
+					predicate = ForgeVersionRangeTranslator.toFabricPredicate(dep.getVersionRange());
+				} catch (IllegalArgumentException malformed) {
+					// Stays an error — FML rejects the same range — but one that names whose range it is.
+					throw new IllegalArgumentException("dependency " + dep.getModId() + " of " + mod.getModId()
+							+ ": " + malformed.getMessage(), malformed);
+				}
 				deps.add(new UnifiedDependency(
 						dep.getModId(),
-						ForgeVersionRangeTranslator.toFabricPredicate(dep.getVersionRange()),
+						predicate,
 						dep.isMandatory(),
 						dep.getOrdering(),
 						dep.getSideScope()));

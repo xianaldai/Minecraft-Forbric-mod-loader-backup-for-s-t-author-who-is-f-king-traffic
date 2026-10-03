@@ -54,6 +54,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  * text: no instance at all, an instance whose options are not built, and an instance whose options ARE built —
  * the last one still has to throw, or the repair has traded one silent failure for another.
  */
+@ExecutesInjector(EarlyKeyMappingRegistrationInjector.class)
 @org.junit.jupiter.api.parallel.ResourceLock("system-properties")
 class EarlyKeyMappingRegistrationInjectorTest {
 	private static final String IMPL = "net.fabricmc.fabric.impl.client.keymapping.KeyMappingRegistryImpl";

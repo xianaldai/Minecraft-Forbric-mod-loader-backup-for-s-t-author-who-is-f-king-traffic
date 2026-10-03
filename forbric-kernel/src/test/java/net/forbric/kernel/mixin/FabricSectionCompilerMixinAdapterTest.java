@@ -3,6 +3,7 @@ package net.forbric.kernel.mixin;
 import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.api.parallel.Resources;
@@ -17,9 +18,8 @@ class FabricSectionCompilerMixinAdapterTest {
 	}
 
 	private ClassNode target(boolean vanilla) throws Exception {
-		var path = vanilla ? TestFixtures.vanillaJar()
-				: java.nio.file.Path.of(System.getProperty("forbric.stagedRoot"), "merged-base/patched-mc-merged-26.2.jar");
-		org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.isRegularFile(path));
+		var path = vanilla ? TestFixtures.vanillaJar() : TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+		TestFixtures.require(vanilla ? Fixture.MC_LIBRARIES : Fixture.STAGED, java.nio.file.Files.isRegularFile(path), path + " absent");
 		try (var zip = new java.util.zip.ZipFile(path.toFile())) {
 			ClassNode node = new ClassNode();
 			new org.objectweb.asm.ClassReader(zip.getInputStream(zip.getEntry(FabricSectionCompilerMixinAdapter.TARGET + ".class"))).accept(node, 0);

@@ -18,15 +18,10 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -35,6 +30,9 @@ import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
+
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * The capability lifecycle methods the merged game's own code calls, against the REAL staged base.
@@ -49,9 +47,7 @@ import org.objectweb.asm.tree.MethodNode;
  * links against something that is not there.
  */
 class MergedBaseCapabilityStubsTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	private static final List<String> ROOTS = List.of(
 			"net/minecraft/world/entity/Entity",
@@ -74,7 +70,7 @@ class MergedBaseCapabilityStubsTest {
 		ClassNode before = parse(bytesOf(owner));
 
 		MethodNode unload = declared(before, "onChunkUnloaded");
-		assumeTrue(unload != null, "this base's BlockEntity has no onChunkUnloaded");
+		assertTrue(unload != null, "content drift: this base's BlockEntity has no onChunkUnloaded");
 		assertTrue(callsOwn(unload, owner, "invalidateCaps"),
 				"the premise: BlockEntity.onChunkUnloaded calls its own invalidateCaps");
 
@@ -148,13 +144,6 @@ class MergedBaseCapabilityStubsTest {
 	}
 
 	private static byte[] bytesOf(String internalName) throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
-		try (ZipFile jar = new ZipFile(MERGED_BASE.toFile())) {
-			ZipEntry entry = jar.getEntry(internalName + ".class");
-			assumeTrue(entry != null, internalName + " absent from this base");
-			try (InputStream in = jar.getInputStream(entry)) {
-				return in.readAllBytes();
-			}
-		}
+		return TestFixtures.requireEntry(Fixture.STAGED, MERGED_BASE, internalName + ".class");
 	}
 }

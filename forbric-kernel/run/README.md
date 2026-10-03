@@ -95,7 +95,11 @@ from `.dev/api/`, so what remains skipped, and listed in the report, is the thir
 Legacy `gate-m*.sh` checks are Bash integration tools with gate-specific packs, worlds and platform
 assumptions; they are not a fresh-clone smoke test. They remain runnable at their original paths, and
 `gate-m0.sh` retains its no-skips contract. CI runs the boot build plus tool checks without game files,
-and separately checks the portable tools and packaged link gate on Windows, Linux and macOS.
+and separately checks the portable tools and packaged link gate on Windows, Linux and macOS. Without game files
+about a third of the unit tests skip; CI holds that set to `src/test/skip-baseline/ci-unstaged.tsv`
+(`./gradlew check -Pforbric.skipBaseline=ci-unstaged`), so a test that starts skipping fails the job. If your
+change makes a test skip there, or stop skipping, update that file in the same commit: the failing job prints the
+`+`/`-` lines, and its `kernel-test-results` artifact holds the complete `skips-actual-ci-unstaged.tsv`.
 
 ## Repository navigation
 

@@ -1,8 +1,6 @@
 /* Copyright 2026 The Forbric Project. Licensed under the Apache License, Version 2.0. */
 package net.forbric.kernel.transform;
 
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
-
 import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,6 +10,7 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.access.ClassTweakerTransformer;
 
 /**
@@ -36,10 +35,10 @@ public final class CreativePagerFixtures {
 	public static Path find(String relative) {
 		Path here = Path.of(relative);
 		if (Files.isRegularFile(here)) return here;
-		Path staged = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run")).toAbsolutePath().normalize();
+		Path staged = TestFixtures.stagedRoot().toAbsolutePath().normalize();
 		Path checkout = staged.getParent() == null ? null : staged.getParent().getParent();
 		Path there = checkout == null ? here : checkout.resolve("forbric-kernel").resolve(relative);
-		assumeTrue(Files.isRegularFile(there), relative + " is not present beside this checkout or the staged one");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(there), relative + " is not present beside this checkout or the staged one");
 		return there;
 	}
 

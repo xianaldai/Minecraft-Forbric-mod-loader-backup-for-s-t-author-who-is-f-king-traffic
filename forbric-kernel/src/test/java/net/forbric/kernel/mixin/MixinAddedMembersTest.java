@@ -19,7 +19,6 @@ package net.forbric.kernel.mixin;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -30,6 +29,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -207,7 +208,7 @@ class MixinAddedMembersTest {
 		Path mods = Path.of(System.getProperty("user.dir"), "build", "compat-inputs", "sweep90", "mods").normalize();
 		Path moreculling = mods.resolve("moreculling-fabric-26.2-1.8.1.jar");
 		Path fabricApi = mods.resolve("fabric-api-0.161.0+26.2.jar");
-		assumeTrue(Files.isRegularFile(moreculling) && Files.isRegularFile(fabricApi), "sweep90 pack absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(moreculling) && Files.isRegularFile(fabricApi), "sweep90 pack absent");
 		Function<String, byte[]> merged = MixinFitStagedTest.rawResolver();
 
 		String cullConfig = "moreculling.fabric.mixins.json";
@@ -219,7 +220,9 @@ class MixinAddedMembersTest {
 		real.put(cullMixin, MixinFitStagedTest.readFromJar(moreculling, cullMixin));
 		real.put(rendererConfig, MixinFitStagedTest.readFromNestedJar(fabricApi, "fabric-renderer-api-v1", rendererConfig));
 		real.put(rendererMixin, MixinFitStagedTest.readFromNestedJar(fabricApi, "fabric-renderer-api-v1", rendererMixin));
-		assumeTrue(real.values().stream().allMatch(b -> b != null), "an entry is missing from the real jars");
+		// The pinned jars are here, so an entry gone from them is drift, not a missing fixture.
+		assertTrue(real.values().stream().allMatch(b -> b != null), "an entry is missing from the real jars: "
+				+ real.entrySet().stream().filter(e -> e.getValue() == null).map(Map.Entry::getKey).toList());
 		Function<String, byte[]> resource = name -> real.containsKey(name) ? real.get(name) : merged.apply(name);
 		ForbricMixinService.setGuestConfigs(List.of(rendererConfig, cullConfig));
 		// Both mixins are in their configs' client arrays, which Mixin prepares on a client only.

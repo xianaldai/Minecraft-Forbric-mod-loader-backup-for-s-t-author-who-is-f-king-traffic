@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.lang.reflect.Method;
@@ -29,6 +28,8 @@ import java.nio.file.Path;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.ClassNode;
@@ -49,14 +50,14 @@ import org.objectweb.asm.tree.MethodNode;
  * time instead.
  */
 class KernelBusSupportTest {
-	private static final Path NEOFORGE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"neoforge-runtime", "neoforge-runtime.jar").normalize();
+	private static final Path NEOFORGE =
+			TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
 
 	/** The four calls makeModBus makes, two of which fail silently if they are gone. */
 	@Test
 	void theCarrierStillOffersEveryBusBuilderCallMakeModBusMakes() throws Exception {
 		ClassNode builder = carrier("net/neoforged/bus/api/BusBuilder");
-		assumeTrue(builder != null, "staged NeoForge carrier absent");
+		assertNotNull(builder, "BusBuilder is gone from the NeoForge carrier — makeModBus cannot build a bus");
 
 		assertNotNull(method(builder, "builder"), "BusBuilder.builder() is gone — makeModBus cannot start");
 		assertNotNull(method(builder, "build"), "BusBuilder.build() is gone");
@@ -70,7 +71,6 @@ class KernelBusSupportTest {
 	/** The marker type it tags the bus with, also swallowed. */
 	@Test
 	void theModBusMarkerInterfaceStillExists() throws Exception {
-		assumeTrue(Files.isRegularFile(NEOFORGE), "staged NeoForge carrier absent");
 		assertNotNull(carrier("net/neoforged/fml/event/IModBusEvent"),
 				"IModBusEvent is gone — the mod bus would lose its marker type, silently");
 	}
@@ -98,8 +98,9 @@ class KernelBusSupportTest {
 
 	// --- helpers ------------------------------------------------------------------------------------------------
 
+	/** The class, or null when the carrier, which must be staged, no longer has it. */
 	private static ClassNode carrier(String internalName) throws Exception {
-		if (!Files.isRegularFile(NEOFORGE)) return null;
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE), "staged NeoForge carrier absent");
 		try (ZipFile zip = new ZipFile(NEOFORGE.toFile())) {
 			ZipEntry e = zip.getEntry(internalName + ".class");
 			if (e == null) return null;

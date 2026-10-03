@@ -23,7 +23,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
-import org.junit.jupiter.api.Assumptions;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Handle;
@@ -48,14 +48,14 @@ import net.forbric.api.Ecosystem;
  * Fabric, MinecraftForge's and NeoForge's patched clients plus their runtime for theirs.
  */
 class UncalledMethodCensusTest {
-	private static final String OLD = System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader");
-	private static final Path MERGED = Path.of(OLD, "run/merged-base/patched-mc-merged-26.2.jar");
-	private static final Path INTEROP = Path.of(OLD, "run/merged-base/forge-runtime-interop.jar");
-	private static final Path NEO_RUNTIME = Path.of(OLD, "run/neoforge-runtime/neoforge-runtime.jar");
-	private static final Path FORGE_RUNTIME = Path.of(OLD, "run/forge-runtime/forge-runtime.jar");
+	private static final Path STAGED = TestFixtures.stagedRoot();
+	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path INTEROP = STAGED.resolve("merged-base/forge-runtime-interop.jar");
+	private static final Path NEO_RUNTIME = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
+	private static final Path FORGE_RUNTIME = STAGED.resolve("forge-runtime/forge-runtime.jar");
 	private static final Path VANILLA = TestFixtures.vanillaJar();
-	private static final Path FORGE = Path.of(OLD, "run/forge-patched/patched-mc-forge-26.2.jar");
-	private static final Path NEOFORGE = Path.of(OLD, "run/neoforge-patched/patched-mc-neoforge-26.2.jar");
+	private static final Path FORGE = STAGED.resolve("forge-patched/patched-mc-forge-26.2.jar");
+	private static final Path NEOFORGE = STAGED.resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
 	private static final Path KERNEL_MAIN = Path.of("build/classes/java/main");
 	private static final Path KERNEL_RUNTIME = Path.of("build/classes/java/runtime");
 
@@ -68,9 +68,9 @@ class UncalledMethodCensusTest {
 
 	@Test void theShippedTableIsExactlyWhatTheArtifactsSay() throws Exception {
 		for (Path jar : List.of(MERGED, INTEROP, NEO_RUNTIME, FORGE_RUNTIME, VANILLA, FORGE, NEOFORGE)) {
-			Assumptions.assumeTrue(Files.isRegularFile(jar), jar + " required");
+			TestFixtures.require(jar == VANILLA ? Fixture.MC_LIBRARIES : Fixture.STAGED, Files.isRegularFile(jar), jar + " required");
 		}
-		Assumptions.assumeTrue(Files.isDirectory(KERNEL_RUNTIME), "the game-side classes are compiled only with staged jars");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(KERNEL_RUNTIME), "the game-side classes are compiled only with staged jars");
 
 		// The merged game: what it declares, what it names, and every string it holds.
 		Map<String, Shape> game = new HashMap<>();

@@ -18,8 +18,10 @@ package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,61 +33,88 @@ import org.junit.jupiter.api.io.TempDir;
 
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ModCatalog;
+import net.forbric.kernel.mixin.MixinOverlapLint;
 
 /**
  * Naming the mods a crash report points at.
  *
- * <p>The inputs are real crash reports this loader produced, kept in {@code run/}, rather than hand-written
- * traces: the whole value of this feature is that it works on what the game actually writes, and a fixture I
- * wrote myself would agree with my code by construction.
+ * <p>The inputs are real crash reports this loader produced rather than hand-written traces: the whole value of
+ * this feature is that it works on what the game actually writes, and a fixture I wrote myself would agree with my
+ * code by construction. They are copied into crash-attribution/ beside this class, with the machine's hardware
+ * values blanked and every section kept, because the originals under run/ exist only on the machine that crashed,
+ * and every test here that read them skipped everywhere else.
  */
 class CrashAttributionTest {
 	@TempDir
 	Path tmp;
 
-	private static final Path RUN = Path.of("run");
+	/** supermartijn642corelib's own frame on top: "Container screen registered with null menu type!". */
+	private static final String CORE_LIB = "crash-2026-09-20_17.17.35-client.txt";
+	/** A worldgen crash ("Feature placement") with Minecraft's whole walkthrough below the trace. */
+	private static final String WORLDGEN = "crash-2026-07-12_13.23.39-client.txt";
+	/** Mixin naming the mod that failed to apply, from the old forbric-loader (the repository's crash/ folder). */
+	private static final String MIXIN_APPLY = "crash-report.txt";
 
 	@AfterEach
 	void clearCatalogue() {
 		ModCatalog.publish(List.of());
+		MixinOverlapLint.publish(List.of());
 	}
+
+	/** An overlap of {@code rule} between {@code first} and {@code second} on {@code ClassInstanceMultiMap.find}. */
+	private static MixinOverlapLint.Overlap overlap(MixinOverlapLint.Rule rule, String first, String second) {
+		String owner = "net/minecraft/util/ClassInstanceMultiMap";
+		String desc = "(Ljava/lang/Class;)Ljava/util/Collection;";
+		boolean call = rule == MixinOverlapLint.Rule.R4;
+		return new MixinOverlapLint.Overlap(rule,
+				new MixinOverlapLint.Claim(first, first + ".mixins.json", "a.FindMixin", "find", call ? "Redirect" : "Overwrite",
+						owner, "find", desc, call ? "INVOKE" : null, call ? "Lx/Y;z()V" : null, -1, "mixins", first),
+				new MixinOverlapLint.Claim(second, second + ".mixins.json", "b.FindMixin", "find",
+						call ? "WrapOperation" : "Overwrite", owner, "find", desc, call ? "INVOKE" : null,
+						call ? "Lx/Y;z()V" : null, -1, "mixins", second));
+	}
+
+	/** A trace whose only frame of interest is the overwritten method, under Minecraft's jar and name. */
+	private static final String THROUGH_FIND = "java.lang.ClassCastException: class a cannot be cast to class b\n"
+			+ "\tat forbric/net.minecraft.util.ClassInstanceMultiMap.find(ClassInstanceMultiMap.java:62) "
+			+ "~[patched-mc-merged-26.2.jar:?] {}\n"
+			+ "\tat forbric/net.minecraft.world.level.entity.EntitySection.getEntities(EntitySection.java:40) "
+			+ "~[patched-mc-merged-26.2.jar:?] {}\n";
 
 	private static ModCatalog.Entry mod(String id, String name, String jar) {
 		return new ModCatalog.Entry(Ecosystem.FABRIC, id, name, "1.0", "", List.of(), jar, "", "");
 	}
 
-	private static String read(Path report) throws Exception {
-		return Files.readString(report, StandardCharsets.UTF_8);
+	/**
+	 * The fixture {@code name}, which must still carry Minecraft's own sections: several tests here assert that
+	 * the attribution does NOT read them, and against a file without them those assertions would pass vacuously.
+	 */
+	private static String report(String name) throws Exception {
+		try (InputStream in = CrashAttributionTest.class.getResourceAsStream("crash-attribution/" + name)) {
+			assertNotNull(in, "crash-attribution/" + name + " is a committed test resource");
+			String text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+			assertTrue(text.contains("-- System Details --") && text.contains("Mod List:"),
+					name + " must keep the System Details section and its Mod List");
+			return text;
+		}
 	}
 
-	/** The first crash report under {@code run/} whose text contains {@code marker}, or null. */
-	private static Path find(String marker) throws Exception {
-		if (!Files.isDirectory(RUN)) return null;
-		try (var walk = Files.walk(RUN, 3)) {
-			for (Path p : walk.filter(Files::isRegularFile)
-					.filter(p -> p.getParent() != null
-							&& p.getParent().getFileName().toString().equals("crash-reports"))
-					.toList()) {
-				try {
-					if (Files.readString(p, StandardCharsets.UTF_8).contains(marker)) return p;
-				} catch (Exception unreadable) {
-					// A half-written report from an interrupted gate is not this test's problem.
-				}
-			}
+	@Test
+	void everyFixtureKeepsTheSectionsTheAttributionMustIgnore() throws Exception {
+		for (String name : List.of(CORE_LIB, WORLDGEN, MIXIN_APPLY)) {
+			String text = report(name);
+			assertTrue(CrashAttribution.exceptionChain(text).length() < text.length(), name);
 		}
-		return null;
 	}
 
 	@Test
 	void theTopFrameSJarNamesTheMod() throws Exception {
-		Path report = find("supermartijn642corelib");
-		org.junit.jupiter.api.Assumptions.assumeTrue(report != null, "no such crash report in run/");
 		ModCatalog.publish(List.of(
 				mod("supermartijn642corelib", "SuperMartijn642's Core Lib",
 						"supermartijn642corelib-1.1.24a-forge-mc26.2.jar"),
 				mod("sodium", "Sodium", "sodium-fabric-0.9.0.jar")));
 
-		List<CrashAttribution.Suspect> suspects = CrashAttribution.suspects(read(report));
+		List<CrashAttribution.Suspect> suspects = CrashAttribution.suspects(report(CORE_LIB));
 
 		assertFalse(suspects.isEmpty(), "the top frame of this crash is a mod jar");
 		assertEquals("supermartijn642corelib", suspects.get(0).modId(),
@@ -96,26 +125,22 @@ class CrashAttributionTest {
 
 	@Test
 	void theKernelAndTheGameAreNeverSuspects() throws Exception {
-		Path report = find("supermartijn642corelib");
-		org.junit.jupiter.api.Assumptions.assumeTrue(report != null, "no such crash report in run/");
 		// Nothing published at all: the catalogue is the deny-list. Every frame in this report belongs to the
 		// merged base, a runtime carrier, the kernel jar or the JDK, and none of those is a mod.
 		ModCatalog.publish(List.of());
 
-		assertEquals(List.of(), CrashAttribution.suspects(read(report)),
+		assertEquals(List.of(), CrashAttribution.suspects(report(CORE_LIB)),
 				"patched-mc-merged, the carriers and forbric-kernel's own jar are not mods");
 	}
 
 	@Test
 	void aJarNameIsNeverTurnedIntoAModId() throws Exception {
-		Path report = find("supermartijn642corelib");
-		org.junit.jupiter.api.Assumptions.assumeTrue(report != null, "no such crash report in run/");
 		// The jar is in the trace and the catalogue has a mod, but the mod's jar is spelled differently. A
 		// file name is not a mod id -- xaeroworldmap-*.jar carries xaerominimap-family ids, and jars renamed to
 		// a content hash are real -- so this must find nothing rather than guess from the name.
 		ModCatalog.publish(List.of(mod("supermartijn642corelib", "Core Lib", "some-other-name.jar")));
 
-		assertEquals(List.of(), CrashAttribution.suspects(read(report)));
+		assertEquals(List.of(), CrashAttribution.suspects(report(CORE_LIB)));
 	}
 
 	@Test
@@ -189,11 +214,9 @@ class CrashAttributionTest {
 
 	@Test
 	void mixinsOwnWordsAreBelievedWhenTheyNameAMod() throws Exception {
-		Path report = Path.of("..", "crash", "crash-report.txt");
-		org.junit.jupiter.api.Assumptions.assumeTrue(Files.isRegularFile(report), "no captured crash report");
 		ModCatalog.publish(List.of(mod("sodium", "Sodium", "sodium-fabric-0.9.0.jar")));
 
-		List<CrashAttribution.Suspect> suspects = CrashAttribution.suspects(read(report));
+		List<CrashAttribution.Suspect> suspects = CrashAttribution.suspects(report(MIXIN_APPLY));
 
 		// "Mixin [sodium-common.mixins.json:...LevelExtractorMixin from mod sodium] ... FAILED during APPLY".
 		// The whole crash is sodium's, and the Suspected Mods line in that very file says NONE.
@@ -203,9 +226,7 @@ class CrashAttributionTest {
 
 	@Test
 	void onlyTheExceptionChainIsRead() throws Exception {
-		Path report = find("-- Head --");
-		org.junit.jupiter.api.Assumptions.assumeTrue(report != null, "no such crash report in run/");
-		String whole = read(report);
+		String whole = report(WORLDGEN);
 		String chain = CrashAttribution.exceptionChain(whole);
 
 		assertTrue(chain.length() < whole.length(), "the walkthrough divider must cut the file");
@@ -228,6 +249,40 @@ class CrashAttributionTest {
 		List<CrashAttribution.Suspect> suspects = CrashAttribution.suspects(trace.toString());
 		assertEquals(CrashAttribution.MOST, suspects.size(), "past a handful this stops being an answer");
 		assertEquals("mod0", suspects.get(0).modId(), "topmost frame first");
+	}
+
+	@Test
+	void aCrashThroughAMethodTwoModsOverwriteNamesBothOfThem() {
+		ModCatalog.publish(List.of(mod("lithium", "Lithium", "lithium-fabric-0.25.3+mc26.2.jar"),
+				mod("vmp", "Very Many Players", "vmp-fabric-mc26.2-0.2.0.jar"),
+				mod("minecraft", "Minecraft", "patched-mc-merged-26.2.jar")));
+		MixinOverlapLint.publish(List.of(overlap(MixinOverlapLint.Rule.R1, "lithium", "vmp")));
+
+		List<CrashAttribution.Suspect> suspects = CrashAttribution.suspects(THROUGH_FIND);
+
+		// Without the overlap the frame's jar is the only signal, and it names Minecraft.
+		assertEquals(List.of("lithium", "vmp", "minecraft"), suspects.stream().map(CrashAttribution.Suspect::modId).toList());
+		assertEquals(CrashAttribution.OVERLAP, suspects.get(0).reason());
+		assertEquals(CrashAttribution.OVERLAP, suspects.get(1).reason());
+		assertEquals("Very Many Players", suspects.get(0).collision().other());
+		assertEquals("ClassInstanceMultiMap.find", suspects.get(0).collision().method());
+		String en = CrashAttribution.render(false, "crash.txt", suspects);
+		assertTrue(en.contains("Lithium and Very Many Players both change ClassInstanceMultiMap.find"), en);
+		assertTrue(en.contains("its mixin and one from Lithium both change ClassInstanceMultiMap.find"), en);
+		String zh = CrashAttribution.render(true, "crash.txt", suspects);
+		assertTrue(zh.contains("Lithium 和 Very Many Players 都改了 ClassInstanceMultiMap.find"), zh);
+	}
+
+	@Test
+	void aNoteOrAnotherMethodNamesNobody() {
+		ModCatalog.publish(List.of(mod("lithium", "Lithium", "lithium.jar"), mod("vmp", "Very Many Players", "vmp.jar")));
+		// A redirect beside a WrapOperation is how MixinExtras is meant to be used: not something to accuse.
+		MixinOverlapLint.publish(List.of(overlap(MixinOverlapLint.Rule.R4, "lithium", "vmp")));
+		assertEquals(List.of(), CrashAttribution.suspects(THROUGH_FIND));
+
+		MixinOverlapLint.publish(List.of(overlap(MixinOverlapLint.Rule.R1, "lithium", "vmp")));
+		assertEquals(List.of(), CrashAttribution.suspects(THROUGH_FIND.replace("ClassInstanceMultiMap.find(",
+				"ClassInstanceMultiMap.getAllInstances(")));
 	}
 
 	@Test
@@ -288,12 +343,9 @@ class CrashAttributionTest {
 	void theWholePathWritesAFileBesideTheCrashReport() throws Exception {
 		// The write path end to end, on a real crash report, without needing to crash a game: stage it in a
 		// rundir, say the run started before it, and run the shutdown hook's body.
-		Path source = find("supermartijn642corelib");
-		org.junit.jupiter.api.Assumptions.assumeTrue(source != null, "no such crash report in run/");
 		Path dir = tmp.resolve("crash-reports");
 		Files.createDirectories(dir);
-		Path staged = dir.resolve(source.getFileName().toString());
-		Files.copy(source, staged);
+		Path staged = Files.writeString(dir.resolve(CORE_LIB), report(CORE_LIB));
 		Files.setLastModifiedTime(staged, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis()));
 		ModCatalog.publish(List.of(mod("supermartijn642corelib", "SuperMartijn642's Core Lib",
 				"supermartijn642corelib-1.1.24a-forge-mc26.2.jar")));
@@ -305,7 +357,7 @@ class CrashAttributionTest {
 		assertTrue(Files.isRegularFile(written), "nothing was written");
 		String text = Files.readString(written, StandardCharsets.UTF_8);
 		assertTrue(text.contains("SuperMartijn642's Core Lib"), text);
-		assertTrue(text.contains(source.getFileName().toString()), "it must point at the real report: " + text);
+		assertTrue(text.contains(CORE_LIB), "it must point at the real report: " + text);
 	}
 
 	@Test
@@ -316,6 +368,98 @@ class CrashAttributionTest {
 
 		assertFalse(Files.exists(tmp.resolve(".forbric-kernel").resolve("crash-analysis.txt")),
 				"a file that appears only when something went wrong is a file whose presence means something");
+		assertFalse(Files.exists(tmp.resolve(".forbric-kernel").resolve(CrashAttribution.JSON)),
+				"and the next launch must not be offered anything about a crash that did not happen");
+	}
+
+	@Test
+	void theWholePathAlsoWritesTheSuspectsForTheNextLaunch() throws Exception {
+		Path dir = tmp.resolve("crash-reports");
+		Files.createDirectories(dir);
+		Files.writeString(dir.resolve("crash-clash.txt"), CLASH_REPORT);
+		publishClash();
+
+		CrashAttribution.setRunDir(tmp, 0);
+		CrashAttribution.run();
+
+		String json = Files.readString(tmp.resolve(".forbric-kernel").resolve(CrashAttribution.JSON), StandardCharsets.UTF_8);
+		var parsed = com.electronwill.nightconfig.json.JsonFormat.fancyInstance().createParser()
+				.parse(new java.io.StringReader(json));
+		assertEquals(1, ((Number) parsed.get("schema")).intValue());
+		assertEquals("crash-clash.txt", parsed.get("report"));
+		assertEquals(Boolean.TRUE, parsed.get("clash"));
+		List<?> suspects = parsed.get("suspects");
+		assertEquals(3, suspects.size(), json);
+		var first = (com.electronwill.nightconfig.core.UnmodifiableConfig) suspects.get(0);
+		assertEquals("chloride", first.get("modId"));
+		assertEquals("Chloride", first.get("name"));
+		assertEquals("chloride-NEOFORGE-mc26.2-v1.8.1.jar", first.get("jar"));
+		assertEquals(CrashAttribution.CLASH, first.get("reason"));
+		assertTrue(((Number) first.get("depth")).intValue() > 0, json);
+	}
+
+	@Test
+	void aClashIsStartedWithoutEverySideButTheFirstNamed() {
+		publishClash();
+		List<CrashAttribution.Suspect> suspects = CrashAttribution.suspects(CLASH_REPORT);
+
+		// Chloride is kept, as the advice above says; Sodium threw the error but is not a side of the clash.
+		assertEquals(List.of("cwb-4.1.0+26.2.jar"), CrashAttribution.startWithout(suspects));
+		String en = CrashAttribution.render(false, "crash.txt", suspects);
+		assertTrue(en.contains("with these lines in forbric-disabled.txt") && en.contains("\n    cwb-4.1.0+26.2.jar\n"), en);
+		assertFalse(en.contains("    chloride-NEOFORGE-mc26.2-v1.8.1.jar"), en);
+		assertTrue(en.contains("delete a line to turn that mod back on"), en);
+		String zh = CrashAttribution.render(true, "crash.txt", suspects);
+		assertTrue(zh.contains("forbric-disabled.txt") && zh.contains("\n    cwb-4.1.0+26.2.jar\n"), zh);
+		assertTrue(zh.contains("删掉一行就能重新启用"), zh);
+	}
+
+	@Test
+	void otherwiseEverySuspectsJarIsListedOnce() {
+		ModCatalog.publish(List.of(
+				mod("fabric-api", "Fabric API", "fabric-api-0.161.jar"),
+				new ModCatalog.Entry(Ecosystem.FABRIC, "fabric-api-base", "Fabric API Base", "1.0", "", List.of(),
+						"fabric-api-base-1.0.jar", "", "fabric-api"),
+				new ModCatalog.Entry(Ecosystem.NEOFORGE, "orphan", "Orphan", "1.0", "", List.of(), "orphan.jar", "", "?"),
+				mod("sodium", "Sodium", "sodium-fabric-0.9.0.jar")));
+		String trace = "java.lang.RuntimeException\n"
+				+ "\tat forbric/a.B.c(B.java:1) ~[fabric-api-base-1.0.jar:?] {}\n"
+				+ "\tat forbric/a.B.c(B.java:1) ~[orphan.jar:?] {}\n"
+				+ "\tat forbric/a.B.c(B.java:1) ~[sodium-fabric-0.9.0.jar:?] {}\n"
+				+ "\tat forbric/a.B.c(B.java:1) ~[fabric-api-0.161.jar:?] {}\n";
+
+		List<CrashAttribution.Suspect> suspects = CrashAttribution.suspects(trace);
+
+		// A bundled module has no line of its own: its file is extracted, not installed. Switching it off means
+		// switching off the jar that carries it, and a carrier nobody can name contributes no line at all.
+		assertEquals("fabric-api-0.161.jar", suspects.get(0).jar());
+		assertEquals("", suspects.get(1).jar());
+		assertEquals(List.of("fabric-api-0.161.jar", "sodium-fabric-0.9.0.jar"), CrashAttribution.startWithout(suspects));
+	}
+
+	@Test
+	void namingNothingSuggestsNoLines() {
+		assertEquals(List.of(), CrashAttribution.startWithout(List.of()));
+		assertFalse(CrashAttribution.render(false, "crash.txt", List.of()).contains("forbric-disabled.txt"));
+		String json = CrashAttribution.json("crash.txt", List.of());
+		assertTrue(json.contains("\"suspects\":[]") && json.contains("\"clash\":false"), json);
+	}
+
+	/** Verbatim head of a real report: chloride + Cubes Without Borders + sodium-neoforge on this loader. */
+	private static final String CLASH_REPORT = "---- Minecraft Crash Report ----\n"
+			+ "Description: Failed to build config options\n\n"
+			+ "java.lang.IllegalArgumentException: Multiple overrides for option 'sodium:general.fullscreen_mode'! "
+			+ "Sources: chloride and cwb\n"
+			+ "\tat forbric/net.caffeinemc.mods.sodium.client.config.structure.Config.applyOptionChanges(Config.java:131) "
+			+ "~[net.caffeinemc.sodium-neoforge-0.9.2+mc26.2-mod.jar:?] {}\n"
+			+ "\tat forbric/net.minecraft.client.Minecraft.handler$zca000$sodium$postInit(Minecraft.java:5117) "
+			+ "[patched-mc-merged-26.2.jar:?] {}\n";
+
+	private static void publishClash() {
+		ModCatalog.publish(List.of(
+				mod("chloride", "Chloride", "chloride-NEOFORGE-mc26.2-v1.8.1.jar"),
+				mod("cwb", "Cubes Without Borders", "cwb-4.1.0+26.2.jar"),
+				mod("sodium", "Sodium", "sodium-neoforge-0.9.2+mc26.2.jar")));
 	}
 
 	@Test

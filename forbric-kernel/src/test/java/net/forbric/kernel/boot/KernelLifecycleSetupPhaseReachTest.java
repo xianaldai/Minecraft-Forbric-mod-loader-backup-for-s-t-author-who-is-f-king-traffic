@@ -17,7 +17,6 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -51,7 +50,8 @@ class KernelLifecycleSetupPhaseReachTest {
 	void theMinecraftForgePhasesAreReachableWithNoNeoForgeModLoaded() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "main",
 				"net", "forbric", "kernel", "boot", "KernelLifecycle.class");
-		assumeTrue(Files.isRegularFile(compiled), "KernelLifecycle not compiled yet");
+		assertTrue(Files.isRegularFile(compiled),
+				"KernelLifecycle not found in the compiled src/main classes, which exist before any test runs");
 
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(compiled)).accept(node, 0);
@@ -143,7 +143,8 @@ class KernelLifecycleSetupPhaseReachTest {
 	private static MethodNode method(String name) throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "main",
 				"net", "forbric", "kernel", "boot", "KernelLifecycle.class");
-		assumeTrue(Files.isRegularFile(compiled), "KernelLifecycle not compiled yet");
+		assertTrue(Files.isRegularFile(compiled),
+				"KernelLifecycle not found in the compiled src/main classes, which exist before any test runs");
 
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(compiled)).accept(node, 0);
@@ -159,7 +160,8 @@ class KernelLifecycleSetupPhaseReachTest {
 	void theNeoForgePhaseStillNoOpsWhenNoNeoForgeModIsLoaded() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "main",
 				"net", "forbric", "kernel", "boot", "KernelLifecycle.class");
-		assumeTrue(Files.isRegularFile(compiled), "KernelLifecycle not compiled yet");
+		assertTrue(Files.isRegularFile(compiled),
+				"KernelLifecycle not found in the compiled src/main classes, which exist before any test runs");
 
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(compiled)).accept(node, 0);

@@ -19,7 +19,6 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -30,6 +29,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -54,9 +54,7 @@ import org.objectweb.asm.tree.MethodNode;
  * by one bush each, in different places — the same noise vanilla has against itself.
  */
 class MergedBaseSavedHeightmapsTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path VANILLA = TestFixtures.vanillaJar();
 	private static final String CHUNK_STATUS = "net/minecraft/world/level/chunk/status/ChunkStatus";
 	private static final String WIDENED = "chunkSaveHeightmaps";
@@ -64,7 +62,7 @@ class MergedBaseSavedHeightmapsTest {
 
 	@Test
 	void vanillaHasNoSecondHeightmapSetToBeginWith() throws Exception {
-		assumeTrue(Files.isRegularFile(VANILLA), "no vanilla 26.2 jar at " + VANILLA);
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(VANILLA), "no vanilla 26.2 jar at " + VANILLA);
 		List<String> fields = new ArrayList<>();
 		for (FieldNode field : read(entry(VANILLA)).fields) fields.add(field.name);
 		assertTrue(fields.contains(VANILLA_SHAPED), "vanilla must carry the field this repair aims at");
@@ -74,7 +72,7 @@ class MergedBaseSavedHeightmapsTest {
 
 	@Test
 	void theGetterReadsTheVanillaShapedFieldAfterTheRepair() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
 		byte[] before = entry(MERGED_BASE);
 		assertEquals(List.of(WIDENED), reads(read(before)), "the merged getter no longer reads NeoForge's widened "
 				+ "set — if the base changed, delete the repair rather than leaving a claim on a shape that is gone");
@@ -92,7 +90,7 @@ class MergedBaseSavedHeightmapsTest {
 
 	@Test
 	void theSwitchStandsTheRepairDown() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
 		String property = ForbricMergedBaseCompatTransformer.SAVED_HEIGHTMAPS_PROPERTY;
 		String previous = System.getProperty(property);
 		System.setProperty(property, "off");
@@ -111,9 +109,9 @@ class MergedBaseSavedHeightmapsTest {
 
 	@Test
 	void itLeavesAnotherClassAlone() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
 		byte[] other = entry(MERGED_BASE, "net/minecraft/world/level/chunk/status/ChunkType.class");
-		assumeTrue(other != null, "ChunkType absent from this base");
+		assertTrue(other != null, "content drift: ChunkType absent from this base");
 		List<String> hits = new ArrayList<>();
 		new ForbricMergedBaseCompatTransformer()
 				.transform("net.minecraft.world.level.chunk.status.ChunkType", other, null, hits::add);

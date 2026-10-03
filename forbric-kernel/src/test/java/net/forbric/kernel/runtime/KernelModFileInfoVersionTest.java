@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -19,6 +18,8 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.api.ModPresence;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.discovery.ForbricModDiscoverer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -29,7 +30,7 @@ import org.objectweb.asm.tree.MethodInsnNode;
 
 /** The same discovery -> ModInfo -> owning file path PAL reads during its constructor. */
 class KernelModFileInfoVersionTest {
-    private static final Path STAGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run");
+    private static final Path STAGED = TestFixtures.stagedRoot();
     @TempDir Path temp;
 
     @AfterEach
@@ -42,7 +43,7 @@ class KernelModFileInfoVersionTest {
     void bothCarriersDelegateVersionStringToTheFirstModVersion() throws Exception {
         for (String family : List.of("forge", "neoforge")) {
             Path jar = STAGED.resolve(family + "-runtime/" + family + "-runtime.jar");
-            assumeTrue(Files.isRegularFile(jar), "staged carrier absent");
+            TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged carrier absent");
             String namespace = family.equals("forge") ? "net/minecraftforge" : "net/neoforged";
             try (ZipFile zip = new ZipFile(jar.toFile())) {
                 String entry = namespace + "/fml/loading/moddiscovery/ModFileInfo.class";
@@ -177,7 +178,8 @@ class KernelModFileInfoVersionTest {
     private static URLClassLoader runtimeLoader() throws Exception {
         Path compiled = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
         Path carrier = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
-        assumeTrue(Files.isDirectory(compiled) && Files.isRegularFile(carrier), "staged runtime classes/carrier absent");
+        TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "staged carrier absent");
+        TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "staged runtime classes absent");
         return new URLClassLoader(new URL[] {compiled.toUri().toURL(), carrier.toUri().toURL()},
                 KernelModFileInfoVersionTest.class.getClassLoader());
     }

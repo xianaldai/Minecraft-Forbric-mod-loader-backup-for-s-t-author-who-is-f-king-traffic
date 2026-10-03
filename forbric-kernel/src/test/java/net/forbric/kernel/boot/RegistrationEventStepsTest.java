@@ -22,7 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -50,6 +49,8 @@ import org.objectweb.asm.tree.MethodNode;
 
 import net.forbric.api.CompatibilityFinding;
 import net.forbric.api.CompatibilityFindings;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * NeoForge's {@code RegistrationEvents.init}, one step at a time.
@@ -65,9 +66,8 @@ class RegistrationEventStepsTest {
 	private static final String CAPABILITIES = RegistrationEventSteps.CAPABILITIES.owner();
 	private static final String REGISTRY_MANAGER = RegistrationEventSteps.DATA_MAPS.owner();
 	private static final String POI = "net/neoforged/neoforge/common/world/poi/PoiTypeExtender";
-	private static final Path NEOFORGE_RUNTIME = Path.of(System.getenv().getOrDefault("FORBRIC_OLD",
-			System.getProperty("user.dir") + "/../forbric-loader"), "run", "neoforge-runtime",
-			"neoforge-runtime.jar").normalize();
+	private static final Path NEOFORGE_RUNTIME =
+			TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
 
 	@BeforeEach
 	@AfterEach
@@ -82,11 +82,11 @@ class RegistrationEventStepsTest {
 	/** The real carrier's method, when it is staged: seven calls, and the two the kernel keys on among them. */
 	@Test
 	void theRealMethodIsAStraightRunOfSevenCalls() throws Exception {
-		assumeTrue(Files.isRegularFile(NEOFORGE_RUNTIME), "neoforge-runtime.jar not staged");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE_RUNTIME), "neoforge-runtime.jar not staged");
 		byte[] real;
 		try (ZipFile zip = new ZipFile(NEOFORGE_RUNTIME.toFile())) {
 			var entry = zip.getEntry(EVENTS + ".class");
-			assumeTrue(entry != null, "RegistrationEvents absent from this carrier");
+			assertNotNull(entry, "RegistrationEvents absent from this carrier");
 			try (InputStream in = zip.getInputStream(entry)) {
 				real = in.readAllBytes();
 			}
@@ -221,7 +221,8 @@ class RegistrationEventStepsTest {
 	void theTransferBridgeIsGatedOnCapabilitiesOnly() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "main",
 				"net", "forbric", "kernel", "boot", "KernelLifecycle.class");
-		assumeTrue(Files.isRegularFile(compiled), "KernelLifecycle not compiled yet");
+		assertTrue(Files.isRegularFile(compiled),
+				"KernelLifecycle not found in the compiled src/main classes, which exist before any test runs");
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(compiled)).accept(node, 0);
 		MethodNode fire = node.methods.stream().filter(m -> "fireRegistrationEvents".equals(m.name)).findFirst()

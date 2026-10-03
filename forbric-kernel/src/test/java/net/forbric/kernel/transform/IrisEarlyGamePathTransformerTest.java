@@ -1,7 +1,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.nio.file.*;
 import java.util.zip.ZipFile;
 import org.junit.jupiter.api.Test;
@@ -10,11 +9,14 @@ import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 class IrisEarlyGamePathTransformerTest {
 	private static final String NAME = "net.irisshaders.iris.mixin.IrisMixinPlugin";
 	private byte[] plugin() throws Exception {
 		Path path = Path.of("build/compat-inputs/player-loading/mods/iris-neoforge-1.11.4+mc26.2.jar");
-		assumeTrue(Files.isRegularFile(path), "actual Iris plugin required");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(path), "actual Iris plugin required");
 		try (ZipFile zip = new ZipFile(path.toFile())) { return zip.getInputStream(zip.getEntry(NAME.replace('.','/') + ".class")).readAllBytes(); }
 	}
 	@Test void theRealPluginNoLongerConstructsItsGameProviderToReadOptions() throws Exception {

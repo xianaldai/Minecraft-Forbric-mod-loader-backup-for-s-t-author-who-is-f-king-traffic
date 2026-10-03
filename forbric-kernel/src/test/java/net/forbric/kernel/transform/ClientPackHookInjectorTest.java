@@ -21,13 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -43,6 +38,8 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
 import net.fabricmc.api.EnvType;
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ForeignType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * Pins {@link ClientPackHookInjector} for BOTH Forge families.
@@ -58,7 +55,7 @@ import net.forbric.api.ForeignType;
  * repository — so that modifier is asserted against the real carriers here, not assumed.
  */
 class ClientPackHookInjectorTest {
-	private static final Path RUN = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path RUN = TestFixtures.stagedRoot();
 	private static final String METHOD = "setupModResourcePacks";
 	private static final String DESC = "(Lnet/minecraft/server/packs/repository/PackRepository;)V";
 	private static final String HOOK_OWNER = "net/forbric/kernel/boot/KernelLifecycle";
@@ -78,7 +75,6 @@ class ClientPackHookInjectorTest {
 	@Test
 	void neoForgeDeclaresTheMethodStaticallyAndMinecraftForgeDoesNotDeclareItAtAll() throws Exception {
 		byte[] neo = carrier(Ecosystem.NEOFORGE);
-		assumeTrue(neo != null, "staged NeoForge carrier absent");
 
 		MethodNode m = method(parse(neo), METHOD, DESC);
 		assertNotNull(m, "NeoForge: " + METHOD + DESC + " is gone — the client pack hook silently stops applying "
@@ -87,7 +83,6 @@ class ClientPackHookInjectorTest {
 				+ "injector's ALOAD 0 would hand the kernel `this` instead of the PackRepository");
 
 		byte[] forge = carrier(Ecosystem.FORGE);
-		assumeTrue(forge != null, "staged MinecraftForge carrier absent");
 		assertNull(method(parse(forge), METHOD, DESC),
 				"MinecraftForge's ClientModLoader now declares " + METHOD + " — the OWNERS entry for it has stopped "
 						+ "being a hedge and become a live rewrite; re-check that the kernel should own both");
@@ -96,7 +91,6 @@ class ClientPackHookInjectorTest {
 	@Test
 	void theNeoForgeCarrierIsRewrittenToCallTheKernel() throws Exception {
 		byte[] real = carrier(Ecosystem.NEOFORGE);
-		assumeTrue(real != null, "staged NeoForge carrier absent");
 
 		String className = ForeignType.CLIENT_MOD_LOADER.binary(Ecosystem.NEOFORGE);
 		byte[] out = injector.transform(className, real, ctx());
@@ -143,7 +137,6 @@ class ClientPackHookInjectorTest {
 	@Test
 	void theMinecraftForgeCarrierIsUnchangedBecauseItHasNoSuchMethod() throws Exception {
 		byte[] real = carrier(Ecosystem.FORGE);
-		assumeTrue(real != null, "staged MinecraftForge carrier absent");
 
 		assertSame(real, injector.transform(ForeignType.CLIENT_MOD_LOADER.binary(Ecosystem.FORGE), real, ctx()));
 	}
@@ -171,16 +164,7 @@ class ClientPackHookInjectorTest {
 		Path jar = eco == Ecosystem.NEOFORGE
 				? RUN.resolve("neoforge-runtime/neoforge-runtime.jar")
 				: RUN.resolve("forge-runtime/forge-runtime.jar");
-		if (!Files.isRegularFile(jar)) return null;
-
-		String entry = ForeignType.CLIENT_MOD_LOADER.internal(eco) + ".class";
-		try (ZipFile zip = new ZipFile(jar.toFile())) {
-			ZipEntry e = zip.getEntry(entry);
-			if (e == null) return null;
-			try (InputStream in = zip.getInputStream(e)) {
-				return in.readAllBytes();
-			}
-		}
+		return TestFixtures.requireEntry(Fixture.STAGED, jar, ForeignType.CLIENT_MOD_LOADER.internal(eco) + ".class");
 	}
 
 	private static ClassNode parse(byte[] bytes) {

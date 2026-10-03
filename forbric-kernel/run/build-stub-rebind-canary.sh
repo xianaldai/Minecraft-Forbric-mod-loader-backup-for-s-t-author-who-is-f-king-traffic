@@ -19,6 +19,8 @@ fapi = pathlib.Path(os.environ.get('M46_FABRIC_API', kernel / 'run/client-merged
 vanilla = mc / 'versions/26.2/26.2.jar'
 kernel_jar = kernel / 'build/libs/forbric-kernel-0.1.0-SNAPSHOT.jar'
 mixin = mc / 'libraries/net/fabricmc/sponge-mixin/0.17.3+mixin.0.8.7/sponge-mixin-0.17.3+mixin.0.8.7.jar'
+# A vanilla Minecraft tree (a CI runner's .dev/minecraft) has no Fabric libraries: take the kernel's own copy.
+if not mixin.is_file() and os.environ.get('FORBRIC_SPONGE_MIXIN'): mixin = pathlib.Path(os.environ['FORBRIC_SPONGE_MIXIN'])
 libraries = []
 for entry in json.loads((mc / 'versions/26.2/26.2.json').read_text())['libraries']:
     artifact = entry.get('downloads', {}).get('artifact', {}).get('path')

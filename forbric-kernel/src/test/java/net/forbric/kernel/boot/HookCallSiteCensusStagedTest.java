@@ -3,7 +3,6 @@ package net.forbric.kernel.boot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,6 +15,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
@@ -53,9 +53,7 @@ class HookCallSiteCensusStagedTest {
 			"net/neoforged/neoforge/event/EventHooks", "neoforge-runtime/neoforge-runtime.jar");
 
 	private static Path root() {
-		String override = System.getenv("FORBRIC_OLD");
-		if (override != null && !override.isBlank()) return Path.of(override, "run").normalize();
-		return Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+		return TestFixtures.stagedRoot().normalize();
 	}
 
 	/** The two ecosystem runtimes, for the third state. */
@@ -86,9 +84,9 @@ class HookCallSiteCensusStagedTest {
 
 	@Test
 	void theCensusRunsAndTheSurfaceIsNotAllAlive() throws Exception {
-		assumeTrue(Files.isRegularFile(base()), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(base()), "staged merged base absent");
 		Map<String, HookCallSiteCensus.Census> all = censusAll();
-		assumeTrue(!all.isEmpty(), "staged carriers absent");
+		TestFixtures.require(Fixture.STAGED, !all.isEmpty(), "staged carriers absent");
 		int declared = 0;
 		int dead = 0;
 		for (HookCallSiteCensus.Census c : all.values()) {
@@ -106,9 +104,9 @@ class HookCallSiteCensusStagedTest {
 
 	@Test
 	void everyRowOfTheDeadTableIsStillDeadInTheBytecode() throws Exception {
-		assumeTrue(Files.isRegularFile(base()), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(base()), "staged merged base absent");
 		Map<String, HookCallSiteCensus.Census> all = censusAll();
-		assumeTrue(!all.isEmpty(), "staged carriers absent");
+		TestFixtures.require(Fixture.STAGED, !all.isEmpty(), "staged carriers absent");
 
 		Map<String, Set<String>> postersOf = new TreeMap<>();
 		Set<String> deadEvents = new TreeSet<>();
@@ -152,11 +150,12 @@ class HookCallSiteCensusStagedTest {
 
 	@Test
 	void thePartialTableIsExactlyWhatTheCallSitesSay() throws Exception {
-		assumeTrue(Files.isRegularFile(base()), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(base()), "staged merged base absent");
 		Path before = forgePatchedGame();
-		assumeTrue(Files.isRegularFile(before), "MinecraftForge's patched game absent");
+		// A build-merged-base.sh input the staging leaves under libraries/; no vanilla install has it.
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(before), "MinecraftForge's patched game absent");
 		Path carrier = root().resolve("forge-runtime/forge-runtime.jar");
-		assumeTrue(Files.isRegularFile(carrier), "staged Forge carrier absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "staged Forge carrier absent");
 
 		// hook -> the events it posts, so an eroded hook can be named by what a mod actually subscribes to.
 		Map<String, Set<String>> eventsOfHook = new TreeMap<>();
@@ -192,7 +191,7 @@ class HookCallSiteCensusStagedTest {
 
 	@Test
 	void noSinglePathPostsABridgedEventTwice() throws Exception {
-		assumeTrue(Files.isRegularFile(base()), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(base()), "staged merged base absent");
 		List<String> both = HookCallSiteCensus.methodsCallingBothFamilies(List.of(base()));
 		System.out.println("[Forbric/Hooks] methods calling both ecosystems' event hooks: " + both.size());
 		List<String> unproved = new ArrayList<>();
@@ -204,7 +203,7 @@ class HookCallSiteCensusStagedTest {
 
 	@Test
 	void aDualFamilyPortalCallerWithoutTheProvedShapeIsStillReported() throws Exception {
-		assumeTrue(Files.isRegularFile(base()), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(base()), "staged merged base absent");
 		ClassNode node = new ClassNode();
 		new ClassReader(classBytes(PORTAL_OWNER)).accept(node, 0);
 		MethodNode host = node.methods.stream().filter(m -> (m.name + m.desc).equals(PORTAL_METHOD)).findFirst().orElseThrow();

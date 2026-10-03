@@ -19,13 +19,8 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -40,6 +35,8 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
 import net.fabricmc.api.EnvType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.boot.KernelClientSmoke;
 
 /**
@@ -56,8 +53,7 @@ import net.forbric.kernel.boot.KernelClientSmoke;
  * <p>So the first test asserts the input is handed back by IDENTITY, not merely unchanged in content.
  */
 class ClientSmokeTickInjectorTest {
-	private static final Path MERGED_BASE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	private static final String MINECRAFT = "net.minecraft.client.Minecraft";
 	private static final String HOOK_OWNER = "net/forbric/kernel/boot/KernelClientSmoke";
@@ -106,7 +102,6 @@ class ClientSmokeTickInjectorTest {
 	@Test
 	void theRealMinecraftGainsExactlyOneHook() throws Exception {
 		byte[] real = mergedBaseMinecraft();
-		assumeTrue(real != null, "staged merged base absent — skipping real-bytecode check");
 		System.setProperty(KernelClientSmoke.ENABLED, "true");
 
 		byte[] out = new ClientSmokeTickInjector().transform(MINECRAFT, real, ctx());
@@ -158,15 +153,8 @@ class ClientSmokeTickInjectorTest {
 		throw new AssertionError("no method " + name + desc);
 	}
 
-	private static byte[] mergedBaseMinecraft() throws Exception {
-		if (!Files.isRegularFile(MERGED_BASE)) return null;
-		try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {
-			ZipEntry e = zip.getEntry("net/minecraft/client/Minecraft.class");
-			if (e == null) return null;
-			try (InputStream in = zip.getInputStream(e)) {
-				return in.readAllBytes();
-			}
-		}
+	private static byte[] mergedBaseMinecraft() {
+		return TestFixtures.requireEntry(Fixture.STAGED, MERGED_BASE, "net/minecraft/client/Minecraft.class");
 	}
 
 	/** {@code void tick()} with SEVERAL returns — the shape the head-injection rationale is about. */

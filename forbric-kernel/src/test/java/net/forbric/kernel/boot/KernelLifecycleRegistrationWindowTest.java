@@ -17,7 +17,6 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,7 +49,8 @@ class KernelLifecycleRegistrationWindowTest {
 	@Test
 	void theRegistrationWindowIsClosedFromAFinally() throws Exception {
 		ClassNode node = compiled();
-		assumeTrue(node != null, "KernelLifecycle not compiled yet");
+		assertTrue(node != null,
+				"KernelLifecycle not found in the compiled src/main classes, which exist before any test runs");
 		MethodNode content = method(node, "registerNeoForgeContent");
 
 		boolean hasFinally = content.tryCatchBlocks.stream().anyMatch(b -> b.type == null);
@@ -80,7 +80,8 @@ class KernelLifecycleRegistrationWindowTest {
 	@Test
 	void theGameBusesOpenBeforeTheSetupLifecycle() throws Exception {
 		ClassNode node = compiled();
-		assumeTrue(node != null, "KernelLifecycle not compiled yet");
+		assertTrue(node != null,
+				"KernelLifecycle not found in the compiled src/main classes, which exist before any test runs");
 		MethodNode drive = method(node, "driveNativeRegistration");
 
 		int configs = firstCall(drive, "loadEarlyConfigs");

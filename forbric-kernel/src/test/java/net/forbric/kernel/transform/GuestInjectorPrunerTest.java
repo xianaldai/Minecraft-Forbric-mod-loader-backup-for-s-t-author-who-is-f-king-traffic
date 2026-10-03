@@ -22,7 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -35,7 +34,6 @@ import java.util.function.Function;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
-import net.forbric.kernel.TestFixtures;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -47,6 +45,8 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.mixin.MixinFit;
 
 /**
@@ -55,9 +55,7 @@ import net.forbric.kernel.mixin.MixinFit;
  * other eight can.
  */
 class GuestInjectorPrunerTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path CLIENT_MODS =
 			Path.of(System.getProperty("user.dir"), "run", "client-kernel", "mods").normalize();
 	private static final String MIXIN_ENTRY =
@@ -85,9 +83,9 @@ class GuestInjectorPrunerTest {
 
 	private static byte[] realItemStackMixin() throws Exception {
 		Path fabricApi = fabricApiJar();
-		assumeTrue(fabricApi != null, "fabric-api jar absent from run/client-kernel/mods");
+		TestFixtures.require(Fixture.THIRD_PARTY, fabricApi != null, "fabric-api jar absent from run/client-kernel/mods");
 		byte[] bytes = readFromNestedJar(fabricApi, "fabric-item-api-v1", ITEM_STACK_ENTRY);
-		assumeTrue(bytes != null, "ItemStackMixin absent from the nested fabric-item-api-v1 module");
+		TestFixtures.require(Fixture.THIRD_PARTY, bytes != null, "ItemStackMixin absent from the nested fabric-item-api-v1 module");
 		return bytes;
 	}
 
@@ -225,7 +223,7 @@ class GuestInjectorPrunerTest {
 	 */
 	@Test
 	void thePrunedMixinFitsTheMergedModelManagerWhereTheOriginalWasPartial() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		byte[] original = realMixin();
 		Function<String, byte[]> resolver = mergedBaseResolver();
 
@@ -318,9 +316,9 @@ class GuestInjectorPrunerTest {
 
 	private static byte[] realMixin() throws Exception {
 		Path fabricApi = fabricApiJar();
-		assumeTrue(fabricApi != null, "fabric-api jar absent from run/client-kernel/mods");
+		TestFixtures.require(Fixture.THIRD_PARTY, fabricApi != null, "fabric-api jar absent from run/client-kernel/mods");
 		byte[] bytes = readFromNestedJar(fabricApi, MODULE, MIXIN_ENTRY);
-		assumeTrue(bytes != null, "ModelManagerMixin absent from the nested " + MODULE + " module");
+		TestFixtures.require(Fixture.THIRD_PARTY, bytes != null, "ModelManagerMixin absent from the nested " + MODULE + " module");
 		return bytes;
 	}
 

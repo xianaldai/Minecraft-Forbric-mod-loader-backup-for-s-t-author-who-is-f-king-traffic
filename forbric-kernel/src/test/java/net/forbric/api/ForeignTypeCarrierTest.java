@@ -17,7 +17,6 @@
 package net.forbric.api;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -29,6 +28,8 @@ import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -50,7 +51,7 @@ class ForeignTypeCarrierTest {
 	private static final Path FORGE = staged("forge-runtime", "forge-runtime.jar");
 
 	private static Path staged(String dir, String jar) {
-		return Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", dir, jar).normalize();
+		return TestFixtures.stagedRoot().resolve(dir).resolve(jar);
 	}
 
 	@Test
@@ -64,7 +65,7 @@ class ForeignTypeCarrierTest {
 	}
 
 	private static void assertNamesResolve(Ecosystem eco, Path carrier) throws IOException {
-		assumeTrue(Files.isRegularFile(carrier), "staged carrier absent: " + carrier);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "staged carrier absent: " + carrier);
 
 		Set<String> classes = classesIn(carrier);
 		List<String> missing = new ArrayList<>();

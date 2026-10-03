@@ -19,19 +19,23 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
@@ -43,6 +47,10 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+import net.fabricmc.api.EnvType;
+
 /**
  * Verifies the fail-soft wrap in REAL merged-base bytecode: the pack-dropping throw at
  * {@code ResourceMetadata$…getSection} is caught and answered with {@code Optional.empty()}, and the vanilla parse
@@ -52,18 +60,90 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  * class, so it cannot be named; the transformer identifies it by shape instead, and this test is what proves the
  * shape still picks out exactly one of the nest's three implementors — catching both a renumbering that a name
  * would have missed and a structural match that has become too loose.
+ *
+ * <p>Those read staged bytes. {@link #aNamespacedSectionThatWillNotParseNoLongerCostsThePack} runs the wrapped
+ * method instead, on a stand-in nest compiled here, so the real hook is called on a checkout without the base.
  */
+@ExecutesInjector(PackMetadataFailSoftInjector.class)
 class PackMetadataFailSoftInjectorTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	private static final String NEST = "net/minecraft/server/packs/resources/ResourceMetadata$";
 	private static final String HOOK_OWNER = "net/forbric/kernel/boot/KernelPackMetadata";
 
+	/**
+	 * The nest's two shapes: an {@code EMPTY} member that never parses, and a JSON-backed one whose present-but-bad
+	 * section throws out of {@code getOrThrow}. The "file" is a map from section name to raw text.
+	 */
+	private static final Map<String, String> STAND_INS = Map.of(
+			"com.mojang.serialization.DataResult", """
+					package com.mojang.serialization;
+
+					public final class DataResult<R> {
+						private final R value;
+						private final String error;
+
+						private DataResult(R value, String error) {
+							this.value = value;
+							this.error = error;
+						}
+
+						public static <R> DataResult<R> success(R value) {
+							return new DataResult<>(value, null);
+						}
+
+						public static <R> DataResult<R> error(String message) {
+							return new DataResult<>(null, message);
+						}
+
+						public R getOrThrow() {
+							if (error != null) throw new IllegalArgumentException(error);
+							return value;
+						}
+					}
+					""",
+			"net.minecraft.server.packs.metadata.MetadataSectionType", """
+					package net.minecraft.server.packs.metadata;
+
+					import java.util.function.Function;
+					import com.mojang.serialization.DataResult;
+
+					public record MetadataSectionType<T>(String name, Function<String, DataResult<T>> codec) {
+					}
+					""",
+			"net.minecraft.server.packs.resources.ResourceMetadata", """
+					package net.minecraft.server.packs.resources;
+
+					import java.util.Map;
+					import java.util.Optional;
+					import net.minecraft.server.packs.metadata.MetadataSectionType;
+
+					public interface ResourceMetadata {
+						ResourceMetadata EMPTY = new ResourceMetadata() {
+							@Override
+							public <T> Optional<T> getSection(MetadataSectionType<T> type) {
+								return Optional.empty();
+							}
+						};
+
+						<T> Optional<T> getSection(MetadataSectionType<T> type);
+
+						static ResourceMetadata fromJson(Map<String, String> file) {
+							return new ResourceMetadata() {
+								@Override
+								public <T> Optional<T> getSection(MetadataSectionType<T> type) {
+									String raw = file.get(type.name());
+									if (raw == null) return Optional.empty();
+									return Optional.of(type.codec().apply(raw).getOrThrow());
+								}
+							};
+						}
+					}
+					""");
+
 	@Test
 	void exactlyOneNestMemberParsesJson() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 
 		List<String> matched = new ArrayList<>();
 		for (String member : nestMembers()) {
@@ -80,7 +160,7 @@ class PackMetadataFailSoftInjectorTest {
 
 	@Test
 	void wrapsTheParseInsteadOfReimplementingIt() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 
 		String target = jsonBackedMember();
 		ClassNode node = transformed(target);
@@ -115,7 +195,7 @@ class PackMetadataFailSoftInjectorTest {
 
 	@Test
 	void transformedMethodsAnalyseCleanly() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 
 		ClassNode node = transformed(jsonBackedMember());
 
@@ -130,7 +210,7 @@ class PackMetadataFailSoftInjectorTest {
 
 	@Test
 	void theHandAuthoredHandlerFrameHasTheRightShape() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 
 		ClassNode node = transformed(jsonBackedMember());
 		MethodNode getSection = method(node, "getSection");
@@ -152,12 +232,81 @@ class PackMetadataFailSoftInjectorTest {
 
 	@Test
 	void isIdempotent() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 
 		String target = jsonBackedMember();
 		byte[] once = new PackMetadataFailSoftInjector().transform(dotted(target), readClass(target), null);
 		byte[] twice = new PackMetadataFailSoftInjector().transform(dotted(target), once, null);
 		assertSame(once, twice, "a class that already carries the alias must be passed straight through");
+	}
+
+	/**
+	 * A multiloader pack's {@code neoforge:overlays} that this parser cannot read: unwrapped, the throw reaches
+	 * {@code Pack.readPackMetadata}'s catch and the whole pack is dropped; wrapped, the section reads as absent and the
+	 * rest of the file still parses. A bare vanilla section keeps throwing, the same exception object.
+	 */
+	@Test
+	void aNamespacedSectionThatWillNotParseNoLongerCostsThePack(@TempDir Path work) throws Throwable {
+		Map<String, byte[]> original = InjectorExecution.compile(work, STAND_INS);
+		Map<String, byte[]> classes = new HashMap<>(original);
+		List<String> wrapped = new ArrayList<>();
+		for (String member : original.keySet()) {
+			if (!member.startsWith(NEST)) continue;
+			byte[] out = InjectorExecution.transform(new PackMetadataFailSoftInjector(), dotted(member), original.get(member),
+					EnvType.SERVER);
+			if (out == original.get(member)) continue;
+			wrapped.add(member);
+			classes.put(member, out);
+		}
+		assertEquals(1, wrapped.size(), "only the JSON-backed member parses, so only it is wrapped: " + wrapped);
+		ClassLoader loader = InjectorExecution.load(classes);
+		assertEquals("", InjectorExecution.verify(classes.get(wrapped.get(0)), loader));
+
+		Map<String, String> file = Map.of("pack", "15", "neoforge:overlays", "{entries:[]}");
+		Object vanillaParse = section(loader, "pack", raw -> ok(loader, Integer.parseInt(raw)));
+		Object overlays = section(loader, "neoforge:overlays", raw -> bad(loader, "not a list: " + raw));
+		Object brokenPack = section(loader, "pack", raw -> bad(loader, "pack_format is not a number"));
+		Object metadata = InjectorExecution.invokeStatic(loader.loadClass("net.minecraft.server.packs.resources.ResourceMetadata"),
+				"fromJson", file);
+
+		assertEquals(Optional.empty(), InjectorExecution.invoke(metadata, "getSection", overlays),
+				"a namespaced section that will not parse reads as absent");
+		assertEquals(Optional.of(15), InjectorExecution.invoke(metadata, "getSection", vanillaParse),
+				"the rest of the file still parses through the moved body");
+		assertEquals(Optional.empty(), InjectorExecution.invoke(metadata, "getSection",
+				section(loader, "absent:section", raw -> ok(loader, raw))));
+		assertEquals("pack_format is not a number", assertThrows(IllegalArgumentException.class,
+				() -> InjectorExecution.invoke(metadata, "getSection", brokenPack)).getMessage(),
+				"a vanilla section stays loud");
+
+		ClassLoader unwrapped = InjectorExecution.load(original);
+		Object asShipped = InjectorExecution.invokeStatic(unwrapped.loadClass("net.minecraft.server.packs.resources.ResourceMetadata"),
+				"fromJson", file);
+		assertThrows(IllegalArgumentException.class, () -> InjectorExecution.invoke(asShipped, "getSection",
+				section(unwrapped, "neoforge:overlays", raw -> bad(unwrapped, "not a list"))),
+				"premise: unwrapped, the namespaced section's throw is what drops the pack");
+	}
+
+	private static Object section(ClassLoader loader, String name, java.util.function.Function<String, Object> codec)
+			throws Throwable {
+		return InjectorExecution.construct(loader.loadClass("net.minecraft.server.packs.metadata.MetadataSectionType"),
+				name, codec);
+	}
+
+	private static Object ok(ClassLoader loader, Object value) {
+		return result(loader, "success", value);
+	}
+
+	private static Object bad(ClassLoader loader, String message) {
+		return result(loader, "error", message);
+	}
+
+	private static Object result(ClassLoader loader, String factory, Object argument) {
+		try {
+			return InjectorExecution.invokeStatic(loader.loadClass("com.mojang.serialization.DataResult"), factory, argument);
+		} catch (Throwable unexpected) {
+			throw new AssertionError(unexpected);
+		}
 	}
 
 	@Test
@@ -195,7 +344,7 @@ class PackMetadataFailSoftInjectorTest {
 				if (name.startsWith(NEST) && name.endsWith(".class")) members.add(name);
 			}
 		}
-		assumeTrue(!members.isEmpty(), "ResourceMetadata nest not found in the staged merged base");
+		assertTrue(!members.isEmpty(), "content drift: ResourceMetadata nest not found in the staged merged base");
 		return members;
 	}
 

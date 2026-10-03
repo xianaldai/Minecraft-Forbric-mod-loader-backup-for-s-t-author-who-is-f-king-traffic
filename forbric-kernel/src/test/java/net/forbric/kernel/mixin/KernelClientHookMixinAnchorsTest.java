@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.zip.ZipFile;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassReader;
@@ -15,18 +17,18 @@ class KernelClientHookMixinAnchorsTest {
     private static final String CLIENT = "net/minecraft/client/Minecraft";
     private static final String MIXIN = "de/keksuccino/fancymenu/mixin/mixins/neoforge/client/MixinMinecraft";
     @AfterEach void reset() { System.clearProperty(KernelClientHookMixinAnchors.PROPERTY); }
-    private static ClassNode read(Path jar, String name) throws Exception {
-        Assumptions.assumeTrue(Files.isRegularFile(jar), "local game or mod fixture unavailable");
+    private static ClassNode read(Fixture kind, Path jar, String name) throws Exception {
+        TestFixtures.require(kind, Files.isRegularFile(jar), "local game or mod fixture unavailable");
         try (ZipFile zip = new ZipFile(jar.toFile())) {
             ClassNode node = new ClassNode(); new ClassReader(zip.getInputStream(zip.getEntry(name + ".class"))).accept(node, 0); return node;
         }
     }
     private static ClassNode mixin() throws Exception {
-        return read(Path.of("build/sweep80-mac/v020-rounds/r1/mods/fancymenu_neoforge_3.9.12_MC_26.2.jar"), MIXIN);
+        return read(Fixture.THIRD_PARTY, Path.of("build/sweep80-mac/v020-rounds/r1/mods/fancymenu_neoforge_3.9.12_MC_26.2.jar"), MIXIN);
     }
     private static ClassNode game(boolean repaired) throws Exception {
-        Path jar = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"), "merged-base/patched-mc-merged-26.2.jar");
-        ClassNode node = read(jar, CLIENT);
+        Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+        ClassNode node = read(Fixture.STAGED, jar, CLIENT);
         if (!repaired) return node;
         org.objectweb.asm.ClassWriter writer = new org.objectweb.asm.ClassWriter(0); node.accept(writer);
         ClassNode result = new ClassNode();

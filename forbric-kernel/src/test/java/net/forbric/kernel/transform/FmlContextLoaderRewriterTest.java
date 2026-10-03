@@ -18,9 +18,9 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -44,6 +44,8 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.classloading.LoaderProbePolicy;
 import net.forbric.kernel.mixin.MixinWeaverSlot;
 
@@ -143,7 +145,6 @@ class FmlContextLoaderRewriterTest {
 	@Test
 	void libJfsOwnMixinPluginIsRewrittenAtItsOneCast() throws Exception {
 		byte[] plugin = libJfPlugin();
-		assumeTrue(plugin != null, "the sweep90 pack (build/compat-inputs) is not linked into this checkout");
 
 		byte[] out = rewrite(plugin, LoaderProbePolicy.Family.NEOFORGE);
 		List<AbstractInsnNode> code = instructions(out, "onLoad");
@@ -285,19 +286,21 @@ class FmlContextLoaderRewriterTest {
 		return cw.toByteArray();
 	}
 
-	/** LibJF's mixin plugin out of the nested libjf-unsafe-v0 jar, or null when the sweep pack is not here. */
+	/** LibJF's mixin plugin out of the nested libjf-unsafe-v0 jar; skipped when the sweep pack is not here. */
 	private static byte[] libJfPlugin() throws Exception {
 		Path outer = Path.of("build/compat-inputs/sweep90/mods/libjf-26.2.2+forge.jar");
-		if (!Files.isRegularFile(outer)) return null;
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(outer),
+				"the sweep90 pack (build/compat-inputs) is not linked into this checkout");
+		// The jar is pinned by its full name, so a present one without the plugin has changed under the test.
 		try (ZipFile zip = new ZipFile(outer.toFile())) {
 			ZipEntry nested = zip.getEntry("META-INF/jars/libjf-unsafe-v0-26.2.2+forge.jar");
-			if (nested == null) return null;
+			assertNotNull(nested, "content drift: " + outer + " no longer nests libjf-unsafe-v0-26.2.2+forge.jar");
 			try (InputStream in = zip.getInputStream(nested); JarInputStream jar = new JarInputStream(in)) {
 				for (ZipEntry e = jar.getNextEntry(); e != null; e = jar.getNextEntry()) {
 					if (PLUGIN.equals(e.getName())) return jar.readAllBytes();
 				}
 			}
 		}
-		return null;
+		throw new AssertionError("content drift: libjf-unsafe-v0-26.2.2+forge.jar no longer ships " + PLUGIN);
 	}
 }

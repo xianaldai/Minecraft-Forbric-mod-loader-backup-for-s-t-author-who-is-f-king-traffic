@@ -19,7 +19,6 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -40,6 +39,9 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * The one place {@code fabric:load_conditions} can be judged, and the proof that it really is one place.
  *
@@ -48,8 +50,7 @@ import org.objectweb.asm.tree.MethodNode;
  * other entry points silently stop being judged — so the delegation is asserted, not assumed.
  */
 class MergedBaseFabricConditionsTest {
-	private static final Path STAGED =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path NEO_CARRIER = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final Path MERGED_BASE = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String ENTRY = "net/neoforged/neoforge/common/conditions/ConditionalOps.class";
@@ -110,7 +111,7 @@ class MergedBaseFabricConditionsTest {
 	 */
 	@Test
 	void everyConsumerInTheMergedBaseGoesThroughConditionalOps() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		Set<String> consumers = new LinkedHashSet<>();
 		try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {
 			var entries = zip.entries();
@@ -154,14 +155,7 @@ class MergedBaseFabricConditionsTest {
 	}
 
 	private static byte[] original() throws IOException {
-		assumeTrue(Files.isRegularFile(NEO_CARRIER), "staged NeoForge carrier absent");
-		try (ZipFile zip = new ZipFile(NEO_CARRIER.toFile())) {
-			ZipEntry entry = zip.getEntry(ENTRY);
-			assumeTrue(entry != null, "ConditionalOps absent from this carrier");
-			try (InputStream in = zip.getInputStream(entry)) {
-				return in.readAllBytes();
-			}
-		}
+		return TestFixtures.requireEntry(Fixture.STAGED, NEO_CARRIER, ENTRY);
 	}
 
 	private static MethodNode method(ClassNode node, String name, String desc) {

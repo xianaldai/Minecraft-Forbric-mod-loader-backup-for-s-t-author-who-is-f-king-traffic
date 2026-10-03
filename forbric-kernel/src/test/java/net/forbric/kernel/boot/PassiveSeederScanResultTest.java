@@ -20,10 +20,10 @@ import static net.forbric.kernel.boot.PassiveSeederLoadingModListTest.call;
 import static net.forbric.kernel.boot.PassiveSeederLoadingModListTest.seededList;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
@@ -45,6 +45,8 @@ import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
 
 import net.forbric.api.ModPresence;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.discovery.ForbricModDiscoverer;
 import net.forbric.kernel.discovery.ModFileScanner;
 
@@ -154,7 +156,8 @@ class PassiveSeederScanResultTest {
 	void aJarThatCannotBeIndexedAnswersEmptyInsteadOfThrowing() throws Exception {
 		// A game loader without the kernel's game-side classes, so the index cannot be materialised: the one way
 		// ModFileScanner.scan hands back null for a perfectly readable jar.
-		assumeTrue(Files.isRegularFile(PassiveSeederLoadingModListTest.NEO_RUNTIME), "staged neoforge-runtime absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(PassiveSeederLoadingModListTest.NEO_RUNTIME),
+				"staged neoforge-runtime absent");
 		Path stubs = PassiveSeederLoadingModListTest.loggingStubs(tmp.resolve("stubs"));
 		try (URLClassLoader game = new URLClassLoader(new URL[] {stubs.toUri().toURL(),
 				PassiveSeederLoadingModListTest.NEO_RUNTIME.toUri().toURL()}, ClassLoader.getPlatformClassLoader())) {
@@ -194,7 +197,8 @@ class PassiveSeederScanResultTest {
 		PassiveSeeder.seedNeoForgeLoadingModList(game, PassiveSeederLoadingModListTest.FakeFmlLoader.class, loader,
 				mods);
 		Object list = seededList(loader);
-		assumeTrue(list != null, "no LoadingModList was seeded");
+		// Every input of the seed is here by now, so seeding nothing is the kernel's failure, not a missing fixture.
+		assertNotNull(list, "no LoadingModList was seeded");
 		return list;
 	}
 
@@ -222,7 +226,9 @@ class PassiveSeederScanResultTest {
 	 */
 	private URLClassLoader runtimeLoader() throws Exception {
 		Path compiled = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
-		assumeTrue(Files.isDirectory(compiled) && Files.isRegularFile(PassiveSeederLoadingModListTest.NEO_RUNTIME),
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(PassiveSeederLoadingModListTest.NEO_RUNTIME),
+				"staged neoforge-runtime or compiled game side absent");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled),
 				"staged neoforge-runtime or compiled game side absent");
 		Path stubs = PassiveSeederLoadingModListTest.loggingStubs(tmp.resolve("stubs"));
 		return new URLClassLoader(new URL[] {stubs.toUri().toURL(), compiled.toUri().toURL(),

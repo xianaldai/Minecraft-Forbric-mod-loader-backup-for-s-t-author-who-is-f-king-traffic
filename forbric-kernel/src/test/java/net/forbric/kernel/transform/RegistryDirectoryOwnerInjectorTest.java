@@ -22,7 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -43,6 +42,7 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -79,8 +79,7 @@ import net.forbric.kernel.mixin.MergedBaseMixinCompat;
  * entries on native Fabric, none on Forbric.
  */
 class RegistryDirectoryOwnerInjectorTest {
-	private static final Path STAGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD",
-			System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path MERGED_BASE = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path FORGE_PATCHED = STAGED.resolve("forge-patched/patched-mc-forge-26.2.jar");
 	private static final Path NEO_RUNTIME = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
@@ -117,7 +116,7 @@ class RegistryDirectoryOwnerInjectorTest {
 
 	@Test
 	void theMergedBodyIsNeoForgesAndTheEditHandsEveryAnswerToTheOwner() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] in = classBytes(MERGED_BASE, REGISTRIES);
 		assertTrue(calls(method(node(in), "registryDirPath"), COMMON_HOOKS, "prefixNamespace"),
 				"the merged body prefixes through NeoForge's hook — if it stopped, re-derive the repair");
@@ -134,7 +133,7 @@ class RegistryDirectoryOwnerInjectorTest {
 
 	@Test
 	void woversRegistriesReadTheDirectoryWoverShipsAsOnNativeFabric() throws Exception {
-		assumeAll(VANILLA, MERGED_BASE, NEO_RUNTIME, FABRIC_API, WORLDWEAVER);
+		requireAll(VANILLA, MERGED_BASE, NEO_RUNTIME, FABRIC_API, WORLDWEAVER);
 		ModPresence.publishFabric(List.of(mod(Ecosystem.FABRIC, "wover")));
 
 		Arm nativeFabric = arm(registries(VANILLA, false));
@@ -163,7 +162,7 @@ class RegistryDirectoryOwnerInjectorTest {
 
 	@Test
 	void everyOtherRegistryEndsWhereItsOwnLoaderPutsIt() throws Exception {
-		assumeAll(VANILLA, MERGED_BASE, NEO_RUNTIME, FABRIC_API, WORLDWEAVER);
+		requireAll(VANILLA, MERGED_BASE, NEO_RUNTIME, FABRIC_API, WORLDWEAVER);
 		ModPresence.publishFabric(List.of(mod(Ecosystem.FABRIC, "wover"), mod(Ecosystem.FABRIC, "owo"),
 				mod(Ecosystem.FABRIC, "cloth-config")));
 		ModPresence.publishForgeFamily(List.of(mod(Ecosystem.NEOFORGE, "examplemod"),
@@ -196,7 +195,7 @@ class RegistryDirectoryOwnerInjectorTest {
 
 	@Test
 	void minecraftForgesInlineBodyIsEditedAtBothOfItsReturns() throws Exception {
-		assumeAll(FORGE_PATCHED);
+		requireAll(FORGE_PATCHED);
 		ModPresence.publishFabric(List.of(mod(Ecosystem.FABRIC, "wover")));
 		byte[] in = classBytes(FORGE_PATCHED, REGISTRIES);
 		MethodNode original = method(node(in), "registryDirPath");
@@ -210,7 +209,7 @@ class RegistryDirectoryOwnerInjectorTest {
 
 	@Test
 	void switchedOffRegistriesStaysAsMerged() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		System.setProperty(RegistryDirectoryOwnerInjector.PROPERTY, "off");
 		byte[] in = classBytes(MERGED_BASE, REGISTRIES);
 		assertSame(in, transform(in));
@@ -237,7 +236,7 @@ class RegistryDirectoryOwnerInjectorTest {
 
 	@Test
 	void aRegistriesThatTookFabricsModifierHandsFabricRegistriesVanillasDirectory() throws Exception {
-		assumeAll(VANILLA, MERGED_BASE, NEO_RUNTIME, FABRIC_API, WORLDWEAVER);
+		requireAll(VANILLA, MERGED_BASE, NEO_RUNTIME, FABRIC_API, WORLDWEAVER);
 		ModPresence.publishFabric(List.of(mod(Ecosystem.FABRIC, "wover")));
 		Arm nativeFabric = arm(registries(VANILLA, false));
 		KernelRegistryDirectories.resetForTests(null);
@@ -253,7 +252,7 @@ class RegistryDirectoryOwnerInjectorTest {
 
 	@Test
 	void withoutFabricsModifierInRegistriesEveryRegistryKeepsTheMergedDirectory() throws Exception {
-		assumeAll(MERGED_BASE, NEO_RUNTIME, FABRIC_API, WORLDWEAVER);
+		requireAll(MERGED_BASE, NEO_RUNTIME, FABRIC_API, WORLDWEAVER);
 		ModPresence.publishFabric(List.of(mod(Ecosystem.FABRIC, "wover"), mod(Ecosystem.FABRIC, "owo")));
 		Arm before = arm(registries(MERGED_BASE, false));
 		KernelRegistryDirectories.resetForTests(null);
@@ -273,7 +272,7 @@ class RegistryDirectoryOwnerInjectorTest {
 
 	@Test
 	void forceHandsFabricRegistriesVanillasDirectoryWithoutAsking() throws Exception {
-		assumeAll(VANILLA, MERGED_BASE, NEO_RUNTIME, FABRIC_API, WORLDWEAVER);
+		requireAll(VANILLA, MERGED_BASE, NEO_RUNTIME, FABRIC_API, WORLDWEAVER);
 		System.setProperty(RegistryDirectoryOwnerInjector.PROPERTY, "force");
 		ModPresence.publishFabric(List.of(mod(Ecosystem.FABRIC, "wover")));
 		Arm nativeFabric = arm(registries(VANILLA, false));
@@ -567,8 +566,12 @@ class RegistryDirectoryOwnerInjectorTest {
 		return new RegistryDirectoryOwnerInjector().transform(RegistryDirectoryOwnerInjector.TARGET, bytes, null);
 	}
 
-	private static void assumeAll(Path... inputs) {
-		for (Path input : inputs) assumeTrue(Files.isRegularFile(input), input + " absent — skipping real-bytes check");
+	/** Each input under its own fixture kind: stock 26.2, the staged jars and the sweep's mods are on different machines. */
+	private static void requireAll(Path... inputs) {
+		for (Path input : inputs) {
+			TestFixtures.require(NativeCoremodParityTest.fixtureOf(input), Files.isRegularFile(input),
+					input + " absent — skipping real-bytes check");
+		}
 	}
 
 	private static DiscoveredMod mod(Ecosystem ecosystem, String id) {

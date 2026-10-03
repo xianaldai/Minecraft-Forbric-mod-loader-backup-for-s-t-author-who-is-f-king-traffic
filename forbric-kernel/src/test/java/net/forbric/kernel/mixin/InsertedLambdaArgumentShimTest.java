@@ -1,6 +1,7 @@
 package net.forbric.kernel.mixin;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import static org.junit.jupiter.api.Assertions.*;
 import java.util.*;
 import java.nio.file.*;
@@ -63,9 +64,9 @@ class InsertedLambdaArgumentShimTest {
   assertArrayEquals(new Object[]{42L,first,second,0.5d,callback},((Object[][])defined.getField("SEEN").get(null))[0]);assertTrue(callback.isCancelled());
  }
  @Test void actualLitematicaOpaqueAndTranslucentHandlersFollowThePrunedLiveLambda()throws Exception{
-  TestFixtures.requireDirectory("local merged mod pack",Path.of("run/client-merged-pack/mods"));
+  TestFixtures.requireDirectory(Fixture.THIRD_PARTY,"local merged mod pack",Path.of("run/client-merged-pack/mods"));
   Path jar;try(var files=Files.list(Path.of("run/client-merged-pack/mods"))){jar=files.filter(p->p.getFileName().toString().contains("litematica")&&p.toString().endsWith(".jar")).findFirst().orElse(null);}
-  TestFixtures.require(jar!=null,"Litematica in the local merged mod pack");
+  TestFixtures.require(Fixture.THIRD_PARTY,jar!=null,"Litematica in the local merged mod pack");
   ClassNode mixin;try(ZipFile z=new ZipFile(jar.toFile())){mixin=MixinFit.parse(z.getInputStream(z.getEntry("fi/dy/masa/litematica/mixin/render/MixinLevelRenderer.class")).readAllBytes());}
   String owner="net/minecraft/client/renderer/LevelRenderer";ClassNode target=StagedFabricMixinFixture.game(owner,false);target=MixinFit.parse(new DuplicateLambdaPruneInjector().transform(owner.replace('/','.'),StagedFabricMixinFixture.bytes(target),null));ClassNode finalTarget=target;
   assertEquals(2,InsertedLambdaArgumentShim.adapt(mixin,n->finalTarget));
@@ -121,11 +122,11 @@ class InsertedLambdaArgumentShimTest {
   finally{System.clearProperty(InsertedLambdaArgumentShim.PROPERTY);}
  }
  @Test void actualFusionSpriteLoaderHookFollowsNeoForgesLiveLambda()throws Exception{
-  Path jar=Path.of("build/compat-inputs/sweep90/mods/fusion-1.3.15a-forge-mc26.2.jar");Assumptions.assumeTrue(Files.isRegularFile(jar),"sweep pack absent");
+  Path jar=Path.of("build/compat-inputs/sweep90/mods/fusion-1.3.15a-forge-mc26.2.jar");TestFixtures.require(Fixture.THIRD_PARTY,Files.isRegularFile(jar),"sweep pack absent");
   ClassNode mixin;try(ZipFile z=new ZipFile(jar.toFile())){mixin=MixinFit.parse(z.getInputStream(z.getEntry("com/supermartijn642/fusion/mixin/SpriteResourceLoaderMixin.class")).readAllBytes());}
   String owner="net/minecraft/client/renderer/texture/atlas/SpriteResourceLoader";
   // The raw class, local variable table included: the fixture's parse drops it, and the live table is the proof.
-  Path merged=Path.of(System.getenv().getOrDefault("FORBRIC_OLD","../forbric-loader"),"run/merged-base/patched-mc-merged-26.2.jar");Assumptions.assumeTrue(Files.isRegularFile(merged),"actual game required");
+  Path merged=TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");TestFixtures.require(Fixture.STAGED,Files.isRegularFile(merged),"actual game required");
   byte[] raw;try(ZipFile z=new ZipFile(merged.toFile())){raw=z.getInputStream(z.getEntry(owner+".class")).readAllBytes();}
   byte[] pruned=new DuplicateLambdaPruneInjector().transform(owner.replace('/','.'),raw,null);
   ClassNode target=new ClassNode();new ClassReader(pruned).accept(target,ClassReader.SKIP_FRAMES);

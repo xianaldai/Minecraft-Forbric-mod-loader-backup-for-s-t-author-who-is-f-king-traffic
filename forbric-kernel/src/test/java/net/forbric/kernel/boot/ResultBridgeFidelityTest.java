@@ -1,13 +1,14 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.AbstractInsnNode;
@@ -55,7 +56,8 @@ class ResultBridgeFidelityTest {
 
 	@Test
 	void theItemUseFinishBridgeWritesTheHooksStackBack() throws Exception {
-		assumeTrue(Files.isRegularFile(compiled()), "runtime classes not compiled (staged jars absent)");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled()),
+				"runtime classes not compiled (staged jars absent)");
 		List<String> calls = calls();
 		assertTrue(calls.contains("net/minecraftforge/event/ForgeEventFactory.onItemUseFinish"),
 				"the bridge must actually call the MinecraftForge hook: " + calls);
@@ -67,7 +69,8 @@ class ResultBridgeFidelityTest {
 
 	@Test
 	void thePortalBridgeCarriesARefusal() throws Exception {
-		assumeTrue(Files.isRegularFile(compiled()), "runtime classes not compiled (staged jars absent)");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled()),
+				"runtime classes not compiled (staged jars absent)");
 		List<String> calls = calls();
 		assertTrue(calls.contains("net/minecraftforge/event/ForgeEventFactory.onTrySpawnPortal"), calls.toString());
 		// An empty Optional from the hook is a refusal, and the only way to carry it is to cancel the event.

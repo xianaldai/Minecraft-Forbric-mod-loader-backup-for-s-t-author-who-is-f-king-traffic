@@ -19,10 +19,8 @@ package net.forbric.kernel.runtime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -34,10 +32,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
@@ -61,8 +58,7 @@ import org.objectweb.asm.tree.MethodNode;
  * test cannot have. Everything between that answer and the served {@code Pack} is the game's code.
  */
 class KernelClientPackSourceTest {
-	private static final Path STAGED =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path MERGED_BASE = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path NEO_CARRIER = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final Path FORGE_CARRIER = STAGED.resolve("forge-runtime/forge-runtime.jar");
@@ -133,7 +129,7 @@ class KernelClientPackSourceTest {
 	@Test
 	void buildPackTriesVanillasReaderFirstOnlyWhenAskedTo() throws Exception {
 		Path compiled = RUNTIME.resolve(SOURCE + ".class");
-		assumeTrue(Files.isRegularFile(compiled), "game side not compiled");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled), "game side not compiled");
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(compiled)).accept(node, 0);
 		MethodNode build = node.methods.stream().filter(m -> "buildPack".equals(m.name)
@@ -158,14 +154,14 @@ class KernelClientPackSourceTest {
 	// ---------------------------------------------------------------------------------------------------------
 
 	private Game game() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE) && Files.isRegularFile(NEO_CARRIER)
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE) && Files.isRegularFile(NEO_CARRIER)
 				&& Files.isRegularFile(FORGE_CARRIER), "staged game jars absent");
-		assumeTrue(Files.isDirectory(RUNTIME.resolve("net/forbric/kernel/runtime")), "game side not compiled");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(RUNTIME.resolve("net/forbric/kernel/runtime")), "game side not compiled");
 		List<URL> urls = new ArrayList<>(List.of(RUNTIME.toUri().toURL(), MERGED_BASE.toUri().toURL(),
 				NEO_CARRIER.toUri().toURL(), FORGE_CARRIER.toUri().toURL()));
 		urls.addAll(minecraftLibraries());
 		return new Game(new GameLoader(urls.toArray(URL[]::new), getClass().getClassLoader(),
-				hooked(entry(MERGED_BASE, PACK + ".class")), productionEnvironment(), noModdedFlags()));
+				hooked(TestFixtures.requireEntry(Fixture.STAGED, MERGED_BASE, PACK + ".class")), productionEnvironment(), noModdedFlags()));
 	}
 
 	/** The merged Pack with the stand-in woven at the overlay argument of readPackMetadata's Metadata constructor. */
@@ -222,7 +218,7 @@ class KernelClientPackSourceTest {
 
 	private static List<URL> minecraftLibraries() throws IOException {
 		Path version = MC.resolve("versions/26.2/26.2.json");
-		assumeTrue(Files.isRegularFile(version), "Minecraft 26.2 version json absent");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(version), "Minecraft 26.2 version json absent");
 		var json = com.electronwill.nightconfig.json.JsonFormat.fancyInstance().createParser()
 				.parse(Files.newBufferedReader(version));
 		List<URL> urls = new ArrayList<>();
@@ -234,16 +230,6 @@ class KernelClientPackSourceTest {
 			}
 		}
 		return urls;
-	}
-
-	private static byte[] entry(Path jar, String name) throws IOException {
-		try (ZipFile zip = new ZipFile(jar.toFile())) {
-			ZipEntry entry = zip.getEntry(name);
-			assumeTrue(entry != null, name + " absent from " + jar);
-			try (InputStream in = zip.getInputStream(entry)) {
-				return in.readAllBytes();
-			}
-		}
 	}
 
 	/** Parent-first, except the hooked Pack and the two FML answers, which are defined from the bytes above. */

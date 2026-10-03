@@ -8,8 +8,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.Opcodes;
@@ -28,7 +29,7 @@ class BalmEffectVetoTest {
 	}
 
 	private static ClassNode balm() throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(BALM), "sweep pack absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(BALM), "sweep pack absent");
 		try (ZipFile zip = new ZipFile(BALM.toFile())) {
 			return MixinFit.parse(zip.getInputStream(zip.getEntry(FabricEntityMixinAnchors.BALM_MIXIN + ".class")).readAllBytes());
 		}

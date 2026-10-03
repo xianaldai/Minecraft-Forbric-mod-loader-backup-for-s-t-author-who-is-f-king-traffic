@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -46,15 +45,15 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
 
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ForeignType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * Covers the mods-button redirect: the pause menu opened NeoForge's mod list, which is every mod NEOFORGE loaded
  * and, on a real sixteen-jar Forbric pack, three of them.
  */
 class ModsButtonRedirectorTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	/**
 	 * The Forge-family button does not live in one fixed class, and pinning it to one is the mistake the
@@ -63,9 +62,7 @@ class ModsButtonRedirectorTest {
 	 * all — it is in the runtime jar. So these tests FIND the carriers the same way the transformer does, by
 	 * marker, across both staged jars, and then assert against whatever they turn out to be.
 	 */
-	private static final Path NEO_RUNTIME =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "neoforge-runtime",
-					"neoforge-runtime.jar").normalize();
+	private static final Path NEO_RUNTIME = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
 
 	private static final String PAUSE = "net/minecraft/client/gui/screens/PauseScreen";
 	private static final String NEO = ForeignType.MOD_LIST_SCREEN.internal(Ecosystem.NEOFORGE);
@@ -74,7 +71,6 @@ class ModsButtonRedirectorTest {
 	@Test
 	void theStagedGameStillOpensAFamilysOwnModListSomewhere() throws Exception {
 		Map<String, byte[]> carriers = carriers();
-		assumeTrue(!carriers.isEmpty(), "staged jars absent");
 
 		Map<String, List<String>> opened = new TreeMap<>();
 		for (Map.Entry<String, byte[]> e : carriers.entrySet()) {
@@ -101,7 +97,6 @@ class ModsButtonRedirectorTest {
 	@Test
 	void everyCarrierIsRePointedAtTheUnifiedOne() throws Exception {
 		Map<String, byte[]> carriers = carriers();
-		assumeTrue(!carriers.isEmpty(), "staged jars absent");
 
 		int repointed = 0;
 		for (Map.Entry<String, byte[]> e : carriers.entrySet()) {
@@ -121,7 +116,7 @@ class ModsButtonRedirectorTest {
 	/** The constructor call has to move with the NEW, or the class does not link. */
 	@Test
 	void theConstructorCallMovesWithTheAllocation() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		ClassNode node = parse(transform(PAUSE, readClass(MERGED_BASE, PAUSE + ".class")));
 		for (MethodNode method : node.methods) {
 			if (method.instructions == null) continue;
@@ -146,7 +141,6 @@ class ModsButtonRedirectorTest {
 	@Test
 	void theButtonSaysWhoseListItOpens() throws Exception {
 		Map.Entry<String, byte[]> carrier = carrierCarrying(ModsButtonRedirector.FML_MODS_KEY);
-		assumeTrue(carrier != null, "staged jars absent");
 
 		ClassNode after = parse(transform(carrier.getKey(), carrier.getValue()));
 		assertTrue(constants(after).contains(ModsButtonRedirector.FORBRIC_LABEL),
@@ -159,7 +153,6 @@ class ModsButtonRedirectorTest {
 	@Test
 	void theLabelIsBuiltAsALiteralAndNotAKey() throws Exception {
 		Map.Entry<String, byte[]> carrier = carrierCarrying(ModsButtonRedirector.FML_MODS_KEY);
-		assumeTrue(carrier != null, "staged jars absent");
 		ClassNode node = parse(transform(carrier.getKey(), carrier.getValue()));
 		boolean sawLiteral = false;
 		for (MethodNode method : node.methods) {
@@ -187,7 +180,6 @@ class ModsButtonRedirectorTest {
 	@Test
 	void theButtonWearsTheKernelsOwnIcon() throws Exception {
 		Map.Entry<String, byte[]> carrier = carrierCarrying(ModsButtonRedirector.FML_SPRITE_PATH);
-		assumeTrue(carrier != null, "staged jars absent");
 
 		List<String> after = constants(parse(transform(carrier.getKey(), carrier.getValue())));
 		assertTrue(after.contains(ModsButtonRedirector.FORBRIC_SPRITE_NAMESPACE)
@@ -206,7 +198,6 @@ class ModsButtonRedirectorTest {
 	@Test
 	void theNamespaceAndThePathMoveTogether() throws Exception {
 		Map.Entry<String, byte[]> carrier = carrierCarrying(ModsButtonRedirector.FML_SPRITE_PATH);
-		assumeTrue(carrier != null, "staged jars absent");
 		ClassNode node = parse(transform(carrier.getKey(), carrier.getValue()));
 		for (MethodNode method : node.methods) {
 			if (method.instructions == null) continue;
@@ -235,7 +226,7 @@ class ModsButtonRedirectorTest {
 
 	@Test
 	void aSecondPassLeavesTheRedirectedClassAlone() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		byte[] once = transform(PAUSE, readClass(MERGED_BASE, PAUSE + ".class"));
 		assertSame(once, transform(PAUSE, once), "nothing left to re-point means nothing to rewrite");
 	}
@@ -243,7 +234,7 @@ class ModsButtonRedirectorTest {
 	/** Only the two screens that carry a mods button are touched; everything else is handed back unchanged. */
 	@Test
 	void anyOtherClassIsHandedBackUntouched() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		byte[] unrelated = readClass(MERGED_BASE, "net/minecraft/client/gui/screens/ChatScreen.class");
 		assertSame(unrelated, transform("net/minecraft/client/gui/screens/ChatScreen", unrelated));
 	}
@@ -309,7 +300,7 @@ class ModsButtonRedirectorTest {
 		for (Map.Entry<String, byte[]> e : carriers().entrySet()) {
 			if (constants(parse(e.getValue())).contains(marker)) return e;
 		}
-		return null;
+		throw new AssertionError("content drift: no class in the staged jars carries " + marker);
 	}
 
 	/**
@@ -318,9 +309,10 @@ class ModsButtonRedirectorTest {
 	 */
 	private static Map<String, byte[]> carriers() throws Exception {
 		if (CARRIERS != null) return CARRIERS;
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE) && Files.isRegularFile(NEO_RUNTIME),
+				"staged jars absent");
 		Map<String, byte[]> found = new TreeMap<>();
 		for (Path jar : List.of(MERGED_BASE, NEO_RUNTIME)) {
-			if (!Files.isRegularFile(jar)) continue;
 			try (ZipFile zip = new ZipFile(jar.toFile())) {
 				for (ZipEntry entry : zip.stream().toList()) {
 					if (!entry.getName().endsWith(".class")) continue;
@@ -338,6 +330,7 @@ class ModsButtonRedirectorTest {
 				}
 			}
 		}
+		assertFalse(found.isEmpty(), "content drift: no class in the staged jars opens a mod list or carries the mods button");
 		CARRIERS = found;
 		return found;
 	}
@@ -450,11 +443,10 @@ class ModsButtonRedirectorTest {
 	}
 
 	@Test
-	void aClassThatBuildsTheScreenAndCarriesTheLabelIsToldBothHalvesLanded() {
+	void aClassThatBuildsTheScreenAndCarriesTheLabelIsToldBothHalvesLanded() throws Exception {
 		// The other direction, so the assertion above cannot pass by the log simply never saying anything. Uses
 		// the real carrier rather than a fixture, because that is where both halves genuinely coexist.
-		Map<String, byte[]> carriers = CARRIERS;
-		assumeTrue(carriers != null && !carriers.isEmpty(), "staged carriers absent");
+		Map<String, byte[]> carriers = carriers();
 
 		Map.Entry<String, byte[]> both = null;
 		for (Map.Entry<String, byte[]> candidate : carriers.entrySet()) {
@@ -464,7 +456,7 @@ class ModsButtonRedirectorTest {
 				break;
 			}
 		}
-		assumeTrue(both != null, "no staged class carries both the label and a construction site");
+		assertNotNull(both, "content drift: no staged class carries both the label and a construction site");
 
 		final Map.Entry<String, byte[]> target = both;
 		String log = capture(() -> transform(target.getKey(), target.getValue()));

@@ -17,7 +17,6 @@
 package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -32,6 +31,7 @@ import java.util.Optional;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -94,8 +94,7 @@ class KernelRuntimePackMetadataTest {
 	}
 
 	private static Path merged() {
-		Path run = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
-		return run.resolve("merged-base/patched-mc-merged-26.2.jar");
+		return TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	}
 
 	/**
@@ -105,10 +104,10 @@ class KernelRuntimePackMetadataTest {
 	 */
 	private static URLClassLoader gameLoader() throws Exception {
 		Path merged = merged();
-		assumeTrue(Files.isRegularFile(merged), "the staged merged game is absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(merged), "the staged merged game is absent");
 		Path libraries = TestFixtures.minecraftDir().resolve("libraries");
 		Path versionJson = libraries.getParent().resolve("versions/26.2/26.2.json");
-		assumeTrue(Files.isRegularFile(versionJson), "no 26.2 version JSON beside the local Minecraft libraries");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(versionJson), "no 26.2 version JSON beside the local Minecraft libraries");
 		List<URL> urls = new ArrayList<>(List.of(merged.toUri().toURL()));
 		java.util.regex.Matcher path = java.util.regex.Pattern.compile("\"path\"\\s*:\\s*\"([^\"]+\\.jar)\"")
 				.matcher(Files.readString(versionJson, StandardCharsets.UTF_8));
@@ -116,7 +115,7 @@ class KernelRuntimePackMetadataTest {
 			Path library = libraries.resolve(path.group(1));
 			if (Files.isRegularFile(library)) urls.add(library.toUri().toURL());
 		}
-		assumeTrue(urls.size() > 1, "none of 26.2's libraries is in the local Minecraft install");
+		TestFixtures.require(Fixture.MC_LIBRARIES, urls.size() > 1, "none of 26.2's libraries is in the local Minecraft install");
 		return new URLClassLoader(urls.toArray(new URL[0]), KernelRuntimePackMetadataTest.class.getClassLoader());
 	}
 }

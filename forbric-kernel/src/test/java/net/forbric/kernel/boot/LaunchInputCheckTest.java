@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -48,6 +47,8 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TryCatchBlockNode;
 
 import net.forbric.api.Ecosystem;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * The check that the jars a launch was handed are a Forbric game, by content (issue #13).
@@ -410,8 +411,7 @@ class LaunchInputCheckTest {
 	// --- the real artifacts ---------------------------------------------------------------------------------
 
 	private static Path staged(String relative) {
-		return Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"),
-				"run", relative).normalize();
+		return TestFixtures.stagedRoot().resolve(relative).normalize();
 	}
 
 	/**
@@ -426,7 +426,7 @@ class LaunchInputCheckTest {
 		Path neo = staged("neoforge-runtime/neoforge-runtime.jar");
 		Path forge = staged("forge-runtime/forge-runtime.jar");
 		Path interop = staged("merged-base/forge-runtime-interop.jar");
-		assumeTrue(Files.isRegularFile(base) && Files.isRegularFile(neo) && Files.isRegularFile(forge),
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(base) && Files.isRegularFile(neo) && Files.isRegularFile(forge),
 				"staged game artifacts absent: " + base.getParent().getParent());
 
 		assertEquals(List.of(), LaunchInputCheck.problems(List.of(base), List.of(forge, neo)));

@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.zip.*;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.*;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
@@ -22,9 +24,9 @@ class NestHostFieldWritesTest {
 		FieldInsnNode assignment=(FieldInsnNode)method.instructions.get(2);assignment.owner=writer;h.methods.add(method);classes.put(host+".class",bytes(h));assertEquals(MixinFit.Verdict.HAZARD,MixinFit.evaluate(mixin,classes::get,n->true).verdict(),"same-name sibling field must not count as a write to this member");
 	}
 	@Test void actualC2meVolatileAndSynchronizedGuardsAreNotSuppressed() throws Exception {
-		Path base=Path.of(System.getenv().getOrDefault("FORBRIC_OLD","../forbric-loader"),"run/merged-base/patched-mc-merged-26.2.jar");Assumptions.assumeTrue(Files.exists(base));
+		Path base=TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");TestFixtures.require(Fixture.STAGED,Files.exists(base),base+" absent");
 		for(String version:List.of("alpha","beta")) {
-			Path mod=Path.of("build/compat-inputs/c2me-barrel-20261001/"+version+"-worldgen.jar");Assumptions.assumeTrue(Files.exists(mod));
+			Path mod=Path.of("build/compat-inputs/c2me-barrel-20261001/"+version+"-worldgen.jar");TestFixtures.require(Fixture.THIRD_PARTY,Files.exists(mod),mod+" absent");
 			try(ZipFile game=new ZipFile(base.toFile());ZipFile c2me=new ZipFile(mod.toFile())) {
 				java.util.function.Function<String,byte[]> resolver=n->{try{ZipEntry e=game.getEntry(n);return e==null?null:game.getInputStream(e).readAllBytes();}catch(Exception ex){throw new RuntimeException(ex);}};
 				for(String name:List.of("MixinNetherFortressGeneratorStart","MixinOceanMonumentGeneratorPieceSetting")) {

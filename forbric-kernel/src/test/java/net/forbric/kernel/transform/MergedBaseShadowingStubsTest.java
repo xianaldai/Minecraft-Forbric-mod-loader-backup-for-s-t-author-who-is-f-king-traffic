@@ -19,7 +19,6 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -35,6 +34,9 @@ import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Methods the merge injected that hand off to an interface default while the superclass has a real one.
  *
@@ -48,9 +50,7 @@ import org.objectweb.asm.tree.MethodNode;
  * fight over. That crash happened in classes whose chain had none.
  */
 class MergedBaseShadowingStubsTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	private static final String VEHICLE = "net/minecraft/world/entity/vehicle/VehicleEntity";
 
@@ -103,8 +103,7 @@ class MergedBaseShadowingStubsTest {
 		// Vanilla's own pattern, present in both unmerged bases. Its superclass delegates the same way, so
         // removing the subclass's copy would change nothing and this rule must leave it alone.
 		String widget = "net/minecraft/client/gui/components/AbstractContainerWidget";
-		byte[] before = readClass(widget + ".class");
-		assumeTrue(before != null, "that widget is absent from this base");
+		byte[] before = bytesOf(widget);
 
 		ClassNode after = parse(new ForbricMergedBaseCompatTransformer(resolver())
 				.transform(widget.replace('/', '.'), before, null));
@@ -154,9 +153,9 @@ class MergedBaseShadowingStubsTest {
 	}
 
 	private static byte[] bytesOf(String internalName) throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		byte[] bytes = readClass(internalName + ".class");
-		assumeTrue(bytes != null, internalName + " absent from this base");
+		assertNotNull(bytes, "content drift: " + internalName + " absent from this base");
 		return bytes;
 	}
 

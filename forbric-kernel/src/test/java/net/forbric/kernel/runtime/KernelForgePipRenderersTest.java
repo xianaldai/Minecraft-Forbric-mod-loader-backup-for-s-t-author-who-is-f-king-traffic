@@ -1,7 +1,6 @@
 package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -12,6 +11,8 @@ import java.util.List;
 import java.util.Map;
 import javax.tools.ToolProvider;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -22,7 +23,8 @@ class KernelForgePipRenderersTest {
 	@Test
 	void mixedConstructorListRetainsSingletonIdentityAndNativeRegistrationsWithoutMutatingInput() throws Exception {
 		Path runtime = Path.of("build/classes/java/runtime");
-		assumeTrue(Files.isRegularFile(runtime.resolve("net/forbric/kernel/runtime/KernelForgePipRenderers.class")));
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(runtime.resolve("net/forbric/kernel/runtime/KernelForgePipRenderers.class")),
+				"runtime bridge not compiled");
 		Map<String, String> sources = Map.of(
 				"net.minecraft.client.renderer.state.gui.pip.PictureInPictureRenderState", "public interface PictureInPictureRenderState {}",
 				"net.minecraft.client.gui.render.pip.PictureInPictureRenderer", """

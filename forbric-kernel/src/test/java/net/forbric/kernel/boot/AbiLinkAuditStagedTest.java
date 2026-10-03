@@ -17,7 +17,6 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,6 +24,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -37,15 +38,18 @@ class AbiLinkAuditStagedTest {
 	@Test
 	void theStagedClientPackHasNoDanglingForgeFamilyReference() throws Exception {
 		Path mods = Path.of(System.getProperty("user.dir"), "run", "client-merged-pack", "mods").normalize();
-		Path run = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+		Path run = TestFixtures.stagedRoot().normalize();
 		List<Path> against = List.of(run.resolve("forge-runtime/forge-runtime.jar"), run.resolve("neoforge-runtime/neoforge-runtime.jar"),
 				run.resolve("merged-base/patched-mc-merged-26.2.jar"));
-		assumeTrue(Files.isDirectory(mods) && against.stream().allMatch(Files::isRegularFile), "staged pack or carriers absent");
+		TestFixtures.require(Fixture.STAGED, against.stream().allMatch(Files::isRegularFile),
+				"staged pack or carriers absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isDirectory(mods), "staged pack or carriers absent");
 		List<Path> jars = new ArrayList<>();
 		try (Stream<Path> list = Files.list(mods)) {
 			list.filter(p -> p.toString().endsWith(".jar")).sorted().forEach(jars::add);
 		}
-		assumeTrue(jars.size() >= 50, "the staged pack is not the real one");
+		// The pack is whatever this machine keeps in run/, not a pinned set: a small one is a different fixture.
+		TestFixtures.require(Fixture.THIRD_PARTY, jars.size() >= 50, "the staged pack is not the real one");
 		List<Path> universe = new ArrayList<>(against);
 		universe.addAll(jars);
 		List<AbiLinkAudit.Finding> findings = AbiLinkAudit.audit(jars, AbiLinkAudit.classesOf(universe));

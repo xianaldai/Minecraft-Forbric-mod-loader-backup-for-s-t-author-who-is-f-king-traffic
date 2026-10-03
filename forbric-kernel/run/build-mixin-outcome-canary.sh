@@ -20,6 +20,8 @@ for entry in json.loads((mc / 'versions/26.2/26.2.json').read_text())['libraries
     artifact = entry.get('downloads', {}).get('artifact', {}).get('path')
     if artifact and (mc / 'libraries' / artifact).is_file(): libraries.append(mc / 'libraries' / artifact)
 mixin = mc / 'libraries/net/fabricmc/sponge-mixin/0.17.3+mixin.0.8.7/sponge-mixin-0.17.3+mixin.0.8.7.jar'
+# A vanilla Minecraft tree (a CI runner's .dev/minecraft) has no Fabric libraries: take the kernel's own copy.
+if not mixin.is_file() and os.environ.get('FORBRIC_SPONGE_MIXIN'): mixin = pathlib.Path(os.environ['FORBRIC_SPONGE_MIXIN'])
 asm = [pathlib.Path(p) for p in os.environ['M36_BUILD_CP'].split(os.pathsep)
        if pathlib.Path(p).is_file() and pathlib.Path(p).name.startswith('asm-')]
 if not any(p.name.startswith('asm-tree-') for p in asm): raise SystemExit('resolved ASM tree dependency missing')

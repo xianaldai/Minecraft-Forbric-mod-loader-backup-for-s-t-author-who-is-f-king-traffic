@@ -18,7 +18,6 @@ package net.forbric.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -117,7 +116,7 @@ class ApiLayeringTest {
 	}
 
 	private static List<Path> sources() throws Exception {
-		assumeTrue(Files.isDirectory(API), "API sources not present");
+		assertTrue(Files.isDirectory(API), "the API sources are part of this checkout: " + API);
 		try (Stream<Path> files = Files.list(API)) {
 			List<Path> java = files.filter(p -> p.toString().endsWith(".java")).sorted().toList();
 			assertTrue(java.size() > 1, "the scan found nothing to check, which would make every assertion vacuous");

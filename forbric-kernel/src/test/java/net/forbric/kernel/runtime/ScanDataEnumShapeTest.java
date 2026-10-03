@@ -2,7 +2,6 @@ package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.annotation.ElementType;
 import java.net.URL;
@@ -16,6 +15,8 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.Type;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.discovery.ModFileScanner;
 
 /**
@@ -35,14 +36,13 @@ import net.forbric.kernel.discovery.ModFileScanner;
 class ScanDataEnumShapeTest {
 	private static final Path RUNTIME =
 			Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
-	private static final Path OLD = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"));
-	private static final Path FORGE = OLD.resolve("run/forge-runtime/forge-runtime.jar");
-	private static final Path NEO = OLD.resolve("run/neoforge-runtime/neoforge-runtime.jar");
+	private static final Path FORGE = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
+	private static final Path NEO = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final String ENUM_DESC = "Lcom/supermartijn642/core/registry/RegistryEntryAcceptor$Registry;";
 
 	@Test
 	void minecraftForgeGetsEnumDataOfTypeAndConstantName() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE), "staged Forge carrier absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE), "staged Forge carrier absent");
 		Object value = registryMember("net.forbric.kernel.runtime.KernelForgeScanData", FORGE);
 
 		assertEquals("net.minecraftforge.forgespi.language.ModFileScanData$EnumData", value.getClass().getName(),
@@ -53,7 +53,7 @@ class ScanDataEnumShapeTest {
 
 	@Test
 	void neoForgeGetsEnumHolderOfDescriptorAndConstantName() throws Exception {
-		assumeTrue(Files.isRegularFile(NEO), "staged NeoForge carrier absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEO), "staged NeoForge carrier absent");
 		Object value = registryMember("net.forbric.kernel.runtime.KernelScanData", NEO);
 
 		assertEquals("net.neoforged.fml.loading.modscan.ModAnnotation$EnumHolder", value.getClass().getName(),
@@ -64,7 +64,7 @@ class ScanDataEnumShapeTest {
 
 	/** Builds a one-annotation index through {@code builder} and returns the wrapped {@code registry} member. */
 	private static Object registryMember(String builder, Path carrier) throws Exception {
-		assumeTrue(Files.isDirectory(RUNTIME), "game-side classes not compiled: " + RUNTIME);
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(RUNTIME), "game-side classes not compiled: " + RUNTIME);
 		ModFileScanner.Found found = new ModFileScanner.Found(
 				"Lcom/supermartijn642/core/registry/RegistryEntryAcceptor;",
 				ElementType.FIELD,

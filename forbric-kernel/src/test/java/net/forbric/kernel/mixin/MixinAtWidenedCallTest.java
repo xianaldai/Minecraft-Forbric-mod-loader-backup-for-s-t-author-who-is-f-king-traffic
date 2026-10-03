@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
@@ -99,9 +100,9 @@ class MixinAtWidenedCallTest {
 
 	@Test void actualFabricRegistryListReplacementTargetsTheCurrentFiveArgumentLoader() throws Exception {
 		java.nio.file.Path api = TestFixtures.fabricApi();
-		java.nio.file.Path base = java.nio.file.Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"),
-				"run/merged-base/patched-mc-merged-26.2.jar");
-		org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.isRegularFile(api) && java.nio.file.Files.isRegularFile(base), "actual Fabric API and game inputs required");
+		java.nio.file.Path base = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+		TestFixtures.require(Fixture.STAGED, java.nio.file.Files.isRegularFile(api) && java.nio.file.Files.isRegularFile(base),
+				"actual Fabric API and game inputs required");
 		byte[] mixinBytes = null, targetBytes;
 		try (java.util.zip.ZipFile outer = new java.util.zip.ZipFile(api.toFile())) {
 			var module = outer.stream().filter(e -> e.getName().startsWith("META-INF/jars/fabric-registry-sync-v0-")).findFirst().orElseThrow();

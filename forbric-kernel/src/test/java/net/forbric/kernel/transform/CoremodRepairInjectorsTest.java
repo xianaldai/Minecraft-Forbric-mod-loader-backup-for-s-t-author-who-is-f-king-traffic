@@ -7,8 +7,8 @@ import java.nio.file.Path;
 import java.util.List;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassReader;
@@ -20,7 +20,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
 /** The pre-Mixin halves of the coremod repair, on the real merged and NeoForge runtime classes. */
 @ResourceLock("system-properties")
 class CoremodRepairInjectorsTest {
-	private static final Path STAGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"));
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path NEO = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final Path VANILLA = TestFixtures.vanillaJar();
@@ -51,7 +51,7 @@ class CoremodRepairInjectorsTest {
 	}
 
 	@Test void vanillasFlowerPotAndTheSwitchAreLeftAlone() throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(VANILLA), "vanilla 26.2 absent");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(VANILLA), "vanilla 26.2 absent");
 		byte[] vanilla = NativeCoremodParityTest.read(VANILLA, FlowerPotRepairInjector.OWNER);
 		assertSame(vanilla, new FlowerPotRepairInjector().transform(FlowerPotRepairInjector.TARGET, vanilla, null));
 		System.setProperty(NativeCoremodParity.FLOWER_POT, "off");

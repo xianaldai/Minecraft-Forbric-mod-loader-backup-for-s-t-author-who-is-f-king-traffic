@@ -3,7 +3,6 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -23,6 +22,9 @@ import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Replays the repair ledger against a candidate game build, and proves the replay can come back red.
  *
@@ -35,25 +37,22 @@ import org.objectweb.asm.tree.MethodNode;
  * from the first jar that has it, so a one-entry jar is a candidate build that differs in exactly one class.
  */
 class RepairDriftCensusStagedTest {
-	private static final Path RUN =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path RUN = TestFixtures.stagedRoot();
 	private static final String KEY_MAPPING = "net.minecraft.client.KeyMapping";
 	private static final String LOOKUP_CLAIM = "forbric-merged-base-compat#addMissingForgeKeyMappingLookupInitializer";
 
 	@TempDir Path temporary;
 
 	private static List<Path> stagedJars() {
-		String override = System.getenv("FORBRIC_OLD");
-		Path run = override == null || override.isBlank() ? RUN : Path.of(override, "run").normalize();
-		return List.of(run.resolve("merged-base/patched-mc-merged-26.2.jar"),
-				run.resolve("neoforge-runtime/neoforge-runtime.jar"),
-				run.resolve("forge-runtime/forge-runtime.jar"));
+		return List.of(RUN.resolve("merged-base/patched-mc-merged-26.2.jar"),
+				RUN.resolve("neoforge-runtime/neoforge-runtime.jar"),
+				RUN.resolve("forge-runtime/forge-runtime.jar"));
 	}
 
 	@Test
 	void theBuildThisTreeIsCalibratedAgainstMovesNoAnchor() throws Exception {
 		List<Path> jars = stagedJars();
-		assumeTrue(jars.stream().allMatch(Files::isRegularFile), "staged merged base or carriers absent");
+		TestFixtures.require(Fixture.STAGED, jars.stream().allMatch(Files::isRegularFile), "staged merged base or carriers absent");
 		RepairDriftCensus.Drift drift = RepairDriftCensus.replay(jars);
 		System.out.println(drift.summary());
 		assertTrue(drift.declared() > 0, "no claims declared — the census did not run");
@@ -65,7 +64,7 @@ class RepairDriftCensusStagedTest {
 	@Test
 	void aCandidateThatMovesOneAnchorIsNamedBeforeItIsAdopted() throws Exception {
 		List<Path> jars = stagedJars();
-		assumeTrue(jars.stream().allMatch(Files::isRegularFile), "staged merged base or carriers absent");
+		TestFixtures.require(Fixture.STAGED, jars.stream().allMatch(Files::isRegularFile), "staged merged base or carriers absent");
 		byte[] real = RepairDriftCensus.bytesOf(jars, KEY_MAPPING);
 		assertNotNull(real, "the staged base carries KeyMapping");
 

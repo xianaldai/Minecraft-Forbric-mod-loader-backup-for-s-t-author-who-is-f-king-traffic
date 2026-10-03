@@ -19,15 +19,10 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -41,6 +36,8 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 
 import net.fabricmc.api.EnvType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * The two client windows must open in this order inside {@code Minecraft.<init>}:
@@ -58,8 +55,7 @@ import net.fabricmc.api.EnvType;
  * so a merged base that moves either one silently reopens one of those two failures. Neither injector had a test.
  */
 class ClientWindowOrderTest {
-	private static final Path MERGED_BASE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	private static final String MINECRAFT = "net.minecraft.client.Minecraft";
 	private static final String OPTIONS = "net/minecraft/client/Options";
@@ -75,7 +71,6 @@ class ClientWindowOrderTest {
 	@Test
 	void onTheRealMinecraftTheWindowsOpenInTheDocumentedOrder() throws Exception {
 		byte[] real = mergedBaseMinecraft();
-		assumeTrue(real != null, "staged merged base absent — skipping real-bytecode check");
 
 		assertOrder(bothInjectors(real, true));
 	}
@@ -87,7 +82,6 @@ class ClientWindowOrderTest {
 	@Test
 	void theOrderDoesNotDependOnWhichInjectorRunsFirst() throws Exception {
 		byte[] real = mergedBaseMinecraft();
-		assumeTrue(real != null, "staged merged base absent");
 
 		assertOrder(bothInjectors(real, true));
 		assertOrder(bothInjectors(real, false));
@@ -180,15 +174,8 @@ class ClientWindowOrderTest {
 		return new TransformContext(EnvType.CLIENT, false, "intermediary");
 	}
 
-	private static byte[] mergedBaseMinecraft() throws Exception {
-		if (!Files.isRegularFile(MERGED_BASE)) return null;
-		try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {
-			ZipEntry e = zip.getEntry("net/minecraft/client/Minecraft.class");
-			if (e == null) return null;
-			try (InputStream in = zip.getInputStream(e)) {
-				return in.readAllBytes();
-			}
-		}
+	private static byte[] mergedBaseMinecraft() {
+		return TestFixtures.requireEntry(Fixture.STAGED, MERGED_BASE, "net/minecraft/client/Minecraft.class");
 	}
 
 	/** {@code <init>} in the real shape: assign the singleton, build Options, then ClientModLoader.finish(). */

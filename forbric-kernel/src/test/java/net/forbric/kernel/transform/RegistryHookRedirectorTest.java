@@ -19,7 +19,6 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -39,6 +38,9 @@ import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Verifies the kernel's central registry claim in real bytecode: {@link RegistryHookRedirector} rewrites the
  * genuine {@code GameData.getWrapper} from the staged forge-runtime jar into an identity return, so builtin
@@ -49,19 +51,17 @@ import org.objectweb.asm.tree.VarInsnNode;
  */
 class RegistryHookRedirectorTest {
 	// The forge-runtime jar carries net.minecraftforge.registries.GameData (a passive ABI carrier for the kernel).
-	private static final Path FORGE_RUNTIME =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "forge-runtime", "forge-runtime.jar")
-					.normalize();
+	private static final Path FORGE_RUNTIME = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
 
 	private final RegistryHookRedirector redirector = new RegistryHookRedirector();
 
 	@Test
 	void rewritesRealGameDataGetWrapperToIdentity() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE_RUNTIME),
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE_RUNTIME),
 				"staged forge-runtime.jar absent — skipping real-bytecode redirect check");
 
 		byte[] original = readClass(FORGE_RUNTIME, "net/minecraftforge/registries/GameData.class");
-		assumeTrue(original != null, "GameData not found in forge-runtime.jar");
+		assertTrue(original != null, "content drift: GameData not found in forge-runtime.jar");
 
 		byte[] transformed = redirector.transform(RegistryHookRedirector.GAMEDATA, original, null);
 		assertTrue(transformed != original && transformed.length != original.length || transformed != original,

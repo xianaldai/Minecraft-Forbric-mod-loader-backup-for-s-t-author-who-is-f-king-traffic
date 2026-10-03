@@ -2,7 +2,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,17 +19,20 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /** NeoForge's real CommonHooks.sendRecipes filters the payload it built before sending it. */
 @ResourceLock("system-properties")
 class RecipeSyncFailSoftInjectorTest {
-	private static final Path NEOFORGE_RUNTIME = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"))
+	private static final Path NEOFORGE_RUNTIME = TestFixtures.stagedRoot()
 			.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final String HOOKS = "net/neoforged/neoforge/common/CommonHooks";
 
 	@AfterEach void reset() { System.clearProperty(RecipeSyncFailSoftInjector.PROPERTY); }
 
 	@Test void thePayloadIsFilteredBetweenItsCreationAndItsSending() throws Exception {
-		assumeTrue(Files.isRegularFile(NEOFORGE_RUNTIME), "neoforge runtime not staged: " + NEOFORGE_RUNTIME);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE_RUNTIME), "neoforge runtime not staged: " + NEOFORGE_RUNTIME);
 		byte[] original = NativeCoremodParityTest.read(NEOFORGE_RUNTIME, HOOKS);
 		byte[] out = new RecipeSyncFailSoftInjector().transform(RecipeSyncFailSoftInjector.COMMON_HOOKS, original, null);
 		assertNotSame(original, out);

@@ -95,6 +95,68 @@ public final class DependencyReport {
 		}
 	}
 
+	/**
+	 * The crash-suspects offer: which crash report it came from, which side of a clash is kept (empty when the
+	 * crash named no clash), and the mods the game would start without.
+	 */
+	public record Isolation(String report, String kept, List<IsolationRow> without) {
+		public Isolation {
+			report = report == null ? "" : report;
+			kept = kept == null ? "" : kept;
+			without = without == null ? List.of() : List.copyOf(without);
+		}
+	}
+
+	/** One mod the offer would switch off, and the jar whose line in {@code forbric-disabled.txt} does it. */
+	public record IsolationRow(String modId, String name, String jar) { }
+
+	private static final String ISOLATION = "--isolation-v1--";
+	/** Stands in for "no kept side": a mod name can never be a bare hyphen after {@link #field}. */
+	private static final String NONE = "-";
+
+	public static void writeIsolation(Path file, Isolation isolation) throws IOException {
+		StringBuilder out = new StringBuilder(ISOLATION).append('\n');
+		out.append("report\t").append(field(isolation.report())).append('\n');
+		out.append("kept\t").append(isolation.kept().isBlank() ? NONE : field(isolation.kept())).append('\n');
+		for (IsolationRow row : isolation.without()) {
+			out.append("mod\t").append(field(row.modId())).append('\t').append(field(row.name())).append('\t')
+					.append(field(row.jar())).append('\n');
+		}
+		Files.writeString(file, out.toString(), StandardCharsets.UTF_8);
+	}
+
+	/**
+	 * Strict: the answer to this file switches mods off, so a line of the wrong shape is a file that cannot be
+	 * trusted, and the child starts the game with everything rather than offering whatever part of it parsed.
+	 */
+	public static Isolation readIsolation(Path file) throws IOException {
+		List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+		if (lines.isEmpty() || !ISOLATION.equals(lines.get(0))) throw new IOException("missing isolation header");
+		String report = null, kept = null;
+		List<IsolationRow> rows = new ArrayList<>();
+		for (String line : lines.subList(1, lines.size())) {
+			if (line.isBlank()) continue;
+			String[] fields = line.split("\t", -1);
+			switch (fields[0]) {
+				case "report" -> {
+					if (fields.length != 2 || report != null) throw new IOException("invalid report line");
+					report = fields[1];
+				}
+				case "kept" -> {
+					if (fields.length != 2 || kept != null) throw new IOException("invalid kept line");
+					kept = NONE.equals(fields[1]) ? "" : fields[1];
+				}
+				case "mod" -> {
+					if (fields.length != 4) throw new IOException("invalid mod line");
+					rows.add(new IsolationRow(fields[1], fields[2], fields[3]));
+				}
+				default -> throw new IOException("unknown isolation line");
+			}
+		}
+		if (report == null || kept == null) throw new IOException("incomplete isolation file");
+		return new Isolation(report, kept, rows);
+	}
+
 	private static final String COMPATIBILITY = "--compatibility-v1--";
 	/** The confirmation file's later sections. None can be a row: a row always has tabs. */
 	private static final String SUSPECTED = "--suspected--";

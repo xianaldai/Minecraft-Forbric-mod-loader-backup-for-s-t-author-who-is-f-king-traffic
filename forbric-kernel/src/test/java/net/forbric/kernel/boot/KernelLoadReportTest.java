@@ -26,6 +26,8 @@ import org.junit.jupiter.api.Test;
 
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ModCatalog;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * The file a player reads when a mod did not load.
@@ -162,7 +164,7 @@ class KernelLoadReportTest {
 	void theServerStartedHookWritesTheReportAgain() throws Exception {
 		java.nio.file.Path compiled = java.nio.file.Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime",
 				"net", "forbric", "kernel", "runtime", "KernelGameServerLifecycle.class").normalize();
-		org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.isRegularFile(compiled), "runtime helper not compiled");
+		TestFixtures.require(Fixture.GAME_SIDE, java.nio.file.Files.isRegularFile(compiled), "runtime helper not compiled");
 		org.objectweb.asm.tree.ClassNode node = new org.objectweb.asm.tree.ClassNode();
 		new org.objectweb.asm.ClassReader(java.nio.file.Files.readAllBytes(compiled)).accept(node, 0);
 		boolean writes = false;

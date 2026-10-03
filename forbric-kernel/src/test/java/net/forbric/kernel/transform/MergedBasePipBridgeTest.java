@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -43,6 +42,9 @@ import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Covers the picture-in-picture bridge in real merged-base bytecode.
  *
@@ -53,9 +55,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  * {@code pictureInPictureRendererPools} instead, so those renderers draw nothing with no error anywhere.
  */
 class MergedBasePipBridgeTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	private static final String GUI_RENDERER = "net/minecraft/client/gui/render/GuiRenderer";
 	private static final String BRIDGE = "forbric$prepareOrphanedPip";
@@ -140,7 +140,7 @@ class MergedBasePipBridgeTest {
 
 	@Test
 	void isIdempotent() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 
 		byte[] original = readClass(GUI_RENDERER + ".class");
 		byte[] once = transform(original);
@@ -149,7 +149,7 @@ class MergedBasePipBridgeTest {
 
 	@Test
 	void leavesClassesWithoutBothMapsAlone() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 
 		// Hud is heavily merged but has no picture-in-picture maps; the bridge must not touch it.
 		byte[] hud = readClass("net/minecraft/client/gui/Hud.class");
@@ -161,13 +161,13 @@ class MergedBasePipBridgeTest {
 	// --- helpers -------------------------------------------------------------------------------------------------
 
 	private static ClassNode transformedGuiRenderer() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 
 		byte[] out = transform(readClass(GUI_RENDERER + ".class"));
 		ClassNode node = new ClassNode();
 		new ClassReader(out).accept(node, 0);
-		assumeTrue(method(node, BRIDGE) != null || node.name.isEmpty(),
-				"GuiRenderer no longer carries both pip maps — the merge shifted, re-derive the bridge");
+		assertTrue(method(node, BRIDGE) != null || node.name.isEmpty(),
+				"content drift: GuiRenderer no longer carries both pip maps — the merge shifted, re-derive the bridge");
 		return node;
 	}
 

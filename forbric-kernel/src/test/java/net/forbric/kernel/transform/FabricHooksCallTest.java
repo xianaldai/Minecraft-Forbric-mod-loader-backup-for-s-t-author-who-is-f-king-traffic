@@ -21,14 +21,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.AfterEach;
@@ -52,6 +50,8 @@ import org.objectweb.asm.tree.VarInsnNode;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.loader.impl.game.minecraft.Hooks;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.boot.KernelFabricEcosystem;
 import net.forbric.kernel.mixin.MixinFit;
 
@@ -66,8 +66,7 @@ import net.forbric.kernel.mixin.MixinFit;
  */
 @ResourceLock("system-properties")
 class FabricHooksCallTest {
-	private static final Path MERGED_BASE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD",
-			System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base", "patched-mc-merged-26.2.jar")
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar")
 			.normalize();
 
 	private static final String HOOKS = "net/fabricmc/loader/impl/game/minecraft/Hooks";
@@ -169,7 +168,6 @@ class FabricHooksCallTest {
 	@Test
 	void onTheRealMainTheMarkerFollowsTheWindowOnItsOwnPath() throws Exception {
 		byte[] real = mergedBase("net/minecraft/server/Main.class");
-		assumeTrue(real != null, "staged merged base absent — skipping real-bytecode check");
 
 		LifecycleHookInjector injector = LifecycleHookInjector.forServer();
 		byte[] out = injector.transform(LifecycleHookInjector.SERVER_MAIN, real, null);
@@ -256,7 +254,6 @@ class FabricHooksCallTest {
 	@Test
 	void onTheRealMinecraftTheGameDirectoryIsAssignedBeforeTheHookReadsIt() throws Exception {
 		byte[] real = mergedBase("net/minecraft/client/Minecraft.class");
-		assumeTrue(real != null, "staged merged base absent — skipping real-bytecode check");
 
 		byte[] out = new ClientEntrypointHookInjector().transform("net.minecraft.client.Minecraft", real, ctx());
 
@@ -325,8 +322,7 @@ class FabricHooksCallTest {
 	void owosOwnFreezeMixinsFitTheRealGameOnBothSides() throws Exception {
 		byte[] main = mergedBase("net/minecraft/server/Main.class");
 		byte[] minecraft = mergedBase("net/minecraft/client/Minecraft.class");
-		assumeTrue(main != null && minecraft != null, "staged merged base absent — skipping real-bytecode check");
-		assumeTrue(Files.isRegularFile(OWO), "sweep pack absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(OWO), "sweep pack absent");
 
 		byte[] server = LifecycleHookInjector.forServer().transform(LifecycleHookInjector.SERVER_MAIN, main, null);
 		byte[] client = new ClientEntrypointHookInjector().transform("net.minecraft.client.Minecraft", minecraft, ctx());
@@ -582,14 +578,7 @@ class FabricHooksCallTest {
 		}
 	}
 
-	private static byte[] mergedBase(String entry) throws Exception {
-		if (!Files.isRegularFile(MERGED_BASE)) return null;
-		try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {
-			ZipEntry e = zip.getEntry(entry);
-			if (e == null) return null;
-			try (InputStream in = zip.getInputStream(e)) {
-				return in.readAllBytes();
-			}
-		}
+	private static byte[] mergedBase(String entry) {
+		return TestFixtures.requireEntry(Fixture.STAGED, MERGED_BASE, entry);
 	}
 }
