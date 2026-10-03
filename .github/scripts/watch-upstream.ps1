@@ -193,9 +193,13 @@ if ($last -and ($now - $last).TotalSeconds -lt $MinSeconds) {
 # the workflow's concurrency group. Skipping costs nothing, because the next tick sees the same
 # difference and dispatches once the run has finished. This is what keeps a busy upstream from
 # turning into a stack of runs.
-$latest = @((Invoke-Gh @('run', 'list', '--repo', $Fork, '--workflow', $Workflow, '--limit', '1',
-                         '--json', 'databaseId,status')) | ConvertFrom-Json)[0]
-if ($latest -and 'queued', 'in_progress', 'waiting', 'requested', 'pending' -contains $latest.status) {
+$decoded = Invoke-Gh @('run', 'list', '--repo', $Fork, '--workflow', $Workflow, '--limit', '1',
+                       '--json', 'databaseId,status') | ConvertFrom-Json
+# Windows PowerShell hands ConvertFrom-Json's array back as a single object, and @() around it
+# nests one array inside another rather than flattening -- so index it by hand, and cast the
+# status to a string, or the comparison below is against an array and is quietly always false.
+$latest = if ($decoded -is [array]) { $decoded[0] } else { $decoded }
+if ($latest -and @('queued', 'in_progress', 'waiting', 'requested') -contains ([string]$latest.status)) {
     Write-WatchLog ('{0}, but run {1} is still {2}; waiting for it' -f
                     $reason, $latest.databaseId, $latest.status)
     exit 0
