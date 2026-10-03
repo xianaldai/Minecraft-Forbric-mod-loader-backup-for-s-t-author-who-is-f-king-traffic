@@ -556,6 +556,7 @@
     }
    },
    "comments_through": "2026-10-02T12:29:50Z",
+   "deleted": true,
    "state": "closed",
    "title": "claude\u7528\u4e0d\u5b8c\u53ef\u4ee5\u9001\u6211",
    "updated_at": "2026-10-02T12:47:39Z"
@@ -598,7 +599,7 @@
    "updated_at": "2026-10-02T13:32:59Z"
   },
   "39": {
-   "body": "d14b1b7fa77e",
+   "body": "bcd1bef89165",
    "comments": {
     "5954390976": {
      "a": "MarbleGateKeeper",
@@ -636,10 +637,9 @@
      "t": "2026-10-02T17:08:23Z"
     }
    },
-   "comments_through": "2026-10-02T17:08:23Z",
    "state": "open",
    "title": "\u5bf9\u4e8e\u672c\u9879\u76ee\u7684\u4e2a\u4eba\u89c2\u70b9",
-   "updated_at": "2026-10-02T17:39:27Z"
+   "updated_at": "2026-10-03T01:04:55Z"
   },
   "4": {
    "body": "600345487502",
@@ -659,6 +659,7 @@
   "41": {
    "body": "e8d19aa3c296",
    "comments": {},
+   "deleted": true,
    "state": "closed",
    "title": "\u8fd9\u73a9\u610f\u53ebAI\u5f04\u51fa\u6765\u6709\u5565\u7528\u5462",
    "updated_at": "2026-10-02T14:49:44Z"
@@ -680,6 +681,7 @@
     }
    },
    "comments_through": "2026-10-02T18:19:33Z",
+   "deleted": true,
    "state": "open",
    "title": "\u4f60\u7684\u8111\u5b50\u5b58\u5728\u95ee\u9898",
    "updated_at": "2026-10-02T18:19:33Z"
@@ -688,9 +690,18 @@
    "body": "d0e59b865034",
    "comments": {},
    "comments_through": "",
+   "deleted": true,
    "state": "open",
    "title": "\u4f60\u795e\u4e86",
    "updated_at": "2026-10-02T20:08:45Z"
+  },
+  "46": {
+   "body": "613ea5a25ff5",
+   "comments": {},
+   "comments_through": "",
+   "state": "open",
+   "title": "\u88c5\u4e0a\u94a0-neoforge\u7248\u65e0\u6cd5\u542f\u52a8",
+   "updated_at": "2026-10-03T01:26:50Z"
   },
   "5": {
    "body": "df58248c414f",
