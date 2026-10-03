@@ -12,9 +12,10 @@
 # What it looks at: upstream's main commit, the numbers and timestamps of its issues and pull
 # requests, its releases, and its tags. Any difference from the last look -- including a number
 # that disappeared, which is what a deletion looks like from outside -- counts as a change.
-# Nothing is dispatched twice for the same shape of upstream, and nothing is dispatched while a
-# run is already going, so a busy upstream settles into "one run at a time, as fast as the runs
-# themselves finish" instead of a queue of them, and an idle one asks for a handful a day.
+# Nothing is dispatched twice for the same shape of upstream, and never more than a couple of
+# runs are left queued or working, so an upstream that acts every minute gets a run every minute
+# while a slow run cannot turn into a stack of queued ones -- and an idle upstream asks for a
+# handful of runs a day rather than 1440.
 #
 # Its memory lives in %LOCALAPPDATA%\forbric-upstream-watch, never in the working clone, so it
 # cannot dirty a checkout or be confused by a branch someone is on. A read that fails for an
@@ -40,16 +41,22 @@ $Upstream = 'Ray-T-r/Minecraft-Forbric-mod-loader'
 $Fork = 'xianaldai/Minecraft-Forbric-mod-loader-backup-for-s-t-author-who-is-f-king-traffic'
 $Workflow = 'sync-upstream.yml'
 
-# Upstream changing more often than this is upstream having a bad day; the sync should absorb
-# that, not a dispatch per minute. Also the ceiling on the damage a bug in this probe could do.
-$MinSeconds = 90
+# Short on purpose: a changed upstream is worth a run on the very next tick, which is what makes
+# the fork's staleness about a minute. This only exists so that one tick cannot dispatch twice
+# (a manual run of this script next to the scheduled one, say) -- it is not a rate limit.
+$MinSeconds = 30
 # With nothing changing at all, ask for a run this often: upstream can always change something
 # this probe does not look at, and a run that finds nothing new writes nothing.
 $HeartbeatHours = 6
-# And a hard cap for the day, insurance against this probe being the broken thing rather than
-# upstream being busy. Not the real limiter: that is the in-flight check below, which cannot be
-# tuned into a runaway because it only ever dispatches into an idle window.
-$MaxPerDay = 300
+# How many unfinished runs (queued or working) before holding back. Two, not zero: an upstream
+# acting every minute deserves a run every minute, and a typical run here takes well under a
+# minute, so one is usually working while at most one waits. Two is also what stops a slow run
+# from turning a busy upstream into a stack of queued runs.
+$MaxUnfinished = 2
+# Insurance against this probe being the broken thing rather than upstream being busy: at one
+# tick a minute, a day of non-stop changes is about 1440 dispatches, so this only bites if
+# something is wrong.
+$MaxPerDay = 1000
 
 $StateDir = Join-Path $env:LOCALAPPDATA 'forbric-upstream-watch'
 $StatePath = Join-Path $StateDir 'watch-state.json'
@@ -188,20 +195,22 @@ if ($last -and ($now - $last).TotalSeconds -lt $MinSeconds) {
     exit 0
 }
 
-# A run already in flight is reading the same upstream: it will have picked up everything that
-# changed while it was starting, so a second dispatch now would only queue another run behind
-# the workflow's concurrency group. Skipping costs nothing, because the next tick sees the same
-# difference and dispatches once the run has finished. This is what keeps a busy upstream from
-# turning into a stack of runs.
-$decoded = Invoke-Gh @('run', 'list', '--repo', $Fork, '--workflow', $Workflow, '--limit', '1',
+# A run that is queued or working is reading upstream too, so a few of them in a row are fine --
+# that is what "one run a minute" looks like. Past a couple, the queue is only growing, because
+# nothing is being missed: a queued run reads upstream when it starts, not when it was asked for.
+$decoded = Invoke-Gh @('run', 'list', '--repo', $Fork, '--workflow', $Workflow, '--limit', '5',
                        '--json', 'databaseId,status') | ConvertFrom-Json
 # Windows PowerShell hands ConvertFrom-Json's array back as a single object, and @() around it
-# nests one array inside another rather than flattening -- so index it by hand, and cast the
-# status to a string, or the comparison below is against an array and is quietly always false.
-$latest = if ($decoded -is [array]) { $decoded[0] } else { $decoded }
-if ($latest -and @('queued', 'in_progress', 'waiting', 'requested') -contains ([string]$latest.status)) {
-    Write-WatchLog ('{0}, but run {1} is still {2}; waiting for it' -f
-                    $reason, $latest.databaseId, $latest.status)
+# nests one array inside another rather than flattening -- so unwrap it by hand, and cast the
+# status to a string, or the comparison is against an array and is quietly always false.
+$recent = $decoded
+if ($recent -isnot [array]) { $recent = @($recent) }
+$unfinished = @($recent | Where-Object {
+    @('queued', 'in_progress', 'waiting', 'requested') -contains ([string]$_.status)
+})
+if ($unfinished.Count -ge $MaxUnfinished) {
+    Write-WatchLog ('{0}, but {1} runs are already queued or working; waiting for them' -f
+                    $reason, $unfinished.Count)
     exit 0
 }
 

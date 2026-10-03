@@ -88,8 +88,15 @@ STATE_PATH = "state.json"
 API = "https://api.github.com"
 UPLOADS = "https://uploads.github.com"
 
+# How many requests this run made, and what the token has left. Both are printed at the end:
+# with the sync now asked for whenever upstream changes, how much a run costs is the number
+# that decides whether that is sustainable, and a token that runs out answers with failures.
+CALLS = 0
+
 
 def api(path, params=None, method="GET", body=None):
+    global CALLS
+    CALLS += 1
     url = API + path
     if params:
         url += "?" + urllib.parse.urlencode(params)
@@ -792,4 +799,13 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    status = main()
+    # The rate-limit read is itself one request, and it is only worth making when the run
+    # reached main() at all -- an upstream that is not visible returns early on purpose.
+    try:
+        core = (api("/rate_limit") or {}).get("resources", {}).get("core", {})
+        left = "%s of %s left this hour" % (core.get("remaining"), core.get("limit"))
+    except Exception as e:  # never let a diagnostic fail the run
+        left = "rate limit unknown (%s)" % e
+    print("this run made %d GitHub API calls; %s" % (CALLS, left))
+    sys.exit(status)
