@@ -37,8 +37,8 @@
 | 只拿掉互相冲突的那一对中的一个后一起装（6000 tick + 存档重载） | 需同时拿掉 cwb 和 EnchantCraft，86 个通过 | **只拿掉 cwb，89 个 mod / 110 个 jar 通过** |
 
 - 单独加载没有任何一项变差。变好的两项：c2me（之前依赖模块降级）、lplm（之前崩溃）。其余 10 个仍不严格成功，原因与上次相同；tuanzis_server_mod 从"没进世界"变成"卡住"，仍算失败。
-- 全混装崩溃的原因仍是 Sodium 自己的检查：`Multiple overrides for option 'sodium:general.fullscreen_mode'! Sources: chloride and cwb`——两个 mod 都要改 Sodium 同一个选项，原生加载器上同样会崩，cwb 上游已把 chloride 标为不兼容。这次 Forbric 的崩溃分析直接点名这两个 mod，并给出写进 `forbric-disabled.txt` 就能不加载 cwb 启动的那一行。
-- 自动二分（`run/compat/mac/ddmin.py`）在真实游戏里 **4 次启动**就把 111 个 jar 的失败包缩到 {chloride, cwb}（加上它们依赖的 Sodium），不再需要手工二分。拿掉这一对后其余 88 个也一起通过。
+- 全混装崩溃的原因仍是 Sodium 自己的检查：`Multiple overrides for option 'sodium:general.fullscreen_mode'! Sources: chloride and cwb`——两个 mod 都要改 Sodium 同一个选项。同样三个 jar 放进官方 NeoForge 26.2.0.88 客户端（不经过 Forbric）也崩，第一行异常一字不差；Sodium 只配其中任何一个都能进标题界面（`forbric-kernel/run/compat/reports/2026-10-03-native-sodium-pair/`）。cwb 上游 2026-08-03 已把 chloride 标为不兼容（Kira-NT/cubes-without-borders#139），但还没进 26.2 的发布版。这次 Forbric 的崩溃分析直接点名这两个 mod，并给出写进 `forbric-disabled.txt` 就能不加载 cwb 启动的那一行。
+- 自动二分（`run/compat/mac/ddmin.py`）在真实游戏里 **4 次启动**（含 1 次全包参照，种子是报错里点名的两个 mod）就把 111 个 jar 的失败包缩到 {chloride, cwb}（加上它们依赖的 Sodium），不用再按报错手工排查。拿掉这一对后其余 88 个也一起通过。
 - EnchantCraft 上次也挡住全混装（原生 NeoForge 同样复现）；当前内核已让它不再把加入的玩家踢出，这次全混装里不再是阻断项。
 - "只拿掉 cwb 后通过"仍然**不算**完整混装成功：完整混装的定义是所有严格成功的主体一起，不做任何排除。
 
