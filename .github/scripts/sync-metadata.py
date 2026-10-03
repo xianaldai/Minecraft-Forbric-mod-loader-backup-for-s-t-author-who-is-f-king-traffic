@@ -33,7 +33,11 @@ added to the archive issue:
   * a comment a moderator collapsed -- readers get a stub where the text was -- or one shown
     again after that. Hiding changes what upstream shows without changing a word of it, so it
     is read from GitHub's own field for it rather than from any text
-  * deletion, or a transfer that removes the issue from upstream's listing
+  * deletion, or a transfer that removes the issue from upstream's listing. An item the
+    listing drops while upstream still serves it is neither of those and is not treated as
+    one: it is read directly and compared like any other, so an omission in a listing -- the
+    runner's listings have omitted two pull requests on every run so far -- cannot freeze an
+    item with its closure and its later comments unrecorded
   * a gap in upstream's numbering -- an item that came and went between two runs, so that
     nothing here ever held a copy of it or a watermark to notice it by. The number itself is
     all there is to rebuild, and it gets an entry of its own saying so
@@ -676,10 +680,18 @@ def main():
                 # Recorded on an earlier run. There is nothing left to confirm, and one lookup
                 # per already-known deletion adds up on a sync that runs often.
                 continue
-            # Gone from the listing. Confirm directly before calling it deleted: the listing
-            # has been seen to drop items for some tokens, and a false "deleted" here would be
-            # exactly the kind of lie this archive exists to avoid.
-            if api("/repos/%s/issues/%d" % (UPSTREAM_REPO, number)) is None:
+            # Gone from the listing, which is not the same as gone from upstream. Upstream
+            # number 36 and 37, both pull requests whose pull-side record answers 404 while
+            # their issue-side record is served as normal, appear in neither of the runner's
+            # listings -- they are in the pulls listing only for other tokens, and the runner's
+            # issues listing leaves PRs out. Ask for the item itself: a 404 is the real thing
+            # and is recorded as such below, anything else IS the item, and this run carries on
+            # with it exactly as if the listing had handed it over. Stopping at "it exists"
+            # instead would freeze such an item for good -- its closure, its edits and every
+            # comment after all of them would go unrecorded, which is the one failure this
+            # repository exists to prevent.
+            now = api("/repos/%s/issues/%d" % (UPSTREAM_REPO, number))
+            if now is None:
                 archive_url = "https://github.com/%s/issues/%d" % (UPSTREAM_REPO, number)
                 post_event(mirror_number, [
                     "**Upstream no longer serves this item: deleted, or moved somewhere a "
@@ -689,7 +701,7 @@ def main():
                 ])
                 old["deleted"] = True
                 dirty = True
-            continue
+                continue
         # Skip only when both halves hold: nothing upstream touched, and this fork already
         # knows the shape of the thread. A watermark written before comment edits were tracked
         # has no record of what each comment said, so without that second half the next edit to
