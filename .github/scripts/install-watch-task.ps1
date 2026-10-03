@@ -39,11 +39,9 @@ Set-Content -LiteralPath $Launcher -Value $body -Encoding ascii
 
 $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\wscript.exe') `
     -Argument ('"' + $Launcher + '"')
-# A minute is the smallest Windows repeats a task. MaxValue is deliberate: without an explicit
-# duration, a once-trigger with a repetition interval repeats only for its interval and stops.
+# A minute is the smallest Windows repeats a task.
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
-    -RepetitionInterval (New-TimeSpan -Minutes 1) `
-    -RepetitionDuration ([TimeSpan]::MaxValue)
+    -RepetitionInterval (New-TimeSpan -Minutes 1)
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable
 
@@ -52,6 +50,21 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
     -Description ("Asks GitHub to run this fork's upstream sync when upstream has changed. " +
                   "LOCAL machine only -- a stand-in for the schedule trigger GitHub is not " +
                   'delivering.') | Out-Null
+
+# Both New-ScheduledTaskTrigger and schtasks.exe write a ten-minute <Duration> into the trigger,
+# and a repetition stops when its duration does: the task would have run every minute for ten
+# minutes and then never again. Indefinite repeating is expressed by leaving the element out,
+# which neither API offers, so strip it out of the exported XML and register that. Read back and
+# checked rather than assumed -- a silent no-op here would leave a watchdog that quietly stops,
+# which is the exact failure this is meant to make impossible.
+$stripped = (Export-ScheduledTask -TaskName $TaskName) `
+    -replace '<Duration>[^<]*</Duration>', '' `
+    -replace '<StopAtDurationEnd>[^<]*</StopAtDurationEnd>', ''
+if ($stripped -match '<Duration>') { throw 'could not remove the repetition duration; is the trigger shape different now?' }
+Register-ScheduledTask -TaskName $TaskName -Xml $stripped -Force | Out-Null
+if ((Export-ScheduledTask -TaskName $TaskName) -match '<Duration>') {
+    throw 'the repetition duration came back when the task was re-registered'
+}
 
 $task = Get-ScheduledTask -TaskName $TaskName
 $info = Get-ScheduledTaskInfo -TaskName $TaskName
