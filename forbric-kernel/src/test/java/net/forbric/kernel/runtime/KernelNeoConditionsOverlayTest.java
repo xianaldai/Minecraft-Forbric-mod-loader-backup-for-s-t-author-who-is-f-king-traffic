@@ -18,7 +18,6 @@ package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -149,19 +148,20 @@ class KernelNeoConditionsOverlayTest {
 
 	private static URLClassLoader gameSideLoader() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime").normalize();
-		Path run = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+		Path run = TestFixtures.stagedRoot();
 		Path forgeRt = run.resolve("forge-runtime/forge-runtime.jar");
 		Path neoRt = run.resolve("neoforge-runtime/neoforge-runtime.jar");
 		Path merged = run.resolve("merged-base/patched-mc-merged-26.2.jar");
-		assumeTrue(Files.isDirectory(compiled) && Files.isRegularFile(forgeRt) && Files.isRegularFile(neoRt) && Files.isRegularFile(merged),
-				"the game-side set is not compiled, or the staged artifacts are absent");
+		TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(forgeRt) && Files.isRegularFile(neoRt) && Files.isRegularFile(merged),
+				"the staged artifacts are absent");
+		TestFixtures.require(TestFixtures.Fixture.GAME_SIDE, Files.isDirectory(compiled), "the game-side set is not compiled");
 		List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), forgeRt.toUri().toURL(), neoRt.toUri().toURL(), merged.toUri().toURL()));
 		for (String pattern : List.of("com/mojang/datafixerupper", "com/google/code/gson", "com/mojang/brigadier", "com/google/guava/guava",
 				"it/unimi/dsi/fastutil", "org/slf4j/slf4j-api", "org/apache/logging/log4j/log4j-api",
 				"io/netty/netty-common", "io/netty/netty-buffer", TestFixtures.nettyCodecLibrary(), "io/netty/netty-transport", "io/netty/netty-handler",
 				"org/joml/joml")) {
 			Path library = newestUnder(pattern);
-			assumeTrue(library != null, "no staged " + pattern + " jar in the local Minecraft libraries");
+			TestFixtures.require(TestFixtures.Fixture.MC_LIBRARIES, library != null, "no staged " + pattern + " jar in the local Minecraft libraries");
 			urls.add(library.toUri().toURL());
 		}
 		return new URLClassLoader(urls.toArray(new URL[0]), KernelNeoConditionsOverlayTest.class.getClassLoader());

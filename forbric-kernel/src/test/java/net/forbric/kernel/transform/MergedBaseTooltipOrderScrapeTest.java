@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -34,6 +33,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -55,8 +55,7 @@ import org.objectweb.asm.util.TraceMethodVisitor;
  * does it, run over the transformed merged {@code ItemStack} and over stock 26.2's: the two lists must be equal.
  */
 class MergedBaseTooltipOrderScrapeTest {
-	private static final Path MERGED_BASE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String ITEM_STACK = "net/minecraft/world/item/ItemStack";
 
 	@AfterEach
@@ -67,7 +66,8 @@ class MergedBaseTooltipOrderScrapeTest {
 	@Test
 	void theScrapeOfTheTransformedMergedItemStackEqualsVanillas() throws Exception {
 		Path vanilla = vanillaJar();
-		assumeTrue(Files.isRegularFile(MERGED_BASE) && Files.isRegularFile(vanilla), "staged merged base or stock 26.2 absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(vanilla), "stock 26.2 absent: " + vanilla);
 		List<String> expected = scrape(parse(bytesOf(vanilla, ITEM_STACK)));
 		assertTrue(expected.size() >= 20 && expected.contains("ATTRIBUTE_MODIFIERS"), "premise: vanilla's order is scrapeable: " + expected);
 		assertEquals(List.of(), scrape(parse(bytesOf(MERGED_BASE, ITEM_STACK))), "premise: the merged body has nothing to scrape");
@@ -79,7 +79,7 @@ class MergedBaseTooltipOrderScrapeTest {
 
 	@Test
 	void theInsertedHeadIsOnlyGetstaticPopPairsAndTheRestIsUntouched() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		byte[] original = bytesOf(MERGED_BASE, ITEM_STACK);
 		ClassNode before = parse(original), after = parse(new TooltipOrderScrapeInjector().transform(ITEM_STACK.replace('/', '.'), original, null));
 		MethodNode was = find(before, TooltipOrderScrapeInjector.METHOD, TooltipOrderScrapeInjector.DESC);
@@ -104,7 +104,7 @@ class MergedBaseTooltipOrderScrapeTest {
 
 	@Test
 	void aSecondPassChangesNothingFurther() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		byte[] once = new TooltipOrderScrapeInjector().transform(ITEM_STACK.replace('/', '.'), bytesOf(MERGED_BASE, ITEM_STACK), null);
 		assertSame(once, new TooltipOrderScrapeInjector().transform(ITEM_STACK.replace('/', '.'), once, null));
 	}
@@ -126,7 +126,7 @@ class MergedBaseTooltipOrderScrapeTest {
 
 	@Test
 	void switchedOffItStandsDownAndDeclaresNoAnchor() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		System.setProperty(TooltipOrderScrapeInjector.PROPERTY, "off");
 		byte[] bytes = bytesOf(MERGED_BASE, ITEM_STACK);
 		assertSame(bytes, new TooltipOrderScrapeInjector().transform(ITEM_STACK.replace('/', '.'), bytes, null));

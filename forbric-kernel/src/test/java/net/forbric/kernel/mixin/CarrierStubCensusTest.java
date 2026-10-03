@@ -16,7 +16,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
-import org.junit.jupiter.api.Assumptions;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.ClassNode;
@@ -31,19 +31,19 @@ import org.objectweb.asm.tree.MethodNode;
  * same stub.
  */
 class CarrierStubCensusTest {
-	private static final String OLD = System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader");
-	private static final Path MERGED = Path.of(OLD, "run/merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path MC = TestFixtures.minecraftDir();
 	/**
 	 * The two jars build-merged-base.sh merges by default. Not run/forge-patched's MinecraftForge jar: it is an older
 	 * build, and its LivingEntity differs from the one the merge took.
 	 */
 	private static final Path FORGE = MC.resolve("libraries/net/forbric/patched-mc-forge/26.2-65.0.1/patched-mc-forge-26.2-65.0.1.jar");
-	private static final Path NEO = Path.of(OLD, "run/neoforge-patched/patched-mc-neoforge-26.2.jar");
+	private static final Path NEO = TestFixtures.stagedRoot().resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
 	private static final Path VANILLA = MC.resolve("versions/26.2/26.2.jar");
 
 	@Test void theShippedTableIsExactlyWhatTheArtifactsSay() throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(MERGED) && Files.isRegularFile(VANILLA), "merged base and vanilla jar required");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "merged base and vanilla jar required");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(VANILLA), "merged base and vanilla jar required");
 		// The rows themselves need only the merged base and vanilla; each row's forge=/neo= columns need both carriers.
 		boolean carriers = Files.isRegularFile(FORGE) && Files.isRegularFile(NEO);
 		Map<String, ClassNode> vanilla = read(VANILLA, true);
@@ -80,7 +80,8 @@ class CarrierStubCensusTest {
 		if (!carriers) {
 			assertEquals(rows, new TreeSet<>(shipped.stream().map(line -> line.replaceAll(" (forge|neo)=\\S+", "")).toList()),
 					"carrier-stubs.txt's rows must equal what the staged merged base and vanilla say");
-			Assumptions.abort("both carriers' patched game jars required for the forge=/neo= columns");
+			// Both are build-merged-base.sh inputs, so staged: MinecraftForge's lives under libraries/, but no vanilla install has it.
+			TestFixtures.require(Fixture.STAGED, carriers, "both carriers' patched game jars required for the forge=/neo= columns");
 		}
 		if (System.getenv("FORBRIC_WRITE_CARRIER_STUBS") != null) {
 			Path out = Path.of("src/main/resources" + MixinStubRebind.TABLE);

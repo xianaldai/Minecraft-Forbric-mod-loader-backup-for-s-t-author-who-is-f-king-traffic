@@ -1,7 +1,6 @@
 package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -18,8 +17,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassWriter;
@@ -170,7 +170,8 @@ class ForgeClientConsumerFlowTest {
     private static Api api() throws Exception {
         Path classes = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
         String binary = "net.forbric.kernel.runtime.ForgeClientConsumerFlow";
-        assumeTrue(Files.isRegularFile(classes.resolve(binary.replace('.', '/') + ".class")), "runtime source set not compiled");
+        TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(classes.resolve(binary.replace('.', '/') + ".class")),
+                "runtime source set not compiled");
         URLClassLoader loader = new URLClassLoader(new URL[] {classes.toUri().toURL()}, ClassLoader.getPlatformClassLoader());
         Class<?> type = Class.forName(binary, true, loader);
         return new Api(loader, type.getMethod("appendBoth", Object.class, Consumer.class, Consumer.class),
@@ -209,13 +210,11 @@ class ForgeClientConsumerFlowTest {
             defineInterface("net.minecraftforge.eventbus.internal.Event");
             defineInterface("net.minecraftforge.eventbus.api.bus.EventBus");
             defineUnusedInitializationEvent();
-            Path jar = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/forge-runtime/forge-runtime.jar");
-            assumeTrue(Files.isRegularFile(jar), "staged Forge carrier absent");
+            Path jar = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
+            TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged Forge carrier absent");
             String binary = "net.minecraftforge.client.gui.ClientTooltipComponentManager";
-            try (ZipFile zip = new ZipFile(jar.toFile())) {
-                byte[] bytes = zip.getInputStream(zip.getEntry(binary.replace('.', '/') + ".class")).readAllBytes();
-                manager = defineClass(binary, bytes, 0, bytes.length);
-            }
+            byte[] bytes = TestFixtures.requireEntry(Fixture.STAGED, jar, binary.replace('.', '/') + ".class");
+            manager = defineClass(binary, bytes, 0, bytes.length);
             create = manager.getMethod("createClientTooltipComponent", tooltip);
             setFactories(Map.of());
         }

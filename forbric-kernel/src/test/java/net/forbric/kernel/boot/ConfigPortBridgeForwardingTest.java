@@ -17,13 +17,14 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Type;
@@ -55,7 +56,7 @@ class ConfigPortBridgeForwardingTest {
 	private static ClassNode bridge() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime",
 				"net", "forbric", "kernel", "runtime", "KernelConfigPortBridge.class");
-		assumeTrue(Files.isRegularFile(compiled), "game-side classes not compiled yet");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled), "game-side classes not compiled yet");
 
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(compiled)).accept(node, 0);

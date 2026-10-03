@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -43,6 +42,8 @@ import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
 import net.fabricmc.api.EnvType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * Pins {@link ForgeBindingsLookupInjector}, including the premise the whole rewrite rests on.
@@ -58,9 +59,7 @@ import net.fabricmc.api.EnvType;
  * the first test here asserts the service declaration, not the bytecode.
  */
 class ForgeBindingsLookupInjectorTest {
-	private static final Path FORGE_RUNTIME =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "forge-runtime", "forge-runtime.jar")
-					.normalize();
+	private static final Path FORGE_RUNTIME = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
 
 	private static final String BINDINGS = "net.minecraftforge.fml.Bindings";
 	private static final String SERVICE_FILE = "META-INF/services/net.minecraftforge.fml.IBindingsProvider";
@@ -74,7 +73,7 @@ class ForgeBindingsLookupInjectorTest {
 	/** The premise. Without this file the classpath lookup the rewrite installs resolves to nothing. */
 	@Test
 	void theCarrierStillDeclaresTheProviderOnTheClasspath() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE_RUNTIME), "staged forge-runtime absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE_RUNTIME), "staged forge-runtime absent");
 
 		byte[] decl = entry(SERVICE_FILE);
 		assertNotNull(decl, SERVICE_FILE + " is gone from the carrier — the classpath-keyed ServiceLoader lookup "
@@ -89,8 +88,9 @@ class ForgeBindingsLookupInjectorTest {
 
 	@Test
 	void theRealBindingsClassIsRewrittenAndStillVerifies() throws Exception {
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE_RUNTIME), "staged forge-runtime absent");
 		byte[] in = entry(BINDINGS.replace('.', '/') + ".class");
-		assumeTrue(in != null, "staged forge-runtime absent or Bindings moved");
+		assertNotNull(in, "content drift: Bindings moved out of the staged forge-runtime");
 
 		byte[] out = injector.transform(BINDINGS, in, ctx());
 		assertTrue(out != in, "Bindings was not rewritten — it still asks for a module layer the kernel never builds");

@@ -3,6 +3,8 @@ package net.forbric.kernel.boot;
 import static org.junit.jupiter.api.Assertions.*;
 import java.nio.file.*;
 import java.util.zip.ZipFile;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.*;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.*;
@@ -10,9 +12,10 @@ import org.objectweb.asm.tree.*;
 /** Pin the native ordering: created registries are filled before mods attach their registry callbacks. */
 class NeoRegistryCreationPhaseTest {
     @Test void registryModificationFollowsCreationAsOnNativeNeoForge() throws Exception {
-        Path nativeJar = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"), "neoforge-runtime/neoforge-runtime.jar");
+        Path nativeJar = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
         Path kernel = Path.of("build/classes/java/runtime/net/forbric/kernel/runtime/KernelNeoRegistries.class");
-        Assumptions.assumeTrue(Files.isRegularFile(nativeJar) && Files.isRegularFile(kernel), "staged runtime absent");
+        TestFixtures.require(Fixture.STAGED, Files.isRegularFile(nativeJar), "staged runtime absent");
+        TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(kernel), "staged runtime absent");
         ClassNode nativeNode = new ClassNode();
         try (ZipFile zip = new ZipFile(nativeJar.toFile())) {
             new ClassReader(zip.getInputStream(zip.getEntry("net/neoforged/neoforge/registries/RegistryManager.class"))).accept(nativeNode, 0);

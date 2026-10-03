@@ -6,12 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,9 +34,11 @@ class KernelForgeClientInitRuntimeTest {
 	@BeforeAll
 	static void compileSpies() throws Exception {
 		runtime = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(runtime.resolve("net/forbric/kernel/runtime")),
+				"the runtime source set has not been compiled: " + runtime);
 		for (String name : List.of("KernelForgeClientInit", "KernelGameClientReload", "ForgeClientReloadCapture")) {
-			assumeTrue(Files.isRegularFile(runtime.resolve("net/forbric/kernel/runtime/" + name + ".class")),
-					"runtime class has not been compiled: " + name);
+			assertTrue(Files.isRegularFile(runtime.resolve("net/forbric/kernel/runtime/" + name + ".class")),
+					"the compiled game side has no " + name);
 		}
 		stubs = KernelForgeClientInitFixture.compileSpies(temporary.resolve("spies"));
 	}

@@ -3,6 +3,8 @@ package net.forbric.kernel.mixin;
 import static org.junit.jupiter.api.Assertions.*;
 import java.nio.file.*;
 import java.util.zip.ZipFile;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassReader;
@@ -11,15 +13,15 @@ import org.objectweb.asm.tree.*;
 @ResourceLock("system-properties")
 class GuiItemCaptureMixinAdapterTest {
     @AfterEach void reset() { System.clearProperty(GuiItemCaptureMixinAdapter.PROPERTY); }
-    private static ClassNode read(Path jar, String name) throws Exception {
-        Assumptions.assumeTrue(Files.isRegularFile(jar), "local fixture unavailable");
+    private static ClassNode read(Fixture kind, Path jar, String name) throws Exception {
+        TestFixtures.require(kind, Files.isRegularFile(jar), "local fixture unavailable");
         try (ZipFile zip = new ZipFile(jar.toFile())) { ClassNode node = new ClassNode(); new ClassReader(zip.getInputStream(zip.getEntry(name + ".class"))).accept(node, 0); return node; }
     }
     private static ClassNode mixin() throws Exception {
-        return read(Path.of("build/sweep80-mac/v020-rounds/r3/mods/itemglintrelight-fabric-26.2-0.3.0+26.2.jar"), "celia/adwadg/itemglintrelight/mixin/client/GuiGraphicsItemOutlineMixin");
+        return read(Fixture.THIRD_PARTY, Path.of("build/sweep80-mac/v020-rounds/r3/mods/itemglintrelight-fabric-26.2-0.3.0+26.2.jar"), "celia/adwadg/itemglintrelight/mixin/client/GuiGraphicsItemOutlineMixin");
     }
     @Test void theCaptureSelectsTheSubmissionAndDoesNotMoveTheTooltipCallback() throws Exception {
-        ClassNode mixin = mixin(), target = read(Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"), "merged-base/patched-mc-merged-26.2.jar"), "net/minecraft/client/gui/GuiGraphicsExtractor");
+        ClassNode mixin = mixin(), target = read(Fixture.STAGED, TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar"), "net/minecraft/client/gui/GuiGraphicsExtractor");
         assertEquals(1, GuiItemCaptureMixinAdapter.adapt(mixin, name -> target));
         MethodNode capture = mixin.methods.stream().filter(m -> m.name.equals("itemglintrelight$captureGuiItem")).findFirst().orElseThrow();
         assertEquals("INVOKE", MixinFit.value(MixinFit.atNodes(MixinFit.injectorOf(capture)).getFirst(), "value"));

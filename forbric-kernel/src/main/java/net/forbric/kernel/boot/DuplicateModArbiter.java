@@ -66,6 +66,8 @@ import net.forbric.kernel.util.ForbricLog;
  * <p>Switches: {@code -Dforbric.crossJarArbitration=off} disables it entirely;
  * {@code -Dforbric.modOwner=sodium=fabric,lithostitched=neoforge} overrides individual mods;
  * {@code -Dforbric.multiLoaderPreference} (shared with {@link MultiLoaderArbiter}) sets the global order.
+ * {@link DisabledMods}' {@code forbric-disabled.txt} is applied here too, with the switch on or off: it is the
+ * player's own list of jars not to load, not an arbitration.
  */
 public final class DuplicateModArbiter {
 	static final String SWITCH = "forbric.crossJarArbitration";
@@ -162,6 +164,7 @@ public final class DuplicateModArbiter {
 
 	/** Forgets the decision — for tests, and so a re-launch in one process re-arbitrates. */
 	public static synchronized void reset() {
+		DisabledMods.reset();
 		cached = null;
 		cachedDir = null;
 		cachedSide = null;
@@ -178,14 +181,24 @@ public final class DuplicateModArbiter {
 			cached = null; cachedDir = null; cachedSide = null;
 			ForbricLog.warn("[Forbric/DupeId] cross-jar arbitration DISABLED (-D%s=off) — two jars sharing a mod id "
 					+ "will BOTH load, shadowing each other's classes and applying each other's mixins", SWITCH);
-			return Decision.none();
+			// The switch turns off arbitration, not the player's own list. Cached, because the seeder asks
+			// current() rather than being handed this, and would otherwise list a jar nobody loaded.
+			Set<Path> disabled = DisabledMods.load(modsDir == null ? null : modsDir.getParent(), modsDir);
+			if (disabled.isEmpty()) return Decision.none();
+			cached = new Decision(disabled, Map.of(), List.of(), Set.of());
+			cachedDir = modsDir;
+			cachedSide = envType;
+			return cached;
 		}
 		if (cached != null && modsDir != null && modsDir.equals(cachedDir) && envType == cachedSide) return cached;
 
 		Path rundir = modsDir == null ? null : modsDir.getParent();
 		loadOverrideFile(rundir);
+		// Read before the scan, so a switched-off jar never becomes a claim: it cannot win an id, lose one to a
+		// build that is also off, or have its nested jars inventoried.
+		Set<Path> disabled = DisabledMods.load(rundir, modsDir);
 		List<Alias> universalAliases = new ArrayList<>();
-		List<Claim> claims = scan(modsDir, envType, universalAliases);
+		List<Claim> claims = scan(modsDir, envType, universalAliases, disabled);
 		topLevelClaims = List.copyOf(claims);
 		topLevelAliases = List.copyOf(universalAliases);
 		Decision decision;
@@ -219,12 +232,27 @@ public final class DuplicateModArbiter {
 			// Each physical candidate owns only its own classes. Do not count losing nested classes as a root's.
 			for (String line : divergenceReport(all, decision)) ForbricLog.info("%s", line);
 		}
+		decision = withDisabled(decision, disabled);
 		writeOverrideTemplate(rundir, decision);
 		MergeReport.write(rundir, modsDir, decision);
 		cached = decision;
 		cachedDir = modsDir;
 		cachedSide = envType;
 		return decision;
+	}
+
+	/**
+	 * {@code decision} with the player's switched-off jars added to what is suppressed and to nothing else.
+	 *
+	 * <p>Not rescue jars. A rescue jar is another ecosystem's build of a mod that IS loaded, lending a class the
+	 * winner lacks; a switched-off jar is a mod the player asked not to run, and serving its classes on demand
+	 * would run it piecemeal.
+	 */
+	static Decision withDisabled(Decision decision, Set<Path> disabled) {
+		if (disabled.isEmpty()) return decision;
+		Set<Path> suppressed = new LinkedHashSet<>(decision.suppressedJars());
+		suppressed.addAll(disabled);
+		return new Decision(Set.copyOf(suppressed), decision.ownerByModId(), decision.aliases(), decision.rescueJars());
 	}
 
 	/**
@@ -567,7 +595,11 @@ public final class DuplicateModArbiter {
 		ForbricLog.info("[Forbric/DupeId] nested pass: %d nested jar(s), %d mod id(s) claimed across ecosystems, "
 				+ "%d nested jar(s) suppressed", nestedClaims.size(), contested,
 				suppressed.size() - phase1.suppressedJars().size());
-		return new Decision(Set.copyOf(suppressed), Map.copyOf(owners), List.copyOf(aliases));
+		// What phase one kept out of the rescue set stays out: a switched-off jar does not become a class source
+		// because a nested contest happened to rebuild the decision.
+		Set<Path> rescue = new LinkedHashSet<>(suppressed);
+		for (Path jar : phase1.suppressedJars()) if (!phase1.rescueJars().contains(jar)) rescue.remove(jar);
+		return new Decision(Set.copyOf(suppressed), Map.copyOf(owners), List.copyOf(aliases), Set.copyOf(rescue));
 	}
 
 	/** The pure half: decide from claims alone. Package-visible so tests can drive it without a filesystem. */
@@ -977,7 +1009,7 @@ public final class DuplicateModArbiter {
 	 * asking {@code isModLoaded("iris")} of a jar loaded as NeoForge got no for an answer even though every class
 	 * it wanted was present. Read those manifests here, where the file is already open, and hand their ids back.
 	 */
-	private static List<Claim> scan(Path modsDir, EnvType envType, List<Alias> universalAliases) {
+	private static List<Claim> scan(Path modsDir, EnvType envType, List<Alias> universalAliases, Set<Path> disabled) {
 		List<Claim> claims = new ArrayList<>();
 		if (modsDir == null || !Files.isDirectory(modsDir)) return claims;
 
@@ -992,6 +1024,7 @@ public final class DuplicateModArbiter {
 		}
 
 		for (Path jar : jars) {
+			if (disabled.contains(jar.toAbsolutePath())) continue;
 			Claim claim = claimOf(discoverer, jar, envType, universalAliases);
 			// Language/runtime bundles (notably kotlinforforge's -all jar) have JarJar metadata but no
 			// mod manifest. Keep their physical root in the plan so their declared children are discovered.

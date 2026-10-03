@@ -17,13 +17,14 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Stream;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 
 /** The Alias javadoc's measurement, pinned on the staged pair: Jade's Fabric build carries 20 classes its NeoForge build lacks, and 8 the other way. */
@@ -31,7 +32,7 @@ class DuplicateModArbiterStagedTest {
 	@Test
 	void theStagedJadePairReproducesTheJavadocsNumbers() throws Exception {
 		Path mods = Path.of(System.getProperty("user.dir"), "run", "client-merged-pack", "mods").normalize();
-		assumeTrue(Files.isDirectory(mods), "staged pack absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isDirectory(mods), "staged pack absent");
 		Path fabric = null, neo = null;
 		try (Stream<Path> list = Files.list(mods)) {
 			for (Path p : list.toList()) {
@@ -40,7 +41,7 @@ class DuplicateModArbiterStagedTest {
 				if (name.contains("Jade") && name.contains("NeoForge")) neo = p;
 			}
 		}
-		assumeTrue(fabric != null && neo != null, "both Jade builds are not staged");
+		TestFixtures.require(Fixture.THIRD_PARTY, fabric != null && neo != null, "both Jade builds are not staged");
 		List<String> fabricOnly = DuplicateModArbiter.loserOnlyClasses(fabric, neo);
 		List<String> neoOnly = DuplicateModArbiter.loserOnlyClasses(neo, fabric);
 		assertEquals(20, fabricOnly.size(), "Fabric-only: " + fabricOnly);

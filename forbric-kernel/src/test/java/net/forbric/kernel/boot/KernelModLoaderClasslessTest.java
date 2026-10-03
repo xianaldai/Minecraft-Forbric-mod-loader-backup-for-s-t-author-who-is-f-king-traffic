@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -51,6 +50,8 @@ import org.objectweb.asm.Opcodes;
 import net.forbric.api.DiscoveredMod;
 import net.forbric.api.Ecosystem;
 import net.forbric.api.Side;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * A NeoForge mod that declares no {@code @Mod} class still gets the container NeoForge gives every mod it lists.
@@ -61,8 +62,7 @@ import net.forbric.api.Side;
  * ({@code mr_fall_effects}) are the same shape again, in {@code mods/} this time.
  */
 class KernelModLoaderClasslessTest {
-	private static final Path STAGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD",
-			System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path STAGED = TestFixtures.stagedRoot().normalize();
 
 	@TempDir
 	Path tmp;
@@ -292,14 +292,17 @@ class KernelModLoaderClasslessTest {
 		Path compiled = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
 		Path neo = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
 		Path forge = STAGED.resolve("forge-runtime/forge-runtime.jar");
-		assumeTrue(Files.isDirectory(compiled) && Files.isRegularFile(neo) && Files.isRegularFile(forge),
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(neo) && Files.isRegularFile(forge),
 				"staged runtime classes/carriers absent");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "staged runtime classes/carriers absent");
 		Path stubs = PassiveSeederLoadingModListTest.loggingStubs(shared.resolve("stubs"));
 		Set<URL> urls = new LinkedHashSet<>(List.of(compiled.toUri().toURL(), stubs.toUri().toURL(),
 				neo.toUri().toURL(), forge.toUri().toURL(), modJar.toUri().toURL()));
 		// NeoForge's event bus logs through log4j, which the unit-test classpath deliberately does not carry.
+		// build.gradle resolves it as a compileOnly dependency and hands it to every test run, staged or not.
 		String log4j = System.getProperty("forbric.log4jApiForTests", "");
-		assumeTrue(!log4j.isEmpty() && Files.isRegularFile(Path.of(log4j)), "log4j-api for the event bus absent");
+		assertTrue(!log4j.isEmpty() && Files.isRegularFile(Path.of(log4j)),
+				"log4j-api for the event bus absent: '" + log4j + "'");
 		urls.add(Path.of(log4j).toUri().toURL());
 		return new URLClassLoader(urls.toArray(URL[]::new), KernelModLoaderClasslessTest.class.getClassLoader());
 	}

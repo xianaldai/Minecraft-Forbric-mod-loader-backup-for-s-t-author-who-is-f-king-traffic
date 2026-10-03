@@ -17,7 +17,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -41,6 +40,9 @@ import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * A whole-artifact detector for the field-level form of "the mechanism was split across the two halves".
  *
@@ -58,13 +60,11 @@ import org.objectweb.asm.tree.MethodNode;
  * one. That distinction is structural and is asserted in {@link MergedBaseParticleProvidersTest}.
  */
 class MergedBaseNoUnwrittenDuplicateFieldTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	@Test
 	void everyDuplicatedFieldNameHasAWriterForEveryOneOfItsTypes() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping whole-artifact scan");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping whole-artifact scan");
 
 		List<String> dead = new ArrayList<>();
 		int scanned = 0;
@@ -85,7 +85,7 @@ class MergedBaseNoUnwrittenDuplicateFieldTest {
 				collectDeadVariants(node, dead);
 			}
 		}
-		assumeTrue(scanned > 1000, "this does not look like a full merged base (" + scanned + " classes)");
+		assertTrue(scanned > 1000, "content drift: this does not look like a full merged base (" + scanned + " classes)");
 		assertTrue(dead.isEmpty(),
 				"these merged fields exist in more than one type and at least one of those types is never written, "
 						+ "so it is null for every reader — in the class and in every mod — and nothing throws where "

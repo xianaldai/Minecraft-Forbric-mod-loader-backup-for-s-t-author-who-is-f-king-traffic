@@ -31,6 +31,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import net.forbric.api.ModCatalog;
+import net.forbric.kernel.mixin.MixinOverlapLint;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
@@ -67,6 +68,13 @@ public final class CrashAttribution {
 	public static final String SWITCH = "forbric.crashAnalysis";
 
 	private static final String FILE = "crash-analysis.txt";
+
+	/**
+	 * The same answer for a program: {@code {schema:1, report, clash, suspects:[{modId,name,jar,reason,depth}]}}.
+	 * {@link CrashSuspectOffer} reads it on the next launch, so the player can switch the suspects off in one step
+	 * instead of finding their jars by hand.
+	 */
+	static final String JSON = "crash-suspects.json";
 
 	/** How many mods the file names. Past a handful this stops being an answer and becomes a second list. */
 	static final int MOST = 5;
@@ -107,6 +115,16 @@ public final class CrashAttribution {
 	/** The reason a suspect carries when the error names it as one side of a clash. */
 	static final String CLASH = "the error names it as clashing with another mod";
 
+	/**
+	 * The reason a suspect carries when the crash ran through a method its mixin and another mod's both claim in a way
+	 * that cannot both take effect ({@link MixinOverlapLint}). The overwritten method is the one frame that names neither
+	 * mod: its code is whichever overwrite Mixin applied last, under the vanilla class name and jar.
+	 */
+	static final String OVERLAP = "its mixin and another mod's collide in a method the crash went through";
+
+	/** A stack frame's class and method: {@code \tat net.minecraft.Foo$Bar.tick(Foo.java:1)}, module prefix dropped. */
+	private static final Pattern FRAME_METHOD = Pattern.compile("^\\s*at (?:[^\\s(]*/)?([\\w$.]+)\\.([\\w$<>]+)\\(");
+
 	private static volatile Path rundir;
 
 	/**
@@ -126,8 +144,22 @@ public final class CrashAttribution {
 	 *
 	 * @param depth how far down the trace it first appears; the ordering the answer is sorted by, because the
 	 *              frame that threw is a better suspect than the frame that called it
+	 * @param jar   the jar in {@code mods/} that a {@code forbric-disabled.txt} line would switch off: the mod's
+	 *              own, or for a mod another jar carries inside itself, that jar's. Empty when no installed jar
+	 *              can be named, which leaves the mod out of the lines this suggests
 	 */
-	record Suspect(String modId, String name, String version, String reason, int depth) {
+	record Suspect(String modId, String name, String version, String reason, int depth, String jar, Collision collision) {
+		Suspect(String modId, String name, String version, String reason, int depth) {
+			this(modId, name, version, reason, depth, "", null);
+		}
+
+		Suspect(String modId, String name, String version, String reason, int depth, String jar) {
+			this(modId, name, version, reason, depth, jar, null);
+		}
+	}
+
+	/** For an {@link #OVERLAP} suspect: the other mod's display name, and the method as {@code Class.method}. */
+	record Collision(String other, String method) {
 	}
 
 	/** Where to look. Set from the boot, which is the only place that knows the instance directory. */
@@ -165,6 +197,7 @@ public final class CrashAttribution {
 			Path out = dir.resolve(".forbric-kernel").resolve(FILE);
 			Files.createDirectories(out.getParent());
 			Files.writeString(out, rendered, StandardCharsets.UTF_8);
+			Files.writeString(out.resolveSibling(JSON), json(report.getFileName().toString(), suspects), StandardCharsets.UTF_8);
 
 			// Printed as well as written. A launcher shows the tail of stdout when the game dies, and that is
 			// where a player is already looking; the file is for the person they send it to.
@@ -175,6 +208,49 @@ public final class CrashAttribution {
 		} catch (Throwable t) {
 			ForbricLog.debug("[Forbric/Crash] could not analyse the crash report: %s", String.valueOf(t));
 		}
+	}
+
+	/** The machine form of the answer; see {@link #JSON}. */
+	static String json(String reportName, List<Suspect> suspects) {
+		List<Object> rows = new ArrayList<>();
+		for (Suspect s : suspects) {
+			Map<String, Object> row = new LinkedHashMap<>();
+			row.put("modId", s.modId());
+			row.put("name", s.name());
+			row.put("jar", s.jar());
+			row.put("reason", s.reason());
+			row.put("depth", s.depth());
+			rows.add(row);
+		}
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("schema", 1);
+		out.put("report", reportName);
+		out.put("clash", clashing(suspects) >= 2);
+		out.put("suspects", rows);
+		return net.forbric.kernel.soak.SoakJson.encode(out) + "\n";
+	}
+
+	/**
+	 * The {@code forbric-disabled.txt} lines that would start the game without the suspects, in order, each jar
+	 * once.
+	 *
+	 * <p>For a clash, every side but the first-named: the error says the mods cannot run TOGETHER, so the game
+	 * starts with one of them, and the first is the one the advice above already says to keep. Anything else the
+	 * clash report names — the mod whose code threw the error, usually — is not a side and stays.
+	 */
+	static List<String> startWithout(List<Suspect> suspects) {
+		boolean clash = clashing(suspects) >= 2;
+		java.util.LinkedHashSet<String> jars = new java.util.LinkedHashSet<>();
+		String kept = null;
+		for (Suspect s : suspects) {
+			if (clash && !CLASH.equals(s.reason())) continue;
+			if (clash && kept == null) {
+				kept = s.jar();
+				continue;
+			}
+			if (!s.jar().isEmpty() && !s.jar().equals(kept)) jars.add(s.jar());
+		}
+		return List.copyOf(jars);
 	}
 
 	private static String summary(List<Suspect> suspects) {
@@ -238,6 +314,17 @@ public final class CrashAttribution {
 				while (clashing.find()) {
 					for (String id : clashing.group(1).split(", and |, ?| and ")) remember(byId, id.strip(), CLASH, depth);
 				}
+			} else {
+				Matcher frame = FRAME_METHOD.matcher(line);
+				if (frame.find()) {
+					for (MixinOverlapLint.Overlap o : MixinOverlapLint.conflictsIn(frame.group(1), frame.group(2))) {
+						String first = o.first().modId();
+						String second = o.second().modId();
+						String where = o.where().replace('$', '.');
+						remember(byId, first, OVERLAP, depth, new Collision(displayName(second), where));
+						remember(byId, second, OVERLAP, depth, new Collision(displayName(first), where));
+					}
+				}
 			}
 			Matcher jar = FRAME_JAR.matcher(line);
 			while (jar.find()) {
@@ -261,13 +348,44 @@ public final class CrashAttribution {
 	 * thing an answer like this cannot afford to be.
 	 */
 	private static void remember(Map<String, Suspect> byId, String modId, String reason, int depth) {
+		remember(byId, modId, reason, depth, null);
+	}
+
+	private static void remember(Map<String, Suspect> byId, String modId, String reason, int depth, Collision collision) {
 		if (modId == null || modId.isBlank() || byId.containsKey(modId)) return;
 		for (ModCatalog.Entry entry : ModCatalog.everything()) {
 			if (entry.modId().equalsIgnoreCase(modId)) {
-				byId.put(entry.modId(), new Suspect(entry.modId(), entry.name(), entry.version(), reason, depth));
+				byId.put(entry.modId(), new Suspect(entry.modId(), entry.name(), entry.version(), reason, depth,
+						installedJar(entry), collision));
 				return;
 			}
 		}
+	}
+
+	private static String displayName(String modId) {
+		for (ModCatalog.Entry entry : ModCatalog.everything()) {
+			if (entry.modId().equalsIgnoreCase(modId)) return entry.name();
+		}
+		return modId;
+	}
+
+	/**
+	 * The jar a player put in {@code mods/} that brings {@code entry}: its own when it was installed, else the
+	 * nearest installed mod that carries it. A bundled library has no line of its own in
+	 * {@code forbric-disabled.txt} — its file is extracted, not installed — so switching it off means switching
+	 * off what carries it. Empty when the carrier is unknown.
+	 */
+	static String installedJar(ModCatalog.Entry entry) {
+		ModCatalog.Entry current = entry;
+		for (int hops = 0; current != null && hops < 16; hops++) {
+			if (current.installed()) return current.jar();
+			String parent = current.bundledBy();
+			current = null;
+			for (ModCatalog.Entry candidate : ModCatalog.everything()) {
+				if (candidate.modId().equals(parent)) { current = candidate; break; }
+			}
+		}
+		return "";
 	}
 
 	/**
@@ -306,7 +424,9 @@ public final class CrashAttribution {
 				sb.append("  ").append(s.name());
 				if (!s.version().isEmpty()) sb.append(' ').append(s.version());
 				sb.append("  (").append(s.modId()).append(")\n");
-				sb.append("    ").append(zhReason(s.reason())).append("\n\n");
+				sb.append("    ").append(s.collision() == null ? zhReason(s.reason())
+						: "它和 " + s.collision().other() + " 的 mixin 都改了 " + s.collision().method()
+								+ "，两边不能同时生效，而这次崩溃正好经过这个方法").append("\n\n");
 			}
 			sb.append("怎么办\n");
 			sb.append("------\n");
@@ -314,6 +434,15 @@ public final class CrashAttribution {
 				sb.append(clashNames(suspects, "、")).append(" 不能装在一起：只留其中一个，把其余的从 mods 文件夹里拿出来再开一次。\n");
 			} else {
 				sb.append("先把最上面那个 mod 从 mods 文件夹里拿出来再开一次。还是崩就换下一个。\n");
+			}
+			for (String pair : collisions(suspects, true)) {
+				sb.append(pair).append("：先只留其中一个再开一次。\n");
+			}
+			List<String> lines = startWithout(suspects);
+			if (!lines.isEmpty()) {
+				sb.append("也可以不挪文件：把下面几行加进 mods 文件夹旁边的 ").append(DisabledMods.FILE)
+						.append("，游戏就会不加载它们启动（删掉一行就能重新启用）：\n");
+				for (String line : lines) sb.append("    ").append(line).append('\n');
 			}
 			sb.append("这只是个猜测：它说的是这些 mod 出现在了报错里，不是说它们一定有毛病。\n");
 			sb.append("完整的报错在 crash-reports/").append(reportName).append(" 里。\n");
@@ -336,7 +465,9 @@ public final class CrashAttribution {
 			sb.append("  ").append(s.name());
 			if (!s.version().isEmpty()) sb.append(' ').append(s.version());
 			sb.append("  (").append(s.modId()).append(")\n");
-			sb.append("    ").append(s.reason()).append("\n\n");
+			sb.append("    ").append(s.collision() == null ? s.reason()
+					: "its mixin and one from " + s.collision().other() + " both change " + s.collision().method()
+							+ " in ways that cannot both take effect, and the crash went through it").append("\n\n");
 		}
 		sb.append("What to do\n");
 		sb.append("----------\n");
@@ -346,9 +477,37 @@ public final class CrashAttribution {
 		} else {
 			sb.append("Take the first one out of your mods folder and start again. If it still crashes, try the next.\n");
 		}
+		for (String pair : collisions(suspects, false)) {
+			sb.append(pair).append(": try the game with only one of them.\n");
+		}
+		List<String> lines = startWithout(suspects);
+		if (!lines.isEmpty()) {
+			sb.append("Or leave the files where they are: with these lines in ").append(DisabledMods.FILE)
+					.append(", next to your mods\nfolder, the game starts without them (delete a line to turn that mod back on):\n");
+			for (String line : lines) sb.append("    ").append(line).append('\n');
+		}
 		sb.append("This is a guess: it says these mods were in the error, not that they are at fault.\n");
 		sb.append("The full error is in crash-reports/").append(reportName).append(".\n");
 		return sb.toString();
+	}
+
+	/**
+	 * One line per pair of {@link #OVERLAP} suspects, {@code "A and B both change Foo.tick"}: the pair is the finding,
+	 * and either one alone reads like the generic advice.
+	 */
+	private static List<String> collisions(List<Suspect> suspects, boolean zh) {
+		List<String> out = new ArrayList<>();
+		java.util.Set<String> seen = new java.util.HashSet<>();
+		for (Suspect s : suspects) {
+			if (s.collision() == null) continue;
+			String a = s.name();
+			String b = s.collision().other();
+			String key = (a.compareTo(b) < 0 ? a + "|" + b : b + "|" + a) + "|" + s.collision().method();
+			if (!seen.add(key)) continue;
+			out.add(zh ? a + " 和 " + b + " 都改了 " + s.collision().method()
+					: a + " and " + b + " both change " + s.collision().method());
+		}
+		return out;
 	}
 
 	/** The display names of the mods the error named as clashing, joined by {@code separator}. */

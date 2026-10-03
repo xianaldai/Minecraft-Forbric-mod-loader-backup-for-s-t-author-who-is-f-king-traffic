@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -38,6 +37,8 @@ import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
 import net.fabricmc.api.EnvType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * Three {@code FMLLoader} methods open with {@code getstatic Launcher.INSTANCE}, and the kernel replaces
@@ -50,8 +51,7 @@ import net.fabricmc.api.EnvType;
  * is erroneous for the rest of the run. Physics Mod's Forge build hit exactly this.
  */
 class ForgeLauncherInfoInjectorTest {
-	private static final Path CARRIER = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"forge-runtime", "forge-runtime.jar").normalize();
+	private static final Path CARRIER = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
 	private static final String FML_LOADER = "net.minecraftforge.fml.loading.FMLLoader";
 
 	private final ForgeLauncherInfoInjector injector = new ForgeLauncherInfoInjector();
@@ -62,7 +62,7 @@ class ForgeLauncherInfoInjectorTest {
 
 	@Test
 	void noneOfTheThreeStillReachesForModLauncher() throws Exception {
-		assumeTrue(Files.isRegularFile(CARRIER), "staged MinecraftForge carrier absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(CARRIER), "staged MinecraftForge carrier absent");
 		byte[] real = readClass(FML_LOADER.replace('.', '/') + ".class");
 
 		byte[] out = injector.transform(FML_LOADER, real, ctx());
@@ -88,7 +88,7 @@ class ForgeLauncherInfoInjectorTest {
 	/** The switch really restores the old behaviour, so it is usable for measuring whether this is the cause. */
 	@Test
 	void theSwitchPutsTheNullBack() throws Exception {
-		assumeTrue(Files.isRegularFile(CARRIER), "staged MinecraftForge carrier absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(CARRIER), "staged MinecraftForge carrier absent");
 		byte[] real = readClass(FML_LOADER.replace('.', '/') + ".class");
 
 		String previous = System.getProperty(ForgeLauncherInfoInjector.PROPERTY);
@@ -111,7 +111,7 @@ class ForgeLauncherInfoInjectorTest {
 	/** And the carrier really did have the problem, so the test above is not passing vacuously. */
 	@Test
 	void theUntransformedCarrierDoesReachForModLauncher() throws Exception {
-		assumeTrue(Files.isRegularFile(CARRIER), "staged MinecraftForge carrier absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(CARRIER), "staged MinecraftForge carrier absent");
 		ClassNode node = new ClassNode();
 		new ClassReader(readClass(FML_LOADER.replace('.', '/') + ".class")).accept(node, 0);
 

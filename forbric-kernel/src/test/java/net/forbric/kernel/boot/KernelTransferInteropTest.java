@@ -7,6 +7,8 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import net.forbric.api.CompatibilityFinding;
 import net.forbric.api.CompatibilityFindings;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.classloading.ForbricClassLoader;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -62,8 +64,7 @@ class KernelTransferInteropTest {
 	@Test void aBuiltGameSideAlwaysCarriesTheTransferComponent() {
 		Path classes = Path.of("build/classes/java/runtime");
 		boolean gameSide = Files.isRegularFile(classes.resolve("net/forbric/kernel/runtime/KernelGameLookupHelper.class"));
-		if ("1".equals(System.getenv("FORBRIC_COMPAT_FIXTURES_REQUIRED"))) assertTrue(gameSide, "game-side classes were not compiled");
-		org.junit.jupiter.api.Assumptions.assumeTrue(gameSide, "no staged game jars, so no game side was built");
+		TestFixtures.require(Fixture.GAME_SIDE, gameSide, "no staged game jars, so no game side was built");
 		for (String name : List.of(KernelTransferInterop.BRIDGE, KernelTransferInterop.ISSUES, KernelTransferInterop.TRANSACTIONS,
 				KernelTransferInterop.ENERGY, KernelTransferInterop.HOPPER)) {
 			assertTrue(Files.isRegularFile(classes.resolve(name.replace('.', '/') + ".class")), name + " was left out of the game side");
@@ -127,8 +128,7 @@ class KernelTransferInteropTest {
 	@Test void onlyTheRebornHalfOfTheGameSideNamesTeamRebornEnergy() throws Exception {
 		Path classes = Path.of("build/classes/java/runtime");
 		boolean gameSide = Files.isRegularFile(classes.resolve(KernelTransferInterop.BRIDGE.replace('.', '/') + ".class"));
-		if ("1".equals(System.getenv("FORBRIC_COMPAT_FIXTURES_REQUIRED"))) assertTrue(gameSide, "game-side classes were not compiled");
-		org.junit.jupiter.api.Assumptions.assumeTrue(gameSide, "no staged game jars, so no game side was built");
+		TestFixtures.require(Fixture.GAME_SIDE, gameSide, "no staged game jars, so no game side was built");
 		List<String> naming = new java.util.ArrayList<>();
 		try (var walk = Files.walk(classes)) {
 			for (Path file : walk.filter(path -> path.toString().endsWith(".class")).toList()) {

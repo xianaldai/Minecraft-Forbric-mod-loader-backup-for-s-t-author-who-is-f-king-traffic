@@ -1,7 +1,6 @@
 package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -21,6 +20,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -43,7 +44,7 @@ class KernelFabricFluidBehaviorsTest {
 	/** The game side over the staged game, with fabric-api's content-registries module on it or not. */
 	private void load(boolean withFabricApi) throws Exception {
 		Path api = MODS.resolve("fabric-api-0.161.0+26.2.jar");
-		assumeTrue(Files.isRegularFile(api), "sweep pack absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(api), "sweep pack absent");
 		List<URL> extra = new ArrayList<>();
 		if (withFabricApi) {
 			Path registries = temp.resolve("fabric-content-registries.jar");

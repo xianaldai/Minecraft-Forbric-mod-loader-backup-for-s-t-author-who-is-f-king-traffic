@@ -3,7 +3,8 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
 import java.nio.file.Path;
-import java.util.zip.ZipFile;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
@@ -11,10 +12,8 @@ import org.objectweb.asm.tree.analysis.*;
 
 class ServerReloadListenerNamesInjectorTest {
 	@Test void realServerEventNamesForeignListenersButKeepsTheNativeGuardAndGraph() throws Exception {
-		Path jar = Path.of(System.getProperty("forbric.stagedRoot"), "neoforge-runtime", "neoforge-runtime.jar");
-		org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.isRegularFile(jar));
-		byte[] original;
-		try (var zip = new ZipFile(jar.toFile())) {original=zip.getInputStream(zip.getEntry("net/neoforged/neoforge/event/AddServerReloadListenersEvent.class")).readAllBytes();}
+		Path jar = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
+		byte[] original = TestFixtures.requireEntry(Fixture.STAGED, jar, "net/neoforged/neoforge/event/AddServerReloadListenersEvent.class");
 		var transform = new ServerReloadListenerNamesInjector();
 		byte[] patched = transform.transform(ServerReloadListenerNamesInjector.TARGET, original, null);
 		assertNotSame(original, patched); assertSame(patched, transform.transform(ServerReloadListenerNamesInjector.TARGET, patched, null));

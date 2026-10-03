@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -42,6 +41,8 @@ import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
 import net.forbric.api.DiscoveredMod;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * Verifies, against the STAGED neoforge-runtime bytecode, that the kernel seeds a {@code LoadingModList} a mod can
@@ -63,12 +64,10 @@ import net.forbric.api.DiscoveredMod;
  */
 class PassiveSeederLoadingModListTest {
 	/**
-	 * Through {@code FORBRIC_OLD} when it is set, as every other staged-bytecode test resolves it: this class
-	 * hardcoded the relative path, so in a second worktree every case here skipped and the suite reported green.
+	 * Through {@link TestFixtures#stagedRoot()}, the root the game side compiled against: this class hardcoded the
+	 * relative path, so in a second worktree every case here skipped and the suite reported green.
 	 */
-	static final Path NEO_RUNTIME = Path.of(System.getenv().getOrDefault("FORBRIC_OLD",
-			System.getProperty("user.dir") + "/../forbric-loader"), "run", "neoforge-runtime", "neoforge-runtime.jar")
-			.normalize();
+	static final Path NEO_RUNTIME = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
 
 	@TempDir
 	Path tmp;
@@ -225,7 +224,7 @@ class PassiveSeederLoadingModListTest {
 	 * are enough; the test self-skips when the staged jar is absent.
 	 */
 	private ClassLoader neoForgeLoader() throws Exception {
-		assumeTrue(Files.isRegularFile(NEO_RUNTIME),
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEO_RUNTIME),
 				"staged neoforge-runtime.jar absent — skipping real-bytecode LoadingModList seeding check");
 		Path stubs = loggingStubs(tmp.resolve("stubs"));
 		return new URLClassLoader(new URL[] {stubs.toUri().toURL(), NEO_RUNTIME.toUri().toURL()},

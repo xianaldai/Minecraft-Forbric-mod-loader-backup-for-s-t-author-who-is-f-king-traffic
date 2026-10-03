@@ -1,7 +1,6 @@
 package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
@@ -13,6 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,10 +30,11 @@ class KernelCompostablesTest {
 	@BeforeEach void load() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime").normalize();
 		Path fastutil = TestFixtures.minecraftDir().resolve("libraries/it/unimi/dsi/fastutil/8.5.18/fastutil-8.5.18.jar");
-		Path run = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+		Path run = TestFixtures.stagedRoot();
 		Path merged = run.resolve("merged-base/patched-mc-merged-26.2.jar"), neoRt = run.resolve("neoforge-runtime/neoforge-runtime.jar");
-		assumeTrue(Files.isDirectory(compiled) && Files.isRegularFile(fastutil) && Files.isRegularFile(merged) && Files.isRegularFile(neoRt),
-				"game-side classes, the staged game and fastutil required");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(merged) && Files.isRegularFile(neoRt), "the staged game required");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "game-side classes required");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(fastutil), "fastutil required: " + fastutil);
 		// The game's jars are there for the signatures only (reflection resolves every declared method's types); nothing
 		// here initialises a game class.
 		loader = new URLClassLoader(new URL[] { compiled.toUri().toURL(), fastutil.toUri().toURL(), merged.toUri().toURL(), neoRt.toUri().toURL() },

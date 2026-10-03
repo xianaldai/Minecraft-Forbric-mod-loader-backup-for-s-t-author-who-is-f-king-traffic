@@ -94,7 +94,10 @@ class StagedArtifactCoverageTest {
 		try (var walk = Files.walk(tests)) {
 			for (Path file : walk.filter(f -> f.toString().endsWith("Test.java")).toList()) {
 				String text = Files.readString(file);
-				if (text.contains("forbric-loader") || text.contains("FORBRIC_OLD")) {
+				// TestFixtures is the one place that resolves the staged root now; a test reading the staged
+				// artifacts says so with stagedRoot() or Fixture.STAGED. The two spellings it replaced still count.
+				if (text.contains("stagedRoot()") || text.contains("Fixture.STAGED")
+						|| text.contains("forbric-loader") || text.contains("FORBRIC_OLD")) {
 					readers.add(file.getFileName().toString());
 				}
 			}

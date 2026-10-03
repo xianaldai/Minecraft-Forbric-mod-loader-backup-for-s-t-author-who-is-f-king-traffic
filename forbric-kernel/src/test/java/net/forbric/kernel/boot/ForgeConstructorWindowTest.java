@@ -18,7 +18,6 @@ package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -90,7 +89,9 @@ class ForgeConstructorWindowTest {
 	@Test
 	void theDeferredForgeModsAreConstructedBeforeTheFabricEntrypoints() throws Exception {
 		List<String> calls = orderedCallsIn("onClientEntrypoints");
-		assumeTrue(calls.contains("constructDeferredForgeMods"), "KernelLifecycle not compiled yet");
+		assertTrue(calls.contains("constructDeferredForgeMods"),
+				"KernelLifecycle.onClientEntrypoints calling constructDeferredForgeMods not found in the compiled "
+						+ "src/main classes, which exist before any test runs");
 
 		assertTrue(calls.indexOf("constructDeferredForgeMods") < calls.indexOf("runMainEntrypoints"), calls.toString());
 	}

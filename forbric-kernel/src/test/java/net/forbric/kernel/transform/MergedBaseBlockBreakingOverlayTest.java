@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -40,6 +39,9 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * The block-breaking overlay's model-data lookup. On the merged base the level offers only NeoForge's model-data
  * manager, so MinecraftForge's accessor falls through to an interface default that returns null and the render
@@ -47,9 +49,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  * MinecraftForge's own empty model data.
  */
 class MergedBaseBlockBreakingOverlayTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	private static final String EXTRACTOR = "net/minecraft/client/renderer/extract/LevelExtractor";
 	private static final String FORGE_MANAGER = "net/minecraftforge/client/model/data/ModelDataManager";
@@ -57,7 +57,7 @@ class MergedBaseBlockBreakingOverlayTest {
 
 	@Test
 	void theOverlayNoLongerAsksForAManagerThatIsAlwaysNull() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] in = readClass(EXTRACTOR + ".class");
 		assertTrue(callsForgeManager(parse(in)), "the merged base must still carry the crash — if not, re-derive this");
 
@@ -80,7 +80,7 @@ class MergedBaseBlockBreakingOverlayTest {
 
 	@Test
 	void aSecondPassLeavesTheRepairedClassAlone() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] once = transform(readClass(EXTRACTOR + ".class"));
 		assertSame(once, transform(once), "a class with no such lookup left is coherent and must not be touched");
 	}

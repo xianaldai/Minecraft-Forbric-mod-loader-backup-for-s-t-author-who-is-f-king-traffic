@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.lang.invoke.MethodHandle;
@@ -32,6 +31,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
@@ -51,9 +51,7 @@ import org.objectweb.asm.tree.MethodNode;
  * and the whole point of the defect is that a plausible-looking number was the wrong one.
  */
 class MergedBaseDegreeConstantTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path VANILLA = TestFixtures.vanillaJar();
 	private static final String ENTITY = "net/minecraft/world/entity/Entity";
 	private static final double HALF_TURN = 180.0;
@@ -71,7 +69,7 @@ class MergedBaseDegreeConstantTest {
 
 	@Test
 	void theMergedEntityDividesByPiAndTheRepairFoldsItBack() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
 		byte[] before = entry(MERGED_BASE, ENTITY + ".class");
 		assertTrue(sites(read(before)) > 0, "the merged Entity no longer divides by pi at run time — if the build "
 				+ "pipeline started folding this, delete the repair rather than leaving a claim on a shape that is gone");
@@ -84,8 +82,8 @@ class MergedBaseDegreeConstantTest {
 
 	@Test
 	void vanillaCarriesTheSameLiteralAndNeverTheExpression() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
-		assumeTrue(Files.isRegularFile(VANILLA), "no vanilla 26.2 jar at " + VANILLA);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(VANILLA), "no vanilla 26.2 jar at " + VANILLA);
 		ClassNode vanilla = read(entry(VANILLA, ENTITY + ".class"));
 		assertEquals(0, sites(vanilla), "vanilla does not carry the unfolded expression; if it does, the premise "
 				+ "of this repair is wrong");

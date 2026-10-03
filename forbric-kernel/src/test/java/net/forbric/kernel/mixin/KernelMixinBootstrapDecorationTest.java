@@ -18,7 +18,6 @@ package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,7 +49,9 @@ class KernelMixinBootstrapDecorationTest {
 	@Test
 	void theDecorationHappensBeforeTheConfigsArePrepared() throws Exception {
 		MethodNode init = method("init");
-		assumeTrue(init != null, "KernelMixinBootstrap not compiled yet");
+		assertTrue(init != null,
+				"KernelMixinBootstrap.init not found in the compiled src/main classes, which exist before any test "
+						+ "runs");
 
 		int decorate = indexOf(init, call -> "nameTheModsBehindTheConfigs".equals(call.name));
 		int prepare = indexOf(init, call -> "gotoPhase".equals(call.name));
@@ -65,7 +66,9 @@ class KernelMixinBootstrapDecorationTest {
 	@Test
 	void onlyTheModIdIsDecoratedAndNotTheCompatibilityLevel() throws Exception {
 		MethodNode namer = method("nameTheModsBehindTheConfigs");
-		assumeTrue(namer != null, "KernelMixinBootstrap not compiled yet");
+		assertTrue(namer != null,
+				"KernelMixinBootstrap.nameTheModsBehindTheConfigs not found in the compiled src/main classes, which "
+						+ "exist before any test runs");
 
 		// Both keys are compile-time String constants, so javac inlines them as LDCs rather than leaving a
 		// GETSTATIC to read the field name from. The VALUES are what is in the bytecode, so those are what this
@@ -85,7 +88,9 @@ class KernelMixinBootstrapDecorationTest {
 	@Test
 	void theSwitchIsReadBeforeAnythingIsDecorated() throws Exception {
 		MethodNode namer = method("nameTheModsBehindTheConfigs");
-		assumeTrue(namer != null, "KernelMixinBootstrap not compiled yet");
+		assertTrue(namer != null,
+				"KernelMixinBootstrap.nameTheModsBehindTheConfigs not found in the compiled src/main classes, which "
+						+ "exist before any test runs");
 
 		int property = -1;
 		int decorate = -1;

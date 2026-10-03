@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -15,11 +14,13 @@ import java.util.zip.ZipFile;
 
 import com.electronwill.nightconfig.core.UnmodifiableConfig;
 import com.electronwill.nightconfig.json.JsonFormat;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 
 /** The packaged data, not just its source, must connect modifier -> placed feature -> configured feature. */
 class WorldgenCanaryDataTest {
-	static final Path LOADER = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"));
+	static final Path STAGED = TestFixtures.stagedRoot();
 
 	@Test
 	void theTwoCarriersPlaceDifferentNonOverworldBlocks() throws Exception {
@@ -31,8 +32,9 @@ class WorldgenCanaryDataTest {
 	}
 
 	static String inspect(String family, String namespace, String source, String runtime) throws Exception {
-		Path jar = LOADER.resolve("run/" + runtime + "/" + namespace + ".jar");
-		assumeTrue(Files.isRegularFile(jar), "build canaries with forbric-loader/run/build-testmods.sh");
+		Path jar = STAGED.resolve(runtime + "/" + namespace + ".jar");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar),
+				"build canaries with forbric-loader/run/build-testmods.sh");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			String base = "data/" + namespace + "/";
 			UnmodifiableConfig modifier = json(zip, base + family + "/biome_modifier/probe.json", source);
@@ -67,7 +69,7 @@ class WorldgenCanaryDataTest {
 		var entry = zip.getEntry(name);
 		assertNotNull(entry, "missing canary datapack entry " + name);
 		try (var input = new InputStreamReader(zip.getInputStream(entry), StandardCharsets.UTF_8);
-				var expected = Files.newBufferedReader(LOADER.resolve("run/" + source + "/" + name))) {
+				var expected = Files.newBufferedReader(STAGED.resolve(source + "/" + name))) {
 			UnmodifiableConfig packaged = JsonFormat.minimalInstance().createParser().parse(input);
 			UnmodifiableConfig original = JsonFormat.minimalInstance().createParser().parse(expected);
 			assertEquals(original, packaged, "canary jar is stale: " + name);

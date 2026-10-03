@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -35,6 +34,9 @@ import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
+
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * Covers the kernel adopting the interop hooks the merged base still names after the previous-generation loader.
@@ -51,18 +53,16 @@ import org.objectweb.asm.Opcodes;
  * changed underneath it.
  */
 class MergedBaseInteropAdoptionTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String LEGACY = "net/forbric/loader/impl/";
 
 	@Test
 	void everyCallTheBaseMakesUnderTheOldNameIsAdoptedAndResolves() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 
 		List<String> carriers = entriesNaming(LEGACY);
-		assumeTrue(!carriers.isEmpty(),
-				"this base names no old-loader hook — nothing to adopt (a rebuilt base may have stopped)");
+		assertFalse(carriers.isEmpty(),
+				"content drift: this base names no old-loader hook — nothing to adopt (a rebuilt base may have stopped)");
 
 		for (String entry : carriers) {
 			byte[] in = readClass(entry);
@@ -81,7 +81,7 @@ class MergedBaseInteropAdoptionTest {
 	 */
 	@Test
 	void theReAddedForgeFluidTypeBridgeResolves() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 
 		String fluid = null;
 		for (String entry : entriesUnder("net/minecraft/world/level/material/")) {
@@ -95,7 +95,7 @@ class MergedBaseInteropAdoptionTest {
 				}
 			}
 		}
-		assumeTrue(fluid != null, "no merged fluid needed the Forge bridge in this base");
+		assertTrue(fluid != null, "content drift: no merged fluid needed the Forge bridge in this base");
 	}
 
 	/**

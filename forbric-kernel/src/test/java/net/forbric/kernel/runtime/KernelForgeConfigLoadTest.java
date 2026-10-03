@@ -1,7 +1,6 @@
 package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -22,6 +21,7 @@ import com.electronwill.nightconfig.core.CommentedConfig;
 import com.electronwill.nightconfig.toml.TomlParser;
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ModCatalog;
+import net.forbric.kernel.TestFixtures;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.ResourceLock;
@@ -38,12 +38,12 @@ class KernelForgeConfigLoadTest {
     private static final String HOOK = "net.forbric.kernel.runtime.KernelForgeConfigLoad";
     private static final String CONFIG = "net/minecraftforge/fml/config/ModConfig";
     private static final String TRACKER = "net/minecraftforge/fml/config/ConfigTracker";
-    private static final Path FORGE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/forge-runtime/forge-runtime.jar");
+    private static final Path FORGE = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
     @TempDir Path temporary;
 
     @Test
     void actualCarrierHasOnlyTheThreeForgeTypesAndThePrivateStaticTwoArgumentOpen() throws Exception {
-        assumeTrue(Files.isRegularFile(FORGE), "staged Forge carrier absent");
+        TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(FORGE), "staged Forge carrier absent");
         try (ZipFile zip = new ZipFile(FORGE.toFile())) {
             ClassNode tracker = read(zip, TRACKER);
             var open = tracker.methods.stream().filter(m -> m.name.equals("openConfig")).findFirst().orElseThrow();
@@ -248,7 +248,8 @@ class KernelForgeConfigLoadTest {
             var compiler = ToolProvider.getSystemJavaCompiler(); assertNotNull(compiler, "a JDK is required");
             assertEquals(0, compiler.run(null, null, null, arguments.toArray(String[]::new)), "fixture compilation");
             Path runtime = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
-            assumeTrue(Files.isRegularFile(runtime.resolve(HOOK.replace('.', '/') + ".class")), "runtime helper not compiled");
+            TestFixtures.require(TestFixtures.Fixture.GAME_SIDE, Files.isRegularFile(runtime.resolve(HOOK.replace('.', '/') + ".class")),
+                    "runtime helper not compiled");
             loader = new URLClassLoader(new URL[] {classes.toUri().toURL(), runtime.toUri().toURL()}, KernelForgeConfigLoadTest.class.getClassLoader()) {
                 @Override protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
                     if (name.startsWith("net.minecraftforge.") || name.equals(HOOK)) {
@@ -297,7 +298,7 @@ class KernelForgeConfigLoadTest {
     }
     private static ClassNode runtime() throws Exception {
         Path path = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"), HOOK.replace('.', '/') + ".class");
-        assumeTrue(Files.isRegularFile(path), "runtime helper not compiled");
+        TestFixtures.require(TestFixtures.Fixture.GAME_SIDE, Files.isRegularFile(path), "runtime helper not compiled");
         ClassNode node = new ClassNode(); new ClassReader(Files.readAllBytes(path)).accept(node, 0); return node;
     }
     private static ClassNode read(ZipFile zip, String binary) throws Exception {

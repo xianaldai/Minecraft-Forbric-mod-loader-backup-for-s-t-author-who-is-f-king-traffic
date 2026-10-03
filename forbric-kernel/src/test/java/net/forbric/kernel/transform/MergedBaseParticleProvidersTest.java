@@ -19,7 +19,6 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -37,6 +36,9 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Covers the repair of {@code ParticleResources}' split {@code providers} field, against the REAL staged base.
  *
@@ -44,9 +46,7 @@ import org.objectweb.asm.tree.TypeInsnNode;
  * merge emits, and the exact instruction the repair has to land BEFORE is in that emitted {@code <init>}.
  */
 class MergedBaseParticleProvidersTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String ENTRY = "net/minecraft/client/particle/ParticleResources.class";
 	private static final String ID_KEYED = "Lit/unimi/dsi/fastutil/ints/Int2ObjectMap;";
 	private static final String NAME_KEYED = "Ljava/util/Map;";
@@ -134,9 +134,9 @@ class MergedBaseParticleProvidersTest {
 
 	@Test
 	void anotherClassIsUntouched() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		byte[] other = readClass("net/minecraft/client/particle/ParticleProvider.class");
-		assumeTrue(other != null, "ParticleProvider absent from this base");
+		assertNotNull(other, "content drift: ParticleProvider absent from this base");
 		assertSame(other, new ForbricMergedBaseCompatTransformer()
 				.transform("net.minecraft.client.particle.ParticleProvider", other, null));
 	}
@@ -150,14 +150,14 @@ class MergedBaseParticleProvidersTest {
 	}
 
 	private static byte[] original() throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] in = readClass(ENTRY);
-		assumeTrue(in != null, "ParticleResources absent from this base");
+		assertNotNull(in, "content drift: ParticleResources absent from this base");
 		ClassNode node = new ClassNode();
 		new ClassReader(in).accept(node, 0);
 		boolean split = node.fields.stream().anyMatch(f -> "providers".equals(f.name) && ID_KEYED.equals(f.desc))
 				&& node.fields.stream().anyMatch(f -> "providers".equals(f.name) && NAME_KEYED.equals(f.desc));
-		assumeTrue(split, "this base no longer splits ParticleResources.providers — nothing to repair");
+		assertTrue(split, "content drift: this base no longer splits ParticleResources.providers — nothing to repair");
 		return in;
 	}
 

@@ -23,7 +23,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -33,12 +32,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 
 import com.electronwill.nightconfig.core.Config;
 import org.junit.jupiter.api.Test;
 import net.forbric.api.UnifiedDependency;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 class ModsTomlParserTest {
 	private ForgeModsToml parseSample() {
@@ -221,20 +221,16 @@ class ModsTomlParserTest {
 	@Test
 	void theFixtureIsTheManifestLibjfShips() throws Exception {
 		Path outer = Path.of("build/compat-inputs/sweep90/mods/libjf-26.2.2+forge.jar");
-		assumeTrue(Files.isRegularFile(outer), "the sweep's LibJF jar is not staged here");
-		byte[] shipped;
-		try (ZipFile zip = new ZipFile(outer.toFile())) {
-			byte[] nested = zip.getInputStream(zip.getEntry("META-INF/jars/libjf-translate-v1-26.2.2+forge.jar"))
-					.readAllBytes();
-			try (ZipInputStream in = new ZipInputStream(new ByteArrayInputStream(nested))) {
-				ZipEntry entry;
-				byte[] found = null;
-				while ((entry = in.getNextEntry()) != null) {
-					if (entry.getName().equals("META-INF/neoforge.mods.toml")) found = in.readAllBytes();
-				}
-				shipped = found;
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(outer), "the sweep's LibJF jar is not staged here");
+		byte[] nested = TestFixtures.requireEntry(Fixture.THIRD_PARTY, outer, "META-INF/jars/libjf-translate-v1-26.2.2+forge.jar");
+		byte[] shipped = null;
+		try (ZipInputStream in = new ZipInputStream(new ByteArrayInputStream(nested))) {
+			ZipEntry entry;
+			while ((entry = in.getNextEntry()) != null) {
+				if (entry.getName().equals("META-INF/neoforge.mods.toml")) shipped = in.readAllBytes();
 			}
 		}
+		assertNotNull(shipped, "content drift: the libjf-translate-v1 nested in " + outer + " has no neoforge.mods.toml");
 		try (InputStream fixture = getClass().getResourceAsStream(LIBJF_TRANSLATE)) {
 			assertArrayEquals(shipped, fixture.readAllBytes());
 		}

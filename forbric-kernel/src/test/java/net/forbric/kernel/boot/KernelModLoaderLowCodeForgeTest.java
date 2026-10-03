@@ -19,7 +19,6 @@ package net.forbric.kernel.boot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -41,6 +40,8 @@ import org.objectweb.asm.tree.MethodNode;
 
 import net.forbric.api.DiscoveredMod;
 import net.forbric.api.Ecosystem;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * The MinecraftForge half of the declared-only mods: a {@code lowcodefml} mod gets the {@code LowCodeModContainer}
@@ -51,8 +52,7 @@ import net.forbric.api.Ecosystem;
  * load error, {@code fml.modloading.missingclasses}, and must not be handed a container that hides it.
  */
 class KernelModLoaderLowCodeForgeTest {
-	private static final Path STAGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD",
-			System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path STAGED = TestFixtures.stagedRoot().normalize();
 
 	@AfterEach
 	void reset() {
@@ -110,7 +110,8 @@ class KernelModLoaderLowCodeForgeTest {
 		Path compiled = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"),
 				"net/forbric/kernel/runtime/KernelForgeContainers.class");
 		Path forge = STAGED.resolve("forge-runtime/forge-runtime.jar");
-		assumeTrue(Files.isRegularFile(compiled) && Files.isRegularFile(forge), "compiled game side/carrier absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(forge), "compiled game side/carrier absent");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled), "compiled game side/carrier absent");
 
 		String ctor = "(Lnet/minecraftforge/forgespi/language/IModInfo;"
 				+ "Lnet/minecraftforge/forgespi/language/ModFileScanData;Ljava/lang/ModuleLayer;)V";

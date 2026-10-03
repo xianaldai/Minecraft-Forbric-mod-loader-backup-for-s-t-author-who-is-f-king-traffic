@@ -1,10 +1,10 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.nio.file.*;
 import java.util.zip.*;
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
@@ -15,7 +15,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
 class FabricModelContextTransformerTest {
 	private static byte[] api() throws Exception {
 		Path jar = TestFixtures.fabricApi();
-		assumeTrue(Files.isRegularFile(jar), "actual Fabric API fixture required");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(jar), "actual Fabric API fixture required");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			var entry = zip.stream().filter(e -> e.getName().startsWith("META-INF/jars/fabric-renderer-api-v1-")).findFirst().orElseThrow();
 			try (ZipInputStream nested = new ZipInputStream(zip.getInputStream(entry))) {
@@ -27,11 +27,8 @@ class FabricModelContextTransformerTest {
 	}
 
 	private static byte[] game(String name) throws Exception {
-		Path jar = Path.of(System.getProperty("forbric.stagedRoot"), name.equals(FabricModelContextTransformer.MODEL + ".class") ? "merged-base/patched-mc-merged-26.2.jar" : "neoforge-runtime/neoforge-runtime.jar");
-		assumeTrue(Files.isRegularFile(jar), "actual merged game required");
-		try (ZipFile zip = new ZipFile(jar.toFile())) {
-			return zip.getInputStream(zip.getEntry(name)).readAllBytes();
-		}
+		Path jar = TestFixtures.stagedRoot().resolve(name.equals(FabricModelContextTransformer.MODEL + ".class") ? "merged-base/patched-mc-merged-26.2.jar" : "neoforge-runtime/neoforge-runtime.jar");
+		return TestFixtures.requireEntry(Fixture.STAGED, jar, name);
 	}
 
 	private static byte[] resolve(String name) {

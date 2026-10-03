@@ -19,7 +19,6 @@ package net.forbric.kernel.runtime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.Proxy;
 import java.net.URL;
@@ -30,6 +29,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -52,7 +52,7 @@ class KernelNeoWorldgenTest {
 
 	@Test
 	void theFallbackAsksForTheLiveConditionContextAndFallsToEmptyOnlyInAHandler() throws Exception {
-		assumeTrue(Files.isRegularFile(COMPILED), "runtime helper not compiled");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(COMPILED), "runtime helper not compiled");
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(COMPILED)).accept(node, 0);
 		MethodNode load = find(node, "loadDataMaps");
@@ -70,7 +70,7 @@ class KernelNeoWorldgenTest {
 
 	@Test
 	void beforeServerStartReadsWhatNeoForgeAppliedBeforeItLoadsAnything() throws Exception {
-		assumeTrue(Files.isRegularFile(COMPILED), "runtime helper not compiled");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(COMPILED), "runtime helper not compiled");
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(COMPILED)).accept(node, 0);
 		MethodNode before = find(node, "beforeServerStart");
@@ -144,19 +144,20 @@ class KernelNeoWorldgenTest {
 
 	private static URLClassLoader gameSideLoader() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime").normalize();
-		Path run = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+		Path run = TestFixtures.stagedRoot();
 		Path forgeRt = run.resolve("forge-runtime/forge-runtime.jar");
 		Path neoRt = run.resolve("neoforge-runtime/neoforge-runtime.jar");
 		Path merged = run.resolve("merged-base/patched-mc-merged-26.2.jar");
-		assumeTrue(Files.isDirectory(compiled) && Files.isRegularFile(forgeRt) && Files.isRegularFile(neoRt) && Files.isRegularFile(merged),
-				"the game-side set is not compiled, or the staged artifacts are absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(forgeRt) && Files.isRegularFile(neoRt) && Files.isRegularFile(merged),
+				"the staged artifacts are absent");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "the game-side set is not compiled");
 		List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), forgeRt.toUri().toURL(), neoRt.toUri().toURL(), merged.toUri().toURL()));
 		for (String pattern : List.of("com/mojang/datafixerupper", "com/google/code/gson", "com/mojang/brigadier", "com/google/guava/guava",
 				"it/unimi/dsi/fastutil", "org/slf4j/slf4j-api", "org/apache/logging/log4j/log4j-api",
 				"io/netty/netty-common", "io/netty/netty-buffer", TestFixtures.nettyCodecLibrary(), "io/netty/netty-transport", "io/netty/netty-handler",
 				"org/joml/joml")) {
 			Path library = newestUnder(pattern);
-			assumeTrue(library != null, "no staged " + pattern + " jar in the local Minecraft libraries");
+			TestFixtures.require(Fixture.MC_LIBRARIES, library != null, "no staged " + pattern + " jar in the local Minecraft libraries");
 			urls.add(library.toUri().toURL());
 		}
 		return new URLClassLoader(urls.toArray(new URL[0]), KernelNeoWorldgenTest.class.getClassLoader());

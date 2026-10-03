@@ -117,8 +117,10 @@ public final class KernelGuestMixinAdapter {
 	private static final String INVOKER_DESC = "Lorg/spongepowered/asm/mixin/gen/Invoker;";
 
 	/** {@code -Dforbric.guestMixinAdapter=off} turns the derived scan off (leaving only the hand list). */
+	static final String PROPERTY = "forbric.guestMixinAdapter";
+
 	public static boolean enabled() {
-		return !"off".equalsIgnoreCase(System.getProperty("forbric.guestMixinAdapter", "on"));
+		return !"off".equalsIgnoreCase(System.getProperty(PROPERTY, "on"));
 	}
 
 	private KernelGuestMixinAdapter() {

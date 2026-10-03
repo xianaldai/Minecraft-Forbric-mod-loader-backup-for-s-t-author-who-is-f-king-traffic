@@ -19,7 +19,6 @@ package net.forbric.kernel.boot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.lang.reflect.Field;
@@ -43,6 +42,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import net.forbric.api.DiscoveredMod;
 import net.forbric.api.Ecosystem;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.discovery.ForbricModDiscoverer;
 import net.forbric.kernel.metadata.forge.FmlConfigElements;
 
@@ -80,7 +81,8 @@ class PassiveSeederFileConfigTest {
 	void theRealLithiumFindsUnlitCampfiresOverride() throws Exception {
 		Path unlit = MERGED_PACK.resolve(UNLIT_CAMPFIRE);
 		Path lithium = MERGED_PACK.resolve(LITHIUM);
-		assumeTrue(Files.isRegularFile(unlit) && Files.isRegularFile(lithium), "the player's pack is not here");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(unlit) && Files.isRegularFile(lithium),
+				"the player's pack is not here");
 		Path mods = Files.createDirectories(tmp.resolve("mods"));
 		Files.copy(unlit, mods.resolve(UNLIT_CAMPFIRE), StandardCopyOption.REPLACE_EXISTING);
 		Files.copy(lithium, mods.resolve(LITHIUM), StandardCopyOption.REPLACE_EXISTING);
@@ -202,7 +204,8 @@ class PassiveSeederFileConfigTest {
 	}
 
 	private URLClassLoader neoForgeLoader() throws Exception {
-		assumeTrue(Files.isRegularFile(PassiveSeederLoadingModListTest.NEO_RUNTIME), "staged neoforge-runtime.jar absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(PassiveSeederLoadingModListTest.NEO_RUNTIME),
+				"staged neoforge-runtime.jar absent");
 		Path stubs = PassiveSeederLoadingModListTest.loggingStubs(tmp.resolve("stubs"));
 		return new URLClassLoader(new URL[] {stubs.toUri().toURL(), PassiveSeederLoadingModListTest.NEO_RUNTIME.toUri()
 				.toURL()}, ClassLoader.getPlatformClassLoader());

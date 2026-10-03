@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -42,6 +41,9 @@ import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Covers the shutdown-save repair: {@code IntegratedServer.stopServer} runs {@code teardownPublishedState()}
  * first and unguarded, and {@code MinecraftServer.stopServer()} — which writes players and worlds — second, so a
@@ -54,9 +56,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  * notice. So one test defines the transformed class for real and calls it.
  */
 public class MergedBaseShutdownSaveTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	private static final String INTEGRATED_SERVER = "net/minecraft/client/server/IntegratedServer";
 
@@ -84,7 +84,7 @@ public class MergedBaseShutdownSaveTest {
 
 	@Test
 	void theStagedBaseStillRunsTheTeardownUnguarded() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		ClassNode before = parse(readClass(INTEGRATED_SERVER + ".class"));
 		MethodNode stop = method(before, "stopServer", "()V");
 		assertNotNull(stop, "the base must still have IntegratedServer.stopServer()V");
@@ -96,7 +96,7 @@ public class MergedBaseShutdownSaveTest {
 
 	@Test
 	void theRepairedBaseCatchesTheTeardownAndStillReachesTheSave() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] in = readClass(INTEGRATED_SERVER + ".class");
 		byte[] out = transform(in);
 		assertTrue(out != in, "the staged base must still need the repair");
@@ -115,7 +115,7 @@ public class MergedBaseShutdownSaveTest {
 
 	@Test
 	void aSecondPassLeavesTheRepairedClassAlone() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] once = transform(readClass(INTEGRATED_SERVER + ".class"));
 		assertSame(once, transform(once), "a body that already has a handler must not be wrapped twice");
 	}

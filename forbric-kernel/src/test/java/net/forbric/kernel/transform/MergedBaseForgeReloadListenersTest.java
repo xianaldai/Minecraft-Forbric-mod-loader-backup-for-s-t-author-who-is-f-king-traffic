@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -24,14 +23,16 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * MinecraftForge's {@code AddReloadListenerEvent} is never constructed on the merged base: the server reload
  * calls only NeoForge's {@code EventHooks.onResourceReload}. One owner redirect, same descriptor, sends that call
  * through {@code KernelForgeReload}, which calls NeoForge's hook and then the carrier's own Forge post.
  */
 class MergedBaseForgeReloadListenersTest {
-	private static final Path MERGED_BASE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String RSR = "net/minecraft/server/ReloadableServerResources";
 	private static final String NEO_HOOKS = "net/neoforged/neoforge/event/EventHooks";
 	private static final String KERNEL = "net/forbric/kernel/runtime/KernelForgeReload";
@@ -95,7 +96,7 @@ class MergedBaseForgeReloadListenersTest {
 	}
 
 	private static byte[] bytesOf(String internal) throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {
 			ZipEntry entry = zip.getEntry(internal + ".class");
 			assertNotNull(entry, internal);

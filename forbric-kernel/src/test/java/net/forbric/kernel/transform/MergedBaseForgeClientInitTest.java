@@ -1,7 +1,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,8 +12,11 @@ import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.*;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 class MergedBaseForgeClientInitTest {
-    private static final Path STAGE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run");
+    private static final Path STAGE = TestFixtures.stagedRoot();
     private static final String MINECRAFT = "net/minecraft/client/Minecraft";
     private static final String MODELS = "net/minecraft/client/resources/model/ModelManager";
     private static final String NEO = "net/neoforged/neoforge/client/ClientHooks";
@@ -131,7 +133,7 @@ class MergedBaseForgeClientInitTest {
     }
     private static byte[] game(String owner) throws Exception {return read(STAGE.resolve("merged-base/patched-mc-merged-26.2.jar"), owner);}
     private static byte[] read(Path jar, String owner) throws Exception {
-        assumeTrue(Files.isRegularFile(jar), "staged jar absent: " + jar);
+        TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged jar absent: " + jar);
         try (ZipFile zip = new ZipFile(jar.toFile())) {return zip.getInputStream(zip.getEntry(owner + ".class")).readAllBytes();}
     }
     private static ClassNode parse(byte[] bytes) {ClassNode node = new ClassNode();new ClassReader(bytes).accept(node, 0);return node;}

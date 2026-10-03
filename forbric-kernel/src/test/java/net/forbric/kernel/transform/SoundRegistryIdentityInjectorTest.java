@@ -3,7 +3,8 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
 import java.nio.file.Path;
-import java.util.zip.ZipFile;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.ClassNode;
@@ -13,12 +14,8 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
 
 class SoundRegistryIdentityInjectorTest {
 	@Test void stagedForgeConstructorReplacesAllValueIndexesAndRemainsVerifiable() throws Exception {
-		Path staged = Path.of(System.getProperty("forbric.stagedRoot"), "forge-runtime", "forge-runtime.jar");
-		org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.isRegularFile(staged));
-		byte[] original;
-		try (var jar = new ZipFile(staged.toFile())) {
-			original = jar.getInputStream(jar.getEntry("net/minecraftforge/registries/ForgeRegistry.class")).readAllBytes();
-		}
+		Path staged = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
+		byte[] original = TestFixtures.requireEntry(Fixture.STAGED, staged, "net/minecraftforge/registries/ForgeRegistry.class");
 		var transformer = new SoundRegistryIdentityInjector();
 		assertSame(original, transformer.transform("unrelated.Class", original, null));
 		byte[] patched = transformer.transform(SoundRegistryIdentityInjector.TARGET, original, null);

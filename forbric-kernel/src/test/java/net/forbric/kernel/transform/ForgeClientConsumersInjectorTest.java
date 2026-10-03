@@ -1,7 +1,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,10 +28,12 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.util.CheckClassAdapter;
 
 import net.forbric.api.Ecosystem;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 @ResourceLock("system-properties")
 class ForgeClientConsumersInjectorTest {
-    private static final Path STAGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run");
+    private static final Path STAGED = TestFixtures.stagedRoot();
     private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
     private static final Path FORGE = STAGED.resolve("forge-runtime/forge-runtime.jar");
     private static final Path NEO = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
@@ -221,7 +222,7 @@ class ForgeClientConsumersInjectorTest {
     void runtimeEntryDescriptorsAndCarrierDispatchAgreeWithTheInjectorTable() throws Exception {
         Path classes = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
         Path runtime = classes.resolve(ForgeClientConsumersInjector.RUNTIME + ".class");
-        assumeTrue(Files.isRegularFile(runtime), "runtime source set has not been compiled");
+        TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(runtime), "runtime source set has not been compiled");
         ClassNode node = node(Files.readAllBytes(runtime));
         for (var rule : ForgeClientConsumersInjector.RULES) {
             MethodNode entry = node.methods.stream().filter(m -> m.name.equals(rule.runtimeCall())
@@ -303,7 +304,7 @@ class ForgeClientConsumersInjectorTest {
     private static ClassNode node(byte[] bytes) { ClassNode node = new ClassNode(); new ClassReader(bytes).accept(node, 0); return node; }
     private static byte[] write(ClassNode node) { ClassWriter writer = new ClassWriter(0); node.accept(writer); return writer.toByteArray(); }
     private static byte[] bytes(Path jar, String entry) throws Exception {
-        assumeTrue(Files.isRegularFile(jar), "staged carrier absent: " + jar);
+        TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged carrier absent: " + jar);
         try (ZipFile zip = new ZipFile(jar.toFile())) {
             var value = zip.getEntry(entry); assertNotNull(value, entry); return zip.getInputStream(value).readAllBytes();
         }

@@ -22,7 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -37,6 +36,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.AbstractInsnNode;
@@ -157,7 +158,8 @@ class NeoDeferredWorkTest {
 		// logging stayed in KernelLifecycle. The assertion follows the code rather than the file it used to be in.
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime",
 				"net", "forbric", "kernel", "runtime", "KernelNeoSetup.class");
-		assumeTrue(Files.isRegularFile(compiled), "KernelNeoSetup not compiled yet (no staged game jars)");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled),
+				"KernelNeoSetup not compiled yet (no staged game jars)");
 
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(compiled)).accept(node, 0);
@@ -185,12 +187,12 @@ class NeoDeferredWorkTest {
 	 */
 	@Test
 	void bothCarriersDeferredWorkQueuesStillHaveTheFieldsTheFailureReadNeeds() throws Exception {
-		Path run = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+		Path run = TestFixtures.stagedRoot().normalize();
 		for (String[] carrier : new String[][] {
 				{ "neoforge-runtime/neoforge-runtime.jar", "net/neoforged/fml/DeferredWorkQueue" },
 				{ "forge-runtime/forge-runtime.jar", "net/minecraftforge/fml/DeferredWorkQueue" } }) {
 			Path jar = run.resolve(carrier[0]);
-			assumeTrue(Files.isRegularFile(jar), "staged carrier absent: " + jar);
+			TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged carrier absent: " + jar);
 			try (ZipFile zip = new ZipFile(jar.toFile())) {
 				assertTrue(declaresField(zip, carrier[1], "tasks"), carrier[1] + ".tasks");
 				assertTrue(declaresField(zip, carrier[1] + "$TaskInfo", "owner"), carrier[1] + "$TaskInfo.owner");
@@ -205,7 +207,8 @@ class NeoDeferredWorkTest {
 		for (String helper : new String[] { "KernelNeoSetup", "KernelForgeSetup" }) {
 			Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime",
 					"net", "forbric", "kernel", "runtime", helper + ".class");
-			assumeTrue(Files.isRegularFile(compiled), helper + " not compiled yet (no staged game jars)");
+			TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled),
+					helper + " not compiled yet (no staged game jars)");
 			ClassNode node = new ClassNode();
 			new ClassReader(Files.readAllBytes(compiled)).accept(node, 0);
 			MethodNode phase = node.methods.stream().filter(m -> "firePhase".equals(m.name)).findFirst()
@@ -246,9 +249,8 @@ class NeoDeferredWorkTest {
 	/** If the carrier ever drops this, {@link NeoDeferredWork#syncExecutor} goes quiet and the bug comes back. */
 	@Test
 	void theCarrierStillOffersTheExecutorNeoForgeRunsDeferredWorkOn() throws Exception {
-		Path carrier = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "neoforge-runtime",
-				"neoforge-runtime.jar").normalize();
-		assumeTrue(Files.isRegularFile(carrier), "staged NeoForge carrier absent");
+		Path carrier = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "staged NeoForge carrier absent");
 
 		try (ZipFile jar = new ZipFile(carrier.toFile())) {
 			ZipEntry entry = jar.getEntry("net/neoforged/fml/ModWorkManager.class");

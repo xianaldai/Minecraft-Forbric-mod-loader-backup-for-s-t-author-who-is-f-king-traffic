@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -57,7 +56,7 @@ class LoaderProbePolicyTest {
 
 	@Test
 	void aNeoForgeClassIsToldTraditionalForgeIsAbsent() {
-		assumeTrue(LoaderProbePolicy.enabled(), "probe policy disabled by system property");
+		assertTrue(LoaderProbePolicy.enabled(), "the test JVM never sets -Dforbric.loaderProbes=off");
 
 		assertThrows(ClassNotFoundException.class, () -> LoaderProbePolicy.forName(
 				FORGE_MARKER, false, LoaderProbePolicyTest.class.getClassLoader(),
@@ -67,7 +66,7 @@ class LoaderProbePolicyTest {
 
 	@Test
 	void aTraditionalForgeClassIsToldNeoForgeIsAbsent() {
-		assumeTrue(LoaderProbePolicy.enabled(), "probe policy disabled by system property");
+		assertTrue(LoaderProbePolicy.enabled(), "the test JVM never sets -Dforbric.loaderProbes=off");
 
 		assertThrows(ClassNotFoundException.class, () -> LoaderProbePolicy.forName(
 				NEO_MARKER, false, LoaderProbePolicyTest.class.getClassLoader(),
@@ -76,7 +75,7 @@ class LoaderProbePolicyTest {
 
 	@Test
 	void aFabricClassIsToldBothForgeLoadersAreAbsent() {
-		assumeTrue(LoaderProbePolicy.enabled(), "probe policy disabled by system property");
+		assertTrue(LoaderProbePolicy.enabled(), "the test JVM never sets -Dforbric.loaderProbes=off");
 		ClassLoader here = LoaderProbePolicyTest.class.getClassLoader();
 		String fabric = LoaderProbePolicy.Family.FABRIC.name();
 

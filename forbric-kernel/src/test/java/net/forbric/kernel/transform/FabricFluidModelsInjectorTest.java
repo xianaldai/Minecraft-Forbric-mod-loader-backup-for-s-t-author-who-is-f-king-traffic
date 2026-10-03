@@ -1,7 +1,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.Method;
 import java.net.URL;
@@ -23,13 +22,16 @@ import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * NeoForge's "Missing FluidModel" check in ClientHooks.gatherFluidModels asks the kernel, which also counts the models
  * fabric-rendering-fluids adds after it — and nothing else changes.
  */
 @ResourceLock("system-properties")
 class FabricFluidModelsInjectorTest {
-	private static final Path NEO_RT = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"))
+	private static final Path NEO_RT = TestFixtures.stagedRoot()
 			.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final String HOOKS = "net/neoforged/neoforge/client/ClientHooks";
 	private static final String FABRIC_REGISTRY = "net/fabricmc/fabric/impl/client/rendering/fluid/FluidRenderingRegistryImpl";
@@ -37,7 +39,7 @@ class FabricFluidModelsInjectorTest {
 	@AfterEach void reset() { System.clearProperty(FabricFluidModelsInjector.PROPERTY); }
 
 	@Test void theWarningsCheckAsksTheKernelAndOnlyIt() throws Exception {
-		assumeTrue(Files.isRegularFile(NEO_RT), NEO_RT + " absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEO_RT), NEO_RT + " absent");
 		byte[] original = NativeCoremodParityTest.read(NEO_RT, HOOKS);
 		byte[] out = new FabricFluidModelsInjector().transform(FabricFluidModelsInjector.HOOKS, original, null);
 		assertNotSame(original, out);
@@ -98,7 +100,7 @@ class FabricFluidModelsInjectorTest {
 	/** The compiled game-side hook, plus (when given) a Fabric registry, in a loader of their own. */
 	private static URLClassLoader runtimeLoader(byte[] registry) throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime").normalize();
-		assumeTrue(Files.isDirectory(compiled), "the game-side set is not compiled");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "the game-side set is not compiled");
 		return new URLClassLoader(new URL[] { compiled.toUri().toURL() }, FabricFluidModelsInjectorTest.class.getClassLoader()) {
 			@Override
 			protected Class<?> findClass(String name) throws ClassNotFoundException {

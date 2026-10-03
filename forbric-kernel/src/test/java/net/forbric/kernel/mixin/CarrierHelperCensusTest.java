@@ -20,7 +20,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
-import org.junit.jupiter.api.Assumptions;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -42,15 +42,14 @@ import net.forbric.api.Ecosystem;
  * moved off the shape it expects.
  */
 class CarrierHelperCensusTest {
-	private static final String OLD = System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader");
-	private static final Path MERGED = Path.of(OLD, "run/merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path VANILLA = TestFixtures.vanillaJar();
-	private static final Path FORGE = Path.of(OLD, "run/forge-patched/patched-mc-forge-26.2.jar");
-	private static final Path NEOFORGE = Path.of(OLD, "run/neoforge-patched/patched-mc-neoforge-26.2.jar");
+	private static final Path FORGE = TestFixtures.stagedRoot().resolve("forge-patched/patched-mc-forge-26.2.jar");
+	private static final Path NEOFORGE = TestFixtures.stagedRoot().resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
 
 	@Test void theShippedTableIsExactlyWhatTheArtifactsSay() throws Exception {
 		for (Path jar : List.of(MERGED, VANILLA, FORGE, NEOFORGE)) {
-			Assumptions.assumeTrue(Files.isRegularFile(jar), jar + " required");
+			TestFixtures.require(jar == VANILLA ? Fixture.MC_LIBRARIES : Fixture.STAGED, Files.isRegularFile(jar), jar + " required");
 		}
 		Map<Ecosystem, ZipFile> references = new LinkedHashMap<>();
 		references.put(Ecosystem.FABRIC, new ZipFile(VANILLA.toFile()));

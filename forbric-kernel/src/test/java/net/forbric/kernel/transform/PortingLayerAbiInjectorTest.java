@@ -19,16 +19,12 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -40,12 +36,16 @@ import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Covers the ForgeConfigAPIPort ABI shim, against the REAL jar.
  *
  * <p>A hand-built fixture would be the wrong subject: the whole premise is what a third-party jar compiled
  * against, and the shim's refusal condition is "that jar changed". Skips when the jar is not staged.
  */
+@ExecutesInjector(PortingLayerAbiInjector.class)
 class PortingLayerAbiInjectorTest {
 	private static final Path PORT = Path.of(System.getProperty("user.dir"), "run", "client-kernel", "mods",
 			"ForgeConfigAPIPort-v26.2.1-mc26.2.x-Fabric.jar").normalize();
@@ -173,17 +173,10 @@ class PortingLayerAbiInjectorTest {
 	 */
 	@Test
 	void aMethodReferenceToThePortsScreenConstructorIsReAimedAtTheCarriers() throws Exception {
-		Path ss = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "mods",
-				"ShoulderSurfing-Fabric-26.2-5.0.11.jar").normalize();
-		assumeTrue(Files.isRegularFile(ss), "ShoulderSurfing not staged — skipping");
-		byte[] in;
-		try (ZipFile jar = new ZipFile(ss.toFile())) {
-			ZipEntry e = jar.getEntry("com/github/exopandora/shouldersurfing/fabric/ShoulderSurfingFabric.class");
-			assumeTrue(e != null, "the client entrypoint moved in this build");
-			try (InputStream stream = jar.getInputStream(e)) {
-				in = stream.readAllBytes();
-			}
-		}
+		Path ss = TestFixtures.stagedRoot().resolve("mods/ShoulderSurfing-Fabric-26.2-5.0.11.jar");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(ss), "ShoulderSurfing not staged — skipping");
+		// Pinned by its full file name, so a present jar without its client entrypoint has changed under the test.
+		byte[] in = TestFixtures.requireEntry(Fixture.THIRD_PARTY, ss, "com/github/exopandora/shouldersurfing/fabric/ShoulderSurfingFabric.class");
 
 		byte[] out = new PortingLayerAbiInjector().transform(
 				"com.github.exopandora.shouldersurfing.fabric.ShoulderSurfingFabric", in, null);
@@ -287,14 +280,8 @@ class PortingLayerAbiInjectorTest {
 	}
 
 	private static byte[] original(String entry) throws IOException {
-		assumeTrue(Files.isRegularFile(PORT), "ForgeConfigAPIPort not staged — skipping the real-bytecode check");
-		try (ZipFile jar = new ZipFile(PORT.toFile())) {
-			ZipEntry e = jar.getEntry(entry + ".class");
-			assumeTrue(e != null, entry + " absent from this build of the port");
-			try (InputStream in = jar.getInputStream(e)) {
-				return in.readAllBytes();
-			}
-		}
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(PORT), "ForgeConfigAPIPort not staged — skipping the real-bytecode check");
+		return TestFixtures.requireEntry(Fixture.THIRD_PARTY, PORT, entry + ".class");
 	}
 
 }

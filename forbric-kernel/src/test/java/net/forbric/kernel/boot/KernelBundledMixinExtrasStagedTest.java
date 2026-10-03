@@ -10,7 +10,6 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.net.URL;
@@ -29,13 +28,16 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.classloading.ForbricClassLoader;
 import net.forbric.kernel.classloading.LoaderProbePolicy;
 
 /**
  * Reads the exact two-level JiJ that shadowed the kernel in the Windows popular-pack baseline.
- * Optional on a clean checkout; FORBRIC_COMPAT_FIXTURES_REQUIRED=1 makes absence a failure for a compatibility
- * validation run. Fixture paths can be overridden with FORBRIC_BADPACKETS_FIXTURE / FORBRIC_KERNEL_BOOT_FIXTURE.
+ * Optional on a clean checkout; -Dforbric.requireFixtures=third-party (or all) makes absence a failure for a
+ * compatibility validation run. Fixture paths can be overridden with FORBRIC_BADPACKETS_FIXTURE /
+ * FORBRIC_KERNEL_BOOT_FIXTURE.
  */
 class KernelBundledMixinExtrasStagedTest {
 	private static final String BOOTSTRAP = "com.llamalad7.mixinextras.MixinExtrasBootstrap";
@@ -54,8 +56,7 @@ class KernelBundledMixinExtrasStagedTest {
 		boolean present = Files.isRegularFile(badpackets) && Files.isRegularFile(boot);
 		String missing = "stage the popular compatibility pack and the boot jar (or set fixture overrides): "
 				+ badpackets + ", " + boot;
-		if ("1".equals(System.getenv("FORBRIC_COMPAT_FIXTURES_REQUIRED"))) assertTrue(present, missing);
-		assumeTrue(present, missing);
+		TestFixtures.require(Fixture.THIRD_PARTY, present, missing);
 
 		List<Path> nested = KernelBoot.extractForgeFamilyJarJar(List.of(badpackets), temporary.resolve("game"));
 		assertEquals(2, nested.size(), "this fixture must exercise both the Forge wrapper and its common child");

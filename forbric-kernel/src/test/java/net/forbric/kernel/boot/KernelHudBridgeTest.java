@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -36,6 +35,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.AbstractInsnNode;
@@ -55,11 +55,9 @@ import org.objectweb.asm.tree.MethodNode;
  */
 class KernelHudBridgeTest {
 	private static final Path NEOFORGE_RUNTIME =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "neoforge-runtime",
-					"neoforge-runtime.jar").normalize();
+			TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
 	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+			TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").normalize();
 	private static final Path CLIENT_MODS =
 			Path.of(System.getProperty("user.dir"), "run", "client-kernel", "mods").normalize();
 
@@ -110,9 +108,9 @@ class KernelHudBridgeTest {
 
 	@Test
 	void everyKeyIsARealNeoForgeLayerAndEveryValueARealFabricConstant() throws Exception {
-		assumeTrue(Files.isRegularFile(NEOFORGE_RUNTIME), "staged neoforge-runtime.jar absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE_RUNTIME), "staged neoforge-runtime.jar absent");
 		Path fabricApi = fabricApiJar();
-		assumeTrue(fabricApi != null, "fabric-api jar absent from the client mods dir");
+		TestFixtures.require(Fixture.STAGED, fabricApi != null, "fabric-api jar absent from the client mods dir");
 
 		Set<String> layerIds = idConstants(readFromJar(NEOFORGE_RUNTIME,
 				"net/neoforged/neoforge/client/gui/VanillaGuiLayers.class"));
@@ -133,7 +131,7 @@ class KernelHudBridgeTest {
 
 	@Test
 	void theUnmappedLayersAreExactlyTheOnesWeDecidedToLeaveOut() throws Exception {
-		assumeTrue(Files.isRegularFile(NEOFORGE_RUNTIME), "staged neoforge-runtime.jar absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE_RUNTIME), "staged neoforge-runtime.jar absent");
 
 		Set<String> layerIds = idConstants(readFromJar(NEOFORGE_RUNTIME,
 				"net/neoforged/neoforge/client/gui/VanillaGuiLayers.class"));
@@ -150,7 +148,7 @@ class KernelHudBridgeTest {
 
 	@Test
 	void hudMixinsResolvedAnchorsAreStillInDeadCode() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 
 		// HudMixin resolves 7 of its anchors, all inside Hud.extractHotbarAndDecorations. That method is orphaned on
 		// this base — nothing calls it — which is the entire reason the bridge cannot double-render against them.
@@ -172,7 +170,7 @@ class KernelHudBridgeTest {
 
 	@Test
 	void rootsHudMixinDispatchesInLiveCodeAreLeftToIt() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		ClassNode hud = new ClassNode();
 		new ClassReader(readFromJar(MERGED_BASE, "net/minecraft/client/gui/Hud.class")).accept(hud, 0);
 		assertEquals(Set.of(), KernelHudBridge.liveRoots(hud), "the base before Mixin dispatches no Fabric root");

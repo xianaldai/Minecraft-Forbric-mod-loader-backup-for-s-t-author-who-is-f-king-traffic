@@ -3,6 +3,8 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.*;
 import java.nio.file.*;
 import java.util.zip.ZipFile;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassReader;
@@ -15,7 +17,7 @@ class CompatPluginPlatformInjectorTest {
     @Test void actualPluginsKeepValidLocalsAndNativeBranches() throws Exception {
         Path mods=Path.of("build/sweep100-mac-network/mods");
         for(var entry:java.util.Map.of("dev.isxander.controlify.compatibility.CompatMixinPlugin","controlify-3.5.3+mc26.2-universal.jar","me.towdium.jecharacters.mixin.JechMixinPlugin","jecharacters-26.1.2-fabric-4.6.8.jar").entrySet()) {
-            Path jar=mods.resolve(entry.getValue());Assumptions.assumeTrue(Files.isRegularFile(jar),"local mod fixture absent");byte[] original;
+            Path jar=mods.resolve(entry.getValue());TestFixtures.require(Fixture.THIRD_PARTY,Files.isRegularFile(jar),"local mod fixture absent");byte[] original;
             try(ZipFile zip=new ZipFile(jar.toFile())){original=zip.getInputStream(zip.getEntry(entry.getKey().replace('.','/')+".class")).readAllBytes();}
             var repair=new CompatPluginPlatformInjector();byte[] bytes=repair.transform(entry.getKey(),original,null);assertNotSame(original,bytes);
             ClassNode node=new ClassNode();new ClassReader(bytes).accept(node,0);

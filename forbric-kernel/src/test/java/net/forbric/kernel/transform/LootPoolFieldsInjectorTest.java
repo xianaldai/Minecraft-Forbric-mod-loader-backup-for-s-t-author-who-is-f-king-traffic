@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.zip.ZipFile;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -12,9 +11,12 @@ import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /** On the real merged LootPool: each family's constructor ends up writing the other family's fields. */
 class LootPoolFieldsInjectorTest {
-	private static final Path MERGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"), "merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	@Test void bothConstructorsFillBothFamiliesFields() throws Exception {
 		byte[] original = lootPool();
@@ -40,7 +42,7 @@ class LootPoolFieldsInjectorTest {
 	}
 
 	private static byte[] lootPool() throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(MERGED), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "staged merged base absent");
 		try (ZipFile zip = new ZipFile(MERGED.toFile()); var in = zip.getInputStream(zip.getEntry("net/minecraft/world/level/storage/loot/LootPool.class"))) {
 			return in.readAllBytes();
 		}

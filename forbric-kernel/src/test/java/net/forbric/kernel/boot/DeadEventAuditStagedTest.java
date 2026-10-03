@@ -17,8 +17,8 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -26,6 +26,8 @@ import java.nio.file.Path;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.AbstractInsnNode;
@@ -41,13 +43,12 @@ import org.objectweb.asm.tree.MethodNode;
 class DeadEventAuditStagedTest {
 	@Test
 	void theMergedItemStackPostsOnlyMinecraftForgesTooltipEvent() throws Exception {
-		Path merged = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-				"patched-mc-merged-26.2.jar").normalize();
-		assumeTrue(Files.isRegularFile(merged), "staged merged base absent");
+		Path merged = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").normalize();
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(merged), "staged merged base absent");
 		ClassNode node = new ClassNode();
 		try (ZipFile zip = new ZipFile(merged.toFile())) {
 			ZipEntry entry = zip.getEntry("net/minecraft/world/item/ItemStack.class");
-			assumeTrue(entry != null);
+			assertNotNull(entry, "ItemStack is missing from the staged merged base " + merged);
 			try (InputStream in = zip.getInputStream(entry)) {
 				new ClassReader(in).accept(node, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
 			}

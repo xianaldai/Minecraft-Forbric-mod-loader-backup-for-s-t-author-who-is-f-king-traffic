@@ -133,8 +133,13 @@ def clone_rundir(source: Path, destination: Path) -> None:
     434 MB game install copies in under a fifth of a second and costs no disk. The flag is macOS-only and fails
     on any filesystem that cannot do it, so fall back to `cp --reflink=auto` (btrfs, xfs, modern ext4) and then
     to a real recursive copy, which is slow but correct.
+
+    The source is resolved first. A second working tree (the nightly's) links its fixtures to the main checkout's,
+    and cp -R copies a symlink named on its command line AS a symlink: the "copy" was then a link to the main
+    checkout's fixture, and the gate saved its world, options and mods straight into it.
     """
-    if destination.exists():
+    source = Path(os.path.realpath(source))
+    if destination.exists() or destination.is_symlink():
         subprocess.run(["rm", "-rf", str(destination)], check=True)
     destination.parent.mkdir(parents=True, exist_ok=True)
     for command in (["cp", "-Rc", str(source), str(destination)],

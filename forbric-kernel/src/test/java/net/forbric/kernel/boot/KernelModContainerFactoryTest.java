@@ -19,7 +19,6 @@ package net.forbric.kernel.boot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -27,6 +26,8 @@ import java.nio.file.Path;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -48,10 +49,9 @@ import org.objectweb.asm.tree.MethodNode;
  * jar directly, so they go red at build time instead of during someone's world load.
  */
 class KernelModContainerFactoryTest {
-	private static final Path NEOFORGE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"neoforge-runtime", "neoforge-runtime.jar").normalize();
-	private static final Path FORGE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"forge-runtime", "forge-runtime.jar").normalize();
+	private static final Path NEOFORGE =
+			TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
+	private static final Path FORGE = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar").normalize();
 
 	/** The four types the factory resolves by name, and the visibility its typed use of them needs. */
 	@Test
@@ -64,7 +64,6 @@ class KernelModContainerFactoryTest {
 		};
 		for (String t : types) {
 			ClassNode node = neo(t);
-			assumeTrue(node != null, "staged NeoForge carrier absent");
 			assertTrue((node.access & Opcodes.ACC_PUBLIC) != 0, t + " is no longer public");
 		}
 	}
@@ -76,7 +75,6 @@ class KernelModContainerFactoryTest {
 	@Test
 	void theFieldsTheFactoryWritesStillExistOnModContainer() throws Exception {
 		ClassNode modContainer = neo("net/neoforged/fml/ModContainer");
-		assumeTrue(modContainer != null, "staged NeoForge carrier absent");
 
 		for (String field : new String[] {"modId", "namespace", "modInfo", "extensionPoints"}) {
 			assertNotNull(field(modContainer, field),
@@ -90,7 +88,6 @@ class KernelModContainerFactoryTest {
 	@Test
 	void theEventBusFieldStillExistsOnFmlModContainer() throws Exception {
 		ClassNode fml = neo("net/neoforged/fml/javafmlmod/FMLModContainer");
-		assumeTrue(fml != null, "staged NeoForge carrier absent");
 
 		FieldNode bus = field(fml, "eventBus");
 		assertNotNull(bus, "FMLModContainer.eventBus is gone — every mod that resolves its own bus through "
@@ -105,7 +102,6 @@ class KernelModContainerFactoryTest {
 	@Test
 	void getEventBusIsStillAbstractOnModContainer() throws Exception {
 		ClassNode modContainer = neo("net/neoforged/fml/ModContainer");
-		assumeTrue(modContainer != null, "staged NeoForge carrier absent");
 
 		MethodNode m = method(modContainer, "getEventBus");
 		assertNotNull(m, "ModContainer.getEventBus is gone");
@@ -119,7 +115,6 @@ class KernelModContainerFactoryTest {
 	@Test
 	void unsafeHacksStillOffersTheTwoMethodsTheFactoryCalls() throws Exception {
 		ClassNode unsafe = readClass(FORGE, "net/minecraftforge/unsafe/UnsafeHacks");
-		assumeTrue(unsafe != null, "staged MinecraftForge carrier absent");
 
 		assertNotNull(method(unsafe, "newInstance"),
 				"UnsafeHacks.newInstance is gone — the factory allocates FMLModContainer without a constructor "
@@ -131,7 +126,6 @@ class KernelModContainerFactoryTest {
 	@Test
 	void iModInfoStillDeclaresWhatTheProxyAnswers() throws Exception {
 		ClassNode info = neo("net/neoforged/neoforgespi/language/IModInfo");
-		assumeTrue(info != null, "staged NeoForge carrier absent");
 
 		assertNotNull(method(info, "getModId"), "IModInfo.getModId is gone — the proxy answers it by name");
 		assertEquals(true, (info.access & Opcodes.ACC_INTERFACE) != 0, "IModInfo is no longer an interface, so it "
@@ -144,11 +138,13 @@ class KernelModContainerFactoryTest {
 		return readClass(NEOFORGE, internalName);
 	}
 
+	/** The class out of a staged carrier; one the carrier no longer has fails the test, it does not skip it. */
 	private static ClassNode readClass(Path jar, String internalName) throws Exception {
-		if (!Files.isRegularFile(jar)) return null;
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar),
+				"staged " + (jar.equals(FORGE) ? "MinecraftForge" : "NeoForge") + " carrier absent");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ZipEntry e = zip.getEntry(internalName + ".class");
-			if (e == null) return null;
+			assertNotNull(e, internalName + " is gone from " + jar.getFileName());
 			try (InputStream in = zip.getInputStream(e)) {
 				ClassNode node = new ClassNode();
 				new ClassReader(in.readAllBytes()).accept(node, 0);

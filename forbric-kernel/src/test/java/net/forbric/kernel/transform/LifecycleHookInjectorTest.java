@@ -19,19 +19,14 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -46,24 +41,23 @@ import org.objectweb.asm.tree.VarInsnNode;
 
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ForeignType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * Verifies against the REAL merged-base bytecode that {@link LifecycleHookInjector} excises the genuine
  * FancyModLoader server-loading trigger from {@code net.minecraft.server.Main.main} — the kernel owns the
  * lifecycle, no genuine loader runs.
  */
+@ExecutesInjector(LifecycleHookInjector.class)
 class LifecycleHookInjectorTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	private final LifecycleHookInjector injector = new LifecycleHookInjector();
 
 	@Test
 	void excisesServerModLoaderFromRealMain() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
-		byte[] original = readClass(MERGED_BASE, "net/minecraft/server/Main.class");
-		assumeTrue(original != null, "net/minecraft/server/Main not in merged base");
+		byte[] original = TestFixtures.requireEntry(Fixture.STAGED, MERGED_BASE, "net/minecraft/server/Main.class");
 
 		// Precondition: the real Main.main really does call a genuine ModLoader.load (else the test proves nothing).
 		assertTrue(callsAnyModLoaderLoad(original), "merged Main.main should reference a genuine ServerModLoader.load");
@@ -97,9 +91,7 @@ class LifecycleHookInjectorTest {
 	 */
 	@Test
 	void theRealClientMainReportsItsEarlyFailuresToTheKernelFirst() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
-		byte[] original = readClass(MERGED_BASE, "net/minecraft/client/main/Main.class");
-		assumeTrue(original != null, "net/minecraft/client/main/Main not in merged base");
+		byte[] original = TestFixtures.requireEntry(Fixture.STAGED, MERGED_BASE, "net/minecraft/client/main/Main.class");
 		LifecycleHookInjector client = LifecycleHookInjector.forClient();
 
 		ClassNode out = node(client.transform(LifecycleHookInjector.CLIENT_MAIN, original, null));
@@ -226,15 +218,5 @@ class LifecycleHookInjectorTest {
 			}
 		}
 		return false;
-	}
-
-	private static byte[] readClass(Path jar, String entry) throws Exception {
-		try (ZipFile zf = new ZipFile(jar.toFile())) {
-			ZipEntry e = zf.getEntry(entry);
-			if (e == null) return null;
-			try (InputStream in = zf.getInputStream(e)) {
-				return in.readAllBytes();
-			}
-		}
 	}
 }

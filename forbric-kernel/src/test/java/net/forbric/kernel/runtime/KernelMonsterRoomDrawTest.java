@@ -18,13 +18,14 @@ package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -123,7 +124,7 @@ class KernelMonsterRoomDrawTest {
 	}
 
 	private static MethodNode method(String name) throws Exception {
-		assumeTrue(Files.isRegularFile(COMPILED), "runtime helper not compiled: " + COMPILED);
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(COMPILED), "runtime helper not compiled: " + COMPILED);
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(COMPILED)).accept(node, 0);
 		for (MethodNode candidate : node.methods) {

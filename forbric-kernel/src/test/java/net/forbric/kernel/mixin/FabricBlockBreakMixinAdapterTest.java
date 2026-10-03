@@ -10,8 +10,8 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassReader;
@@ -169,16 +169,16 @@ class FabricBlockBreakMixinAdapterTest {
 	}
 
 	private static ClassNode merged() throws Exception {
-		return game(Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/merged-base/patched-mc-merged-26.2.jar"));
+		return game(Fixture.STAGED, TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar"));
 	}
 
 	private static ClassNode vanilla() throws Exception {
-		return game(TestFixtures.vanillaJar());
+		return game(Fixture.MC_LIBRARIES, TestFixtures.vanillaJar());
 	}
 
 	/** With its local variable table, as the mixin service reads it: that table is the adapter's evidence. */
-	private static ClassNode game(Path jar) throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(jar), "actual game required");
+	private static ClassNode game(Fixture kind, Path jar) throws Exception {
+		TestFixtures.require(kind, Files.isRegularFile(jar), "actual game required");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ClassNode node = new ClassNode();
 			new ClassReader(zip.getInputStream(zip.getEntry(FabricBlockBreakMixinAdapter.TARGET + ".class")).readAllBytes()).accept(node, 0);
@@ -188,7 +188,7 @@ class FabricBlockBreakMixinAdapterTest {
 
 	private static ClassNode architectury() throws Exception {
 		Path jar = MODS.resolve("architectury-fabric-21.1.10.jar");
-		Assumptions.assumeTrue(Files.isRegularFile(jar), "popular-pack architectury fixture absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(jar), "popular-pack architectury fixture absent");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			return MixinFit.parse(zip.getInputStream(zip.getEntry(FabricBlockBreakMixinAdapter.ARCHITECTURY + ".class")).readAllBytes());
 		}
@@ -196,7 +196,7 @@ class FabricBlockBreakMixinAdapterTest {
 
 	private static ClassNode apoli() throws Exception {
 		Path jar = MODS.resolve("Origins-Legacy-1.12.18+26.2.jar");
-		Assumptions.assumeTrue(Files.isRegularFile(jar), "popular-pack Origins fixture absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(jar), "popular-pack Origins fixture absent");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ZipEntry nested = zip.getEntry("META-INF/jars/Apoli-Legacy-2.12.12+26.2.jar");
 			try (ZipInputStream in = new ZipInputStream(zip.getInputStream(nested))) {

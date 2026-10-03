@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.zip.ZipFile;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
@@ -45,9 +47,8 @@ class CompatibilityPromptTickInjectorTest {
 	}
 
 	@Test void gameUiCallsExistOnTheActualMinecraft262Base() throws Exception {
-		Path game = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"),
-				"run", "merged-base", "patched-mc-merged-26.2.jar").normalize();
-		org.junit.jupiter.api.Assumptions.assumeTrue(Files.isRegularFile(game), "staged game absent");
+		Path game = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(game), "staged game absent");
 		try (ZipFile zip = new ZipFile(game.toFile())) {
 			ClassNode minecraft = parse(zip.getInputStream(zip.getEntry("net/minecraft/client/Minecraft.class")).readAllBytes());
 			for (String method : java.util.List.of("disconnectWithSavingScreen", "stop", "tick")) {

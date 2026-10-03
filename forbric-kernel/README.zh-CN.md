@@ -61,6 +61,7 @@ RuntimeInteropPatcher}` + `run/{build-merged-base,assemble-*-runtime}.sh` 产出
 | `gate-m12` … `gate-m16` | 走真实 socket 的多人游戏、一款反作弊的判定、纯 Fabric 服务端、两个 Forge 系的网络 |
 | `gate-m17` | 安装器，按启动器的方式解析并启动 |
 | `gate-m24` | 一个故意失败的 mod：其余 mod 照常加载，失败也能归因 |
+| `gate-m24c` | 写进 `forbric-disabled.txt` 的 jar 谁都不加载，并在 `load-report.txt` 里点名；对照组照常加载它 |
 | `gate-m25-worldgen` | 两个 Forge 系的生物群系修改器金丝雀 mod 在保存下来的区域文件里留下各自不同的方块 |
 | `gate-m26-forgeclient` | Forge 客户端收到按键、渲染器、着色（tint）、提示框、几何加载器和创造模式物品栏的注册事件，并且 CLIENT_INIT/REGISTRATION 的桥清单报告完整 |
 | `gate-m27-frame` | 97 个 jar 的客户端产出一张新生成的、不是黑屏的 Minecraft 截图 |

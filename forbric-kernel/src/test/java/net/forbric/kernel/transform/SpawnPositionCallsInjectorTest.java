@@ -7,8 +7,8 @@ import java.util.List;
 import java.util.function.Function;
 import java.util.zip.ZipFile;
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.mixin.MixinFit;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.*;
@@ -17,7 +17,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
 
 /** The merged BaseSpawner, rewritten, on the real staged jars; architectury's real mixin is the witness. */
 class SpawnPositionCallsInjectorTest {
-	private static final Path STAGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"));
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path NEO = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final Path ARCHITECTURY = Path.of("run/client-popular/mods/architectury-fabric-21.1.10.jar");
@@ -36,7 +36,7 @@ class SpawnPositionCallsInjectorTest {
 	}
 
 	@Test void architecturysRedirectsFitTheRewrittenSpawnerAndMissedTheMergedOne() throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(ARCHITECTURY), "popular-pack architectury fixture absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(ARCHITECTURY), "popular-pack architectury fixture absent");
 		byte[] mixin = read(ARCHITECTURY, "dev/architectury/mixin/fabric/MixinBaseSpawner.class");
 		byte[] original = read(MERGED, "net/minecraft/world/level/BaseSpawner.class");
 		byte[] rewritten = injector().transform(SpawnPositionCallsInjector.TARGET, original, null);
@@ -70,7 +70,7 @@ class SpawnPositionCallsInjectorTest {
 	}
 
 	@Test void architecturysChunkGenerationRedirectFitsTheRewrittenNaturalSpawner() throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(ARCHITECTURY), "popular-pack architectury fixture absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(ARCHITECTURY), "popular-pack architectury fixture absent");
 		byte[] mixin = read(ARCHITECTURY, "dev/architectury/mixin/fabric/MixinNaturalSpawner.class");
 		String entry = "net/minecraft/world/level/NaturalSpawner.class";
 		byte[] original = read(MERGED, entry);
@@ -92,7 +92,7 @@ class SpawnPositionCallsInjectorTest {
 	}
 
 	private static SpawnPositionCallsInjector injector() {
-		Assumptions.assumeTrue(Files.isRegularFile(MERGED) && Files.isRegularFile(NEO), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED) && Files.isRegularFile(NEO), "staged merged base absent");
 		return new SpawnPositionCallsInjector(path -> {
 			for (Path jar : List.of(MERGED, NEO)) {
 				byte[] bytes = readOrNull(jar, path);
@@ -123,7 +123,7 @@ class SpawnPositionCallsInjectorTest {
 	}
 
 	private static byte[] read(Path jar, String entry) throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(jar), jar + " absent");
+		TestFixtures.require(NativeCoremodParityTest.fixtureOf(jar), Files.isRegularFile(jar), jar + " absent");
 		byte[] bytes = readOrNull(jar, entry);
 		assertNotNull(bytes, entry + " in " + jar);
 		return bytes;

@@ -9,29 +9,167 @@
  */
 package net.forbric.kernel;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
 import java.util.Locale;
-import org.junit.jupiter.api.Assumptions;
+import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import org.opentest4j.AssertionFailedError;
+import org.opentest4j.TestAbortedException;
 
 /**
  * Fixtures a test reads that a clean checkout does not have: the staged game artifacts, the compiled game side
  * (built only when those artifacts are present), and the local mod packs under {@code run/}.
  *
- * <p>CI is such a checkout, and it must stay green: a missing fixture skips the test there. A compatibility run
- * sets {@code FORBRIC_COMPAT_FIXTURES_REQUIRED=1}, and then a missing fixture is a failure, so a machine that is
- * supposed to have them cannot pass by quietly skipping.
+ * <p>CI is such a checkout, and it must stay green: a missing fixture skips the test there. A machine that is
+ * supposed to have a kind of fixture names it in {@code -Dforbric.requireFixtures} (a comma list of
+ * {@link Fixture} ids, or {@code all}; Gradle passes {@code -Pforbric.requireFixtures}, and an integration run
+ * passes {@code all}), and then that kind missing is a failure, so the machine cannot pass by quietly skipping.
+ * {@code FORBRIC_COMPAT_FIXTURES_REQUIRED=1} is the older spelling of {@code all}.
+ *
+ * <p>Every skip this class throws carries {@code [fixture:<id>]}, which is what lets
+ * {@link FixturePolicyExtension} apply the same policy to a skip thrown from anywhere else.
  */
 public final class TestFixtures {
+	/** The system property that names the fixtures this run must have. */
+	public static final String POLICY = "forbric.requireFixtures";
+	private static final String LEGACY_ENV = "FORBRIC_COMPAT_FIXTURES_REQUIRED";
+
 	private TestFixtures() {
 	}
 
-	/** Skips the test when {@code present} is false, or fails it when fixtures are required. */
+	/** The kinds of input a clean checkout lacks, one per way a machine comes to have them. */
+	public enum Fixture {
+		/** The staged merged base and carriers under {@link #stagedRoot()}. */
+		STAGED("staged"),
+		/** build/classes/java/runtime, compiled only when the staged jars are present. */
+		GAME_SIDE("game-side"),
+		/** A local Minecraft install: the vanilla jar and the launcher's libraries under {@link #minecraftDir()}. */
+		MC_LIBRARIES("mc-libraries"),
+		/** A JDK that links the class-file 69 game. */
+		JAVA_25("java-25"),
+		/** Third-party mod jars and packs, under run/ or build/compat-inputs/. */
+		THIRD_PARTY("third-party"),
+		/** A test that only runs when asked for, such as a long soak or a live network probe. */
+		OPT_IN("opt-in");
+
+		private final String id;
+
+		Fixture(String id) {
+			this.id = id;
+		}
+
+		/** The spelling used in {@code [fixture:<id>]} tags and in {@value TestFixtures#POLICY}. */
+		public String id() {
+			return id;
+		}
+
+		/** The fixture spelled {@code id} (an enum name is accepted too), or null. */
+		public static Fixture byId(String id) {
+			String wanted = id.trim().toLowerCase(Locale.ROOT).replace('_', '-');
+			for (Fixture fixture : values()) {
+				if (fixture.id.equals(wanted)) return fixture;
+			}
+			return null;
+		}
+	}
+
+	/**
+	 * The fixtures this run must have. Read on every call rather than once: a test that sets the property to
+	 * check the policy itself must see its own value, and a cached answer would leak into every later test.
+	 */
+	public static Set<Fixture> requiredFixtures() {
+		Set<Fixture> required = EnumSet.noneOf(Fixture.class);
+		if ("1".equals(System.getenv(LEGACY_ENV))) required.addAll(EnumSet.allOf(Fixture.class));
+		String policy = System.getProperty(POLICY, "");
+		for (String token : policy.split(",")) {
+			if (token.isBlank()) continue;
+			if (token.trim().equalsIgnoreCase("all")) {
+				required.addAll(EnumSet.allOf(Fixture.class));
+				continue;
+			}
+			Fixture fixture = Fixture.byId(token);
+			// A misspelt id must not leave the run requiring nothing: that is a skip passing for a verdict.
+			if (fixture == null) throw new IllegalArgumentException(POLICY + "=" + policy + " names '" + token.trim()
+					+ "', which is not a fixture; use all or a comma list of " + ids());
+			required.add(fixture);
+		}
+		return required;
+	}
+
+	/** Whether a missing {@code kind} fails this run instead of skipping. */
+	public static boolean required(Fixture kind) {
+		return requiredFixtures().contains(kind);
+	}
+
+	/** Where the policy came from, for a failure message the reader can act on. */
+	public static String policySource() {
+		List<String> sources = new ArrayList<>();
+		String policy = System.getProperty(POLICY, "");
+		if (!policy.isBlank()) sources.add("-D" + POLICY + "=" + policy);
+		if ("1".equals(System.getenv(LEGACY_ENV))) sources.add(LEGACY_ENV + "=1");
+		return sources.isEmpty() ? "no fixture policy" : String.join(" and ", sources);
+	}
+
+	/** The tag every skip of {@code kind} carries. */
+	public static String tag(Fixture kind) {
+		return "[fixture:" + kind.id() + "] ";
+	}
+
+	/**
+	 * Skips the test when {@code present} is false, or fails it when this run requires {@code kind}.
+	 *
+	 * <p>Thrown directly rather than through {@code Assumptions.assumeTrue}, which would put "Assumption failed: "
+	 * in front of the tag.
+	 */
+	public static void require(Fixture kind, boolean present, String what) {
+		if (present) return;
+		if (required(kind)) throw new AssertionFailedError(tag(kind) + what + " — required by " + policySource());
+		throw new TestAbortedException(tag(kind) + what);
+	}
+
+	/** {@link #require(Fixture, boolean, String)} for files: every path must be a regular file. */
+	public static void requireFiles(Fixture kind, String what, Path... files) {
+		for (Path file : files) require(kind, Files.isRegularFile(file), what + ": " + file);
+	}
+
+	/** {@link #require(Fixture, boolean, String)} for a directory, such as a local mod pack. */
+	public static void requireDirectory(Fixture kind, String what, Path directory) {
+		require(kind, Files.isDirectory(directory), what + ": " + directory);
+	}
+
+	/**
+	 * The bytes of {@code entry} inside {@code jar}. A missing jar is a missing fixture of {@code kind}; a jar that
+	 * IS present but lacks the entry always fails, under any policy: the fixture is there and has changed under
+	 * the test, and skipping would hide exactly the drift a pinned fixture exists to catch.
+	 */
+	public static byte[] requireEntry(Fixture kind, Path jar, String entry) {
+		require(kind, Files.isRegularFile(jar), jar + " absent (reading " + entry + ")");
+		try (ZipFile zip = new ZipFile(jar.toFile())) {
+			ZipEntry found = zip.getEntry(entry);
+			if (found == null) throw new AssertionFailedError("content drift: " + jar + " has no " + entry);
+			try (InputStream in = zip.getInputStream(found)) {
+				return in.readAllBytes();
+			}
+		} catch (IOException unreadable) {
+			throw new AssertionFailedError("content drift: " + jar + " is present but is not a readable jar", unreadable);
+		}
+	}
+
+	/**
+	 * Skips the test when {@code present} is false, or fails it when this run requires any fixture. Untagged, so
+	 * it counts as every kind; {@link #require(Fixture, boolean, String)} says which one it is.
+	 */
 	public static void require(boolean present, String what) {
-		if ("1".equals(System.getenv("FORBRIC_COMPAT_FIXTURES_REQUIRED"))) assertTrue(present, what);
-		Assumptions.assumeTrue(present, what);
+		if (present) return;
+		if (!requiredFixtures().isEmpty()) throw new AssertionFailedError(what + " — required by " + policySource());
+		throw new TestAbortedException(what);
 	}
 
 	/** {@link #require} for files: every path must be a regular file. */
@@ -42,6 +180,19 @@ public final class TestFixtures {
 	/** {@link #require} for a directory, such as a local mod pack. */
 	public static void requireDirectory(String what, Path directory) {
 		require(Files.isDirectory(directory), what + ": " + directory);
+	}
+
+	/**
+	 * The staged artifacts' {@code run/} directory: Gradle hands every test task the root the game side compiled
+	 * against as {@code forbric.stagedRoot}; outside Gradle it is {@code FORBRIC_OLD/run}, else the sibling
+	 * forbric-loader checkout's.
+	 */
+	public static Path stagedRoot() {
+		String configured = System.getProperty("forbric.stagedRoot");
+		if (configured != null && !configured.isBlank()) return Path.of(configured);
+		String old = System.getenv("FORBRIC_OLD");
+		if (old != null && !old.isBlank()) return Path.of(old, "run");
+		return Path.of(System.getProperty("user.dir"), "..", "forbric-loader", "run").normalize();
 	}
 
 	/**
@@ -91,5 +242,11 @@ public final class TestFixtures {
 		if (configured == null || configured.isBlank()) return pack;
 		Path compiled = Path.of(configured);
 		return compiled.getFileName().toString().equals(FABRIC_API_JAR) ? compiled : pack;
+	}
+
+	private static String ids() {
+		List<String> ids = new ArrayList<>();
+		for (Fixture fixture : Fixture.values()) ids.add(fixture.id());
+		return String.join(", ", ids);
 	}
 }

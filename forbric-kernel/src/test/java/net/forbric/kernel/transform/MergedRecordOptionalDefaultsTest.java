@@ -2,7 +2,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,20 +20,23 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Every constructor of the merged ServerStatus sets forgeData, and {@link MergedRecordOptionalDefaults#TARGETS} names
  * every record on the staged merged base that has a constructor leaving an Optional component null.
  */
 @ResourceLock("system-properties")
 class MergedRecordOptionalDefaultsTest {
-	private static final Path MERGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"))
+	private static final Path MERGED = TestFixtures.stagedRoot()
 			.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String STATUS = "net.minecraft.network.protocol.status.ServerStatus";
 
 	@AfterEach void reset() { System.clearProperty(MergedRecordOptionalDefaults.PROPERTY); }
 
 	@Test void everyServerStatusConstructorSetsForgeData() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED), "merged base not staged: " + MERGED);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "merged base not staged: " + MERGED);
 		byte[] original = NativeCoremodParityTest.read(MERGED, "net/minecraft/network/protocol/status/ServerStatus");
 		assertEquals(List.of("forgeData in (Lnet/minecraft/network/chat/Component;Ljava/util/Optional;Ljava/util/Optional;"
 				+ "Ljava/util/Optional;ZZ)V"), MergedRecordOptionalDefaults.unsetOptionals(node(original)),
@@ -54,7 +56,7 @@ class MergedRecordOptionalDefaultsTest {
 	}
 
 	@Test void targetsNameEveryMergedRecordLeavingAnOptionalNull() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED), "merged base not staged: " + MERGED);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "merged base not staged: " + MERGED);
 		TreeSet<String> found = new TreeSet<>();
 		try (ZipFile zip = new ZipFile(MERGED.toFile())) {
 			for (ZipEntry entry : Collections.list(zip.entries())) {

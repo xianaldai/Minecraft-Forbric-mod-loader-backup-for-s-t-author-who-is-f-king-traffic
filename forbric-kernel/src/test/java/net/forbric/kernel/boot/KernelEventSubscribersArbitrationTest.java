@@ -17,7 +17,6 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,7 +49,8 @@ class KernelEventSubscribersArbitrationTest {
 	void theRegistrationPassAsksArbitrationBeforeItDispatchesOnFamily() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "main",
 				"net", "forbric", "kernel", "boot", "KernelEventSubscribers.class");
-		assumeTrue(Files.isRegularFile(compiled), "KernelEventSubscribers not compiled yet");
+		assertTrue(Files.isRegularFile(compiled),
+				"KernelEventSubscribers not found in the compiled src/main classes, which exist before any test runs");
 
 		ClassNode node = new ClassNode();
 		new ClassReader(Files.readAllBytes(compiled)).accept(node, 0);

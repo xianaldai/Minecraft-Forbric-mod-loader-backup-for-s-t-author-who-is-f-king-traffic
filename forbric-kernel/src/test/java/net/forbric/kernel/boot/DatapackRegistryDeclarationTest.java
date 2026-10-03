@@ -22,7 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
@@ -44,6 +43,8 @@ import org.objectweb.asm.tree.MethodNode;
 
 import net.forbric.api.CompatibilityFinding;
 import net.forbric.api.Side;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * Where a client declares its datapack registries, and what happens to the list when the two initialisers behind
@@ -94,7 +95,9 @@ class DatapackRegistryDeclarationTest {
 	@Test
 	void theEarlyWindowAsksBeforeDeclaring() throws Exception {
 		MethodNode drive = method("driveNativeRegistration");
-		assumeTrue(drive != null, "KernelLifecycle not compiled yet");
+		assertTrue(drive != null,
+				"KernelLifecycle.driveNativeRegistration not found in the compiled src/main classes, which exist "
+						+ "before any test runs");
 
 		int asks = firstCall(drive, "waitsForFabric");
 		int declares = firstCall(drive, "registerDataPackRegistries");
@@ -136,7 +139,9 @@ class DatapackRegistryDeclarationTest {
 	@Test
 	void theConstructorHookDeclaresAfterTheWindowCloses() throws Exception {
 		MethodNode hook = method("onClientEntrypoints");
-		assumeTrue(hook != null, "KernelLifecycle not compiled yet");
+		assertTrue(hook != null,
+				"KernelLifecycle.onClientEntrypoints not found in the compiled src/main classes, which exist before "
+						+ "any test runs");
 
 		int declares = firstCall(hook, "registerDataPackRegistries");
 		assertTrue(declares >= 0, "a client whose mains run in Minecraft.<init> must declare there");
@@ -149,7 +154,9 @@ class DatapackRegistryDeclarationTest {
 	@Test
 	void clientSetupCannotRunAheadOfTheDeclaration() throws Exception {
 		MethodNode setup = method("onNeoClientSetup");
-		assumeTrue(setup != null, "KernelLifecycle not compiled yet");
+		assertTrue(setup != null,
+				"KernelLifecycle.onNeoClientSetup not found in the compiled src/main classes, which exist before any "
+						+ "test runs");
 
 		int declares = firstCall(setup, "registerDataPackRegistries");
 		int lifecycle = firstCall(setup, "fireClientSetupLifecycle");
@@ -160,7 +167,9 @@ class DatapackRegistryDeclarationTest {
 	@Test
 	void theDeclarationRunsOncePerProcess() throws Exception {
 		MethodNode declare = method("registerDataPackRegistries");
-		assumeTrue(declare != null, "KernelLifecycle not compiled yet");
+		assertTrue(declare != null,
+				"KernelLifecycle.registerDataPackRegistries not found in the compiled src/main classes, which exist "
+						+ "before any test runs");
 
 		MethodInsnNode first = null;
 		for (AbstractInsnNode insn : declare.instructions.toArray()) {
@@ -326,7 +335,8 @@ class DatapackRegistryDeclarationTest {
 	void theReconcilesReflectiveTargetsExistWithTheseShapes() throws Exception {
 		Path runtime = staged("neoforge-runtime", "neoforge-runtime.jar");
 		Path merged = staged("merged-base", "patched-mc-merged-26.2.jar");
-		assumeTrue(Files.isRegularFile(runtime) && Files.isRegularFile(merged), "carrier or merged base not staged");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(runtime) && Files.isRegularFile(merged),
+				"carrier or merged base not staged");
 
 		ClassNode wrapper = classIn(runtime, "net/neoforged/neoforge/registries/DataPackRegistryEvent$DataPackRegistryData");
 		assertTrue(declares(wrapper, "<init>", "(Lnet/minecraft/resources/RegistryDataLoader$RegistryData;"
@@ -343,7 +353,9 @@ class DatapackRegistryDeclarationTest {
 
 		// And these are the names the kernel looks up.
 		MethodNode reconcile = method("reconcileLoaderRegistriesIntoNeoForge");
-		assumeTrue(reconcile != null, "KernelLifecycle not compiled yet");
+		assertTrue(reconcile != null,
+				"KernelLifecycle.reconcileLoaderRegistriesIntoNeoForge not found in the compiled src/main classes, "
+						+ "which exist before any test runs");
 		List<Object> constants = new ArrayList<>();
 		for (AbstractInsnNode insn : reconcile.instructions) {
 			if (insn instanceof org.objectweb.asm.tree.LdcInsnNode ldc) constants.add(ldc.cst);
@@ -528,8 +540,7 @@ class DatapackRegistryDeclarationTest {
 	}
 
 	private static Path staged(String dir, String jar) {
-		return Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"),
-				"run", dir, jar).normalize();
+		return TestFixtures.stagedRoot().resolve(dir).resolve(jar).normalize();
 	}
 
 	private static ClassNode classIn(Path jar, String internalName) throws Exception {

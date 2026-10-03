@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -40,14 +39,15 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Verifies in real {@code neoforge-runtime.jar} bytecode that every {@code GuiLayer} registered with NeoForge's
  * layer manager passes through the kernel, and that the overloads which merely delegate are left alone.
  */
 class HudElementBridgeInjectorTest {
-	private static final Path NEOFORGE_RUNTIME =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "neoforge-runtime",
-					"neoforge-runtime.jar").normalize();
+	private static final Path NEOFORGE_RUNTIME = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
 
 	private static final String TARGET = "net.neoforged.neoforge.client.gui.GuiLayerManager";
 	private static final String ENTRY = "net/neoforged/neoforge/client/gui/GuiLayerManager.class";
@@ -98,7 +98,7 @@ class HudElementBridgeInjectorTest {
 
 	@Test
 	void isIdempotent() throws Exception {
-		assumeTrue(Files.isRegularFile(NEOFORGE_RUNTIME), "staged neoforge-runtime.jar absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE_RUNTIME), "staged neoforge-runtime.jar absent");
 
 		byte[] once = new HudElementBridgeInjector().transform(TARGET, readClass(), null);
 		assertSame(once, new HudElementBridgeInjector().transform(TARGET, once, null),
@@ -117,7 +117,7 @@ class HudElementBridgeInjectorTest {
 	// --- helpers -------------------------------------------------------------------------------------------------
 
 	private static ClassNode transformed() throws Exception {
-		assumeTrue(Files.isRegularFile(NEOFORGE_RUNTIME), "staged neoforge-runtime.jar absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE_RUNTIME), "staged neoforge-runtime.jar absent");
 
 		byte[] out = new HudElementBridgeInjector().transform(TARGET, readClass(), null);
 		ClassNode node = new ClassNode();

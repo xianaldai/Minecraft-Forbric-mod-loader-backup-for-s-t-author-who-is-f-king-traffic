@@ -11,7 +11,7 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 
 import net.forbric.kernel.TestFixtures;
-import org.junit.jupiter.api.Assumptions;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
@@ -25,7 +25,7 @@ import org.objectweb.asm.tree.MethodNode;
  * IForgeItem: both default getCraftingRemainder(ItemStack), and every craft, brew and fuel threw. On the real classes.
  */
 class CraftingRemainderConflictTest {
-	private static final Path STAGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"));
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final List<Path> JARS = List.of(STAGED.resolve("merged-base/patched-mc-merged-26.2.jar"),
 			STAGED.resolve("merged-base/forge-runtime-interop.jar"), STAGED.resolve("neoforge-runtime/neoforge-runtime.jar"));
 	private static final Path FABRIC_API = TestFixtures.fabricApi();
@@ -95,7 +95,8 @@ class CraftingRemainderConflictTest {
 	}
 
 	private static byte[] fabricItem() throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(FABRIC_API) && Files.isRegularFile(JARS.getFirst()), "actual game and Fabric API required");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(FABRIC_API), "actual Fabric API required: " + FABRIC_API);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(JARS.getFirst()), "actual game required: " + JARS.getFirst());
 		try (ZipFile zip = new ZipFile(FABRIC_API.toFile())) {
 			ZipEntry nested = zip.stream().filter(e -> e.getName().startsWith("META-INF/jars/fabric-item-api-v1-")).findFirst().orElseThrow();
 			try (ZipInputStream in = new ZipInputStream(zip.getInputStream(nested))) {

@@ -59,6 +59,7 @@ import net.forbric.api.ForgeLoadingList;
  * <p>{@link #theUntransformedHolderIsPoisonedForeverByOneEarlyReader()} runs that original first, so the rest of
  * this file cannot pass vacuously: it proves the wall is real before proving the rewrite removes it.
  */
+@ExecutesInjector(ForgeLoadingListHolderInjector.class)
 class ForgeLoadingListHolderInjectorTest {
 	private static final String PKG = "net/minecraftforge/fml/loading/";
 	private static final String IMPL = PKG + "LoadingModListImpl";

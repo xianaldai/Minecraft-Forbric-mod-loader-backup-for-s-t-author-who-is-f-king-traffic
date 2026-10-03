@@ -1,7 +1,5 @@
 package net.forbric.kernel.runtime;
 
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
-
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
@@ -11,6 +9,7 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * The compiled game-side classes over the staged game and Minecraft 26.2's own libraries, for tests that initialise
@@ -27,16 +26,17 @@ public final class StagedGameClassLoader {
 	}
 
 	public static List<URL> urls() throws Exception {
-		Path run = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+		Path run = TestFixtures.stagedRoot();
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime").normalize();
 		Path merged = run.resolve("merged-base/patched-mc-merged-26.2.jar"), neo = run.resolve("neoforge-runtime/neoforge-runtime.jar");
 		Path forge = run.resolve("forge-runtime/forge-runtime.jar");
-		assumeTrue(Files.isRegularFile(merged) && Files.isRegularFile(neo) && Files.isRegularFile(forge) && Files.isDirectory(compiled),
-				"the staged game or the compiled game side is absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(merged) && Files.isRegularFile(neo) && Files.isRegularFile(forge),
+				"the staged game is absent");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "the compiled game side is absent");
 		List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), merged.toUri().toURL(), neo.toUri().toURL(), forge.toUri().toURL()));
 		Path libraries = TestFixtures.minecraftDir().resolve("libraries");
 		Path version = libraries.resolveSibling("versions/26.2/26.2.json");
-		assumeTrue(Files.isRegularFile(version), "no local Minecraft 26.2 version JSON");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(version), "no local Minecraft 26.2 version JSON");
 		Matcher artifact = ARTIFACT_PATH.matcher(Files.readString(version));
 		while (artifact.find()) {
 			Path jar = libraries.resolve(artifact.group(1));

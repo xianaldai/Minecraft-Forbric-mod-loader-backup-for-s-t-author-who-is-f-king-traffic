@@ -18,7 +18,6 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -40,6 +39,9 @@ import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * The full inventory of static fields the merge left with no assignment, against the REAL staged base.
  *
@@ -53,9 +55,7 @@ import org.objectweb.asm.tree.MethodNode;
  * dropping them.
  */
 class MergedBaseUnwrittenStaticsTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	/**
 	 * What the merge leaves unassigned today, each with what reading it costs.
@@ -78,7 +78,7 @@ class MergedBaseUnwrittenStaticsTest {
 
 	@Test
 	void theCensusHasNotChanged() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 
 		Set<String> found = unwrittenObjectStatics();
 
@@ -90,14 +90,14 @@ class MergedBaseUnwrittenStaticsTest {
 
 	@Test
 	void theLoggerIsRepaired() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		String owner = "net/minecraft/resources/ResourceManagerRegistryLoadTask";
 		byte[] in = readClass(owner + ".class");
-		assumeTrue(in != null, "that class is absent from this base");
+		assertTrue(in != null, "content drift: that class is absent from this base");
 
 		ClassNode before = parse(in);
-		assumeTrue(before.fields.stream().anyMatch(f -> "LOGGER".equals(f.name)),
-				"no LOGGER field here any more — nothing to repair");
+		assertTrue(before.fields.stream().anyMatch(f -> "LOGGER".equals(f.name)),
+				"content drift: no LOGGER field here any more — nothing to repair");
 		assertTrue(!writesStatic(before, "LOGGER"), "the premise: nothing assigns it in the base");
 
 		ClassNode after = parse(new ForbricMergedBaseCompatTransformer().transform(
@@ -113,12 +113,12 @@ class MergedBaseUnwrittenStaticsTest {
 
 	@Test
 	void aClassWithAWrittenLoggerIsLeftAlone() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		// Any class whose logger IS assigned must come back byte-identical, or the repair is rewriting the base
 		// wholesale instead of filling one gap.
 		byte[] in = readClass("net/minecraft/server/MinecraftServer.class");
-		assumeTrue(in != null, "MinecraftServer absent from this base");
-		assumeTrue(writesStatic(parse(in), "LOGGER"), "MinecraftServer's logger is not assigned here either");
+		assertTrue(in != null, "content drift: MinecraftServer absent from this base");
+		assertTrue(writesStatic(parse(in), "LOGGER"), "content drift: MinecraftServer's logger is not assigned here either");
 
 		assertTrue(new ForbricMergedBaseCompatTransformer()
 				.transform("net.minecraft.server.MinecraftServer", in, null) == in,

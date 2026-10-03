@@ -2,7 +2,6 @@
 package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.InvocationTargetException;
@@ -19,6 +18,7 @@ import java.util.Map;
 
 import javax.tools.ToolProvider;
 
+import net.forbric.kernel.TestFixtures;
 import net.forbric.kernel.transform.CreativePagerBridgeInjector;
 import net.forbric.kernel.transform.CreativePagerFixtures;
 import org.junit.jupiter.api.AfterEach;
@@ -135,7 +135,8 @@ class KernelCreativePagerTest {
 	private Fixture fixture(boolean bridged, boolean hooked) throws Exception {
 		Path runtime = Path.of(System.getProperty("forbric.test.runtimeClasses", "build/classes/java/runtime"));
 		Path pager = runtime.resolve("net/forbric/kernel/runtime/KernelCreativePager.class");
-		assumeTrue(Files.isRegularFile(pager), "compile the staged runtime source set before this test: " + pager);
+		TestFixtures.require(TestFixtures.Fixture.GAME_SIDE, Files.isRegularFile(pager),
+				"compile the staged runtime source set before this test: " + pager);
 		Map<String, byte[]> defined = new HashMap<>();
 		defined.put("net.forbric.kernel.runtime.KernelCreativePager", Files.readAllBytes(pager));
 		defined.put("net.forbric.kernel.runtime.KernelCreativePagerScreen",

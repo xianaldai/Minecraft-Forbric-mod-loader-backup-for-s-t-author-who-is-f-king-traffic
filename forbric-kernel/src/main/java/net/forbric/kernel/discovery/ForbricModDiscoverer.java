@@ -90,26 +90,39 @@ public final class ForbricModDiscoverer {
 	 * single jar's "dropping declared mixin config" line appeared four times in one boot, which reads like four
 	 * problems.
 	 *
-	 * <p>Safe to remember because a jar's contents do not change while the game runs. Failures are not
-	 * remembered: an unreadable jar throws again on the next ask, which is more honest than answering from a
-	 * cached error.
+	 * <p>Safe to remember because a jar's contents do not change while the game runs. An unreadable jar is not
+	 * remembered: it throws again on the next ask, which is more honest than answering from a cached error. A
+	 * manifest that cannot be read is remembered with the rest of the jar, and handed to {@link MetadataFailures}
+	 * again on every ask, so a pass that runs after {@link MetadataFailures#reset()} still sees it.
 	 */
-	private final java.util.Map<Path, List<DiscoveredMod>> discovered = new java.util.concurrent.ConcurrentHashMap<>();
+	private final java.util.Map<Path, Parsed> discovered = new java.util.concurrent.ConcurrentHashMap<>();
 
-	/** Discovers the mod(s) declared by a single jar. May return a Fabric mod, Forge mod(s), or both. */
-	public List<DiscoveredMod> discoverJar(Path jarPath) throws IOException {
-		List<DiscoveredMod> remembered = discovered.get(jarPath);
-		if (remembered != null) return remembered;
-
-		// Stored unmodifiable: seven callers share this list now, and one of them quietly adding to it would
-		// change what the other six see. Any such caller fails here and immediately rather than later and
-		// somewhere else.
-		List<DiscoveredMod> parsed = List.copyOf(parseJar(jarPath));
-		discovered.put(jarPath, parsed);
-		return parsed;
+	private record Parsed(List<DiscoveredMod> mods, List<MetadataFailures.Failure> failures) {
 	}
 
-	private List<DiscoveredMod> parseJar(Path jarPath) throws IOException {
+	/**
+	 * Discovers the mod(s) declared by a single jar. May return a Fabric mod, Forge mod(s), or both.
+	 *
+	 * <p>Each manifest is read on its own. One that cannot be read — a malformed version range, TOML or JSON —
+	 * is recorded in {@link MetadataFailures} and leaves the jar's other manifests, and every other jar, alone.
+	 * Only a jar that cannot be opened at all throws.
+	 */
+	public List<DiscoveredMod> discoverJar(Path jarPath) throws IOException {
+		Path key = MetadataFailures.key(jarPath);
+		Parsed remembered = discovered.get(key);
+		if (remembered == null) {
+			// Stored unmodifiable: seven callers share this list now, and one of them quietly adding to it would
+			// change what the other six see. Any such caller fails here and immediately rather than later and
+			// somewhere else.
+			List<MetadataFailures.Failure> failures = new ArrayList<>();
+			remembered = new Parsed(List.copyOf(parseJar(jarPath, failures)), List.copyOf(failures));
+			discovered.put(key, remembered);
+		}
+		remembered.failures().forEach(MetadataFailures::record);
+		return remembered.mods();
+	}
+
+	private List<DiscoveredMod> parseJar(Path jarPath, List<MetadataFailures.Failure> failures) throws IOException {
 		List<DiscoveredMod> result = new ArrayList<>();
 		String source = jarPath.toString();
 
@@ -122,29 +135,55 @@ public final class ForbricModDiscoverer {
 			if (fabricEntry != null) {
 				try (InputStream in = jar.getInputStream(fabricEntry)) {
 					result.add(FabricModJsonReader.read(in, source));
+				} catch (IOException | RuntimeException unreadable) {
+					failures.add(new MetadataFailures.Failure(jarPath, Ecosystem.FABRIC, FABRIC_MANIFEST, List.of(),
+							describe(unreadable)));
 				}
 			}
 
 			// Forge / NeoForge side — a jar may carry either or both (multiloader builds ship one toml per
 			// family). Each present manifest is reported truthfully under its own ecosystem; which family
 			// actually loads is a boot-time policy (the active game base), not a discovery concern.
-			discoverForgeFamily(jar, NEOFORGE_MANIFEST, Ecosystem.NEOFORGE, jarVersion, source, result);
-			discoverForgeFamily(jar, FORGE_MANIFEST, Ecosystem.FORGE, jarVersion, source, result);
+			discoverForgeFamily(jarPath, jar, NEOFORGE_MANIFEST, Ecosystem.NEOFORGE, jarVersion, source, result, failures);
+			discoverForgeFamily(jarPath, jar, FORGE_MANIFEST, Ecosystem.FORGE, jarVersion, source, result, failures);
 		}
 
 		return result;
 	}
 
-	/** Reads one Forge-family manifest ({@code mods.toml} / {@code neoforge.mods.toml}) into {@code sink}, if present. */
-	private static void discoverForgeFamily(JarFile jar, String manifestPath, Ecosystem ecosystem,
-			String jarVersion, String source, List<DiscoveredMod> sink) throws IOException {
+	/**
+	 * Reads one Forge-family manifest ({@code mods.toml} / {@code neoforge.mods.toml}) into {@code sink}, if
+	 * present. Nothing is added when it fails: every mod a manifest declares shares its dependency list and mixin
+	 * configs, so half a manifest is not a safer answer than none.
+	 */
+	private static void discoverForgeFamily(Path jarPath, JarFile jar, String manifestPath, Ecosystem ecosystem,
+			String jarVersion, String source, List<DiscoveredMod> sink, List<MetadataFailures.Failure> failures) {
 		ZipEntry entry = jar.getEntry(manifestPath);
 		if (entry == null) return;
 
 		ForgeModsToml toml;
 		try (InputStream in = jar.getInputStream(entry)) {
 			toml = ModsTomlParser.parse(in);
+		} catch (IOException | RuntimeException unreadable) {
+			failures.add(new MetadataFailures.Failure(jarPath, ecosystem, manifestPath, List.of(), describe(unreadable)));
+			return;
 		}
+		try {
+			sink.addAll(mapForgeFamily(jar, toml, ecosystem, jarVersion, source));
+		} catch (IOException | RuntimeException unreadable) {
+			failures.add(new MetadataFailures.Failure(jarPath, ecosystem, manifestPath,
+					toml.getMods().stream().map(net.forbric.kernel.metadata.forge.ForgeModEntry::getModId).toList(),
+					describe(unreadable)));
+		}
+	}
+
+	private static String describe(Throwable error) {
+		String message = error.getMessage();
+		return message == null || message.isBlank() ? error.getClass().getSimpleName() : message.strip();
+	}
+
+	private static List<DiscoveredMod> mapForgeFamily(JarFile jar, ForgeModsToml toml, Ecosystem ecosystem,
+			String jarVersion, String source) throws IOException {
 		EcosystemVersions.audit(toml, source);
 		net.forbric.kernel.metadata.forge.LanguageProviders.audit(toml, source);
 
@@ -171,8 +210,8 @@ public final class ForbricModDiscoverer {
 					+ "is a MinecraftForge convention; NeoForge declares mixins in [[mixins]]", attr, ecosystem, source);
 		}
 
-		sink.addAll(ForgeMetadataMapper.toDiscoveredMods(toml, jarVersion, source, accessTransformers,
-				manifestMixins, config -> jar.getEntry(config) != null, ecosystem));
+		return ForgeMetadataMapper.toDiscoveredMods(toml, jarVersion, source, accessTransformers,
+				manifestMixins, config -> jar.getEntry(config) != null, ecosystem);
 	}
 
 	private static String manifestVersion(Manifest manifest) {

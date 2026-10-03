@@ -2,7 +2,6 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -26,18 +25,18 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Every capability call the whole merged base makes on a vanilla owner, resolved JVMS-style up the (transformed)
  * class chain and its superinterfaces. Untransformed, the unresolved set is pinned exactly — a rebuilt base that
  * changes the answer fails here, not in a player's log; after the shim and the compat transformer it is empty.
  */
 class MergedBaseCapabilityLinkTest {
-	private static final Path MERGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
-	private static final Path FORGE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"forge-runtime", "forge-runtime.jar").normalize();
-	private static final Path NEO = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"neoforge-runtime", "neoforge-runtime.jar").normalize();
+	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path FORGE = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
+	private static final Path NEO = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final Set<String> NAMES = Set.of("getCapability", "invalidateCaps", "reviveCaps", "gatherCapabilities",
 			"getCapabilities", "serializeCaps", "deserializeCaps", "initCapabilities", "initInternal", "serializeInternal",
 			"deserializeInternal", "writeCapsToNBT", "readCapsFromNBT");
@@ -91,7 +90,7 @@ class MergedBaseCapabilityLinkTest {
 	}
 
 	private static Result scan(boolean transformed) throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED) && Files.isRegularFile(FORGE) && Files.isRegularFile(NEO), "staged artifacts absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED) && Files.isRegularFile(FORGE) && Files.isRegularFile(NEO), "staged artifacts absent");
 		Map<String, ClassNode> cache = new HashMap<>();
 		Set<String> unresolved = new LinkedHashSet<>();
 		int scanned = 0;

@@ -89,6 +89,13 @@ def stagedRebornEnergy = file(project.findProperty('forbric.rebornEnergy')
 // Integration runs pass -Pforbric.requireTransfer=true: there a skipped transfer suite is a failure, not a pass.
 def strictIntegration = gradle.startParameter.taskNames.any { it.tokenize(':').last() == 'integrationTest' }
 def requireTransfer = project.findProperty('forbric.requireTransfer') == 'true' || strictIntegration
+// CI passes -Pforbric.skipBaseline=<profile>: then the tests skipped in this invocation must equal the committed
+// src/test/skip-baseline/<profile>.tsv (see skipRatchet). A skip passes Gradle, so without this a test that started
+// skipping looks exactly like one that passed.
+def skipBaseline = project.findProperty('forbric.skipBaseline')
+if (skipBaseline != null && !(skipBaseline ==~ /[a-z0-9-]+/)) {
+	throw new GradleException("forbric.skipBaseline must be [a-z0-9-]+, got '${skipBaseline}'")
+}
 
 // Minecraft's OWN libraries, for the game-side set only. A game-side class cannot build a piece of text without
 // brigadier: net.minecraft.network.chat.Component extends com.mojang.brigadier.Message, so javac needs it to read
@@ -234,7 +241,8 @@ dependencies {
 	runtimeCompileOnly('org.joml:joml:1.10.8') { transitive = false }
 
 	testImplementation "org.junit.jupiter:junit-jupiter:${project.junit_version}"
-	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+	// Compiled against too: FixturePolicyExtensionTest launches a nested run to prove the suite loads its extension.
+	testImplementation 'org.junit.platform:junit-platform-launcher'
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -291,6 +299,11 @@ test {
 	doFirst { systemProperty 'forbric.log4jApiForTests', configurations.compileClasspath.files.find { it.name.startsWith('log4j-api-') }?.absolutePath ?: '' }
 	// Game-side tests that name MixinExtras (KernelWrapOperationsTest) load it beside build/classes/java/runtime.
 	doFirst { systemProperty 'forbric.mixinExtrasForTests', configurations.nestedMods.files.find { it.name.startsWith('mixinextras-') }?.absolutePath ?: '' }
+	// The real-Mixin weave harness (net.forbric.kernel.mixin.weave) runs each bootstrap in a child JVM on this
+	// classpath, because Mixin's bootstrap is one-shot per JVM. Its fixtures include the mixin-outcome canary's
+	// sources, read in place, so editing that canary must re-run the tests.
+	doFirst { systemProperty 'forbric.weaveHarnessClasspath', sourceSets.test.runtimeClasspath.asPath }
+	inputs.files(fileTree('canary/mixin-outcome')).withPropertyName('weaveCanaries')
 	// Component/decision tests do not own macOS's first UI thread. Actual windows are exercised
 	// by the separately forked dialog/client gates, not by the Gradle worker's AppKit instance.
 	systemProperty 'java.awt.headless', 'true'
@@ -303,6 +316,10 @@ test {
 	// ledger from the last time it cost a day; this is the fix rather than the note.
 	dependsOn tasks.named('compileRuntimeJava')
 	inputs.files(sourceSets.runtime.output).withPropertyName('gameSideClasses').optional()
+	// NoRawAssumptionsTest reads the test sources and its allowlist as TEXT. An allowlist edit changes no class, so
+	// without these the task stayed UP-TO-DATE and kept the verdict on the previous list.
+	inputs.file('src/test/raw-assumption-allowlist.txt').withPropertyName('rawAssumptionAllowlist')
+	inputs.files(fileTree('src/test/java'), fileTree('src/transferTest/java')).withPropertyName('testSourceText')
 	// ProcessBuilder tests execute these files; their edits must invalidate the test task too.
 	inputs.files(fileTree('run/compat') { include '**/*.py', '**/*.sh', '**/*.md' })
 			.withPropertyName('compatibilityTools').optional()
@@ -485,7 +502,8 @@ tasks.register('linkToolTest', Exec) {
 	commandLine(osName.contains('windows') ? ['cmd', '/d', '/c', 'gradlew.bat', 'linkGateTest'] : ['./gradlew', 'linkGateTest'])
 }
 tasks.named('check') { dependsOn 'linkToolTest' }
-def integrationExecutedSuites = Collections.synchronizedSet(new HashSet<String>())
+// The suites whose tests ran in THIS invocation. Results left by an earlier invocation are not evidence.
+def executedSuites = Collections.synchronizedSet(new HashSet<String>())
 // Fixture file names are Unicode ("[钠] sodium-fabric-….jar"). A JVM started under the C/POSIX locale cannot encode
 // them and throws InvalidPathException; minimal Linux images and containers start there. tools/dev.py never saw it
 // because Python coerces that locale for its children, but a plain ./gradlew does not.
@@ -495,12 +513,18 @@ tasks.withType(Test).configureEach {
 	def suiteName = name
 	if (utf8TestLocale) environment 'LC_ALL', 'C.UTF-8'
 	inputs.property('strictIntegration', strictIntegration)
-	// A previous permissive result must never bypass the no-skips verdict of an integration invocation.
-	outputs.upToDateWhen { !strictIntegration }
+	inputs.property('skipBaseline', skipBaseline ?: '')
+	// The fixtures whose absence fails instead of skipping (TestFixtures.Fixture ids, or 'all'), read by
+	// TestFixtures and FixturePolicyExtension. An integration run requires all of them, at the test that skipped
+	// rather than only in the totals afterwards.
+	systemProperty 'forbric.requireFixtures', project.findProperty('forbric.requireFixtures') ?: (strictIntegration ? 'all' : '')
+	// A previous permissive result must never bypass the no-skips verdict of an integration invocation, and the
+	// skip ratchet must judge tests that ran now.
+	outputs.upToDateWhen { !strictIntegration && skipBaseline == null }
 	def totals = [tests: 0, skipped: 0]
 	afterSuite { descriptor, result ->
 		if (descriptor.parent == null) {
-			if (strictIntegration) integrationExecutedSuites.add(suiteName)
+			executedSuites.add(suiteName)
 			totals.tests = result.testCount
 			totals.skipped = result.skippedTestCount
 			logger.lifecycle("${name}: ${result.testCount} tests, ${result.skippedTestCount} skipped, ${result.failedTestCount} failed")
@@ -525,7 +549,7 @@ tasks.register('integrationTest') {
 	doLast {
 		// Test callbacks are not invoked for NO-SOURCE tasks. Require concrete, nonempty results from both suites.
 		['test', 'transferTest'].each { suite ->
-			if (!integrationExecutedSuites.contains(suite)) {
+			if (!executedSuites.contains(suite)) {
 				throw new GradleException("integrationTest: ${suite} did not execute in this invocation; stale reports are not evidence")
 			}
 			def reports = fileTree("build/test-results/${suite}") { include 'TEST-*.xml' }.files
@@ -542,6 +566,24 @@ tasks.register('integrationTest') {
 		}
 	}
 }
+tasks.register('skipRatchet', Exec) {
+	group = 'verification'
+	description = 'Fail when the tests skipped in this invocation differ from src/test/skip-baseline/<forbric.skipBaseline>.tsv.'
+	onlyIf { skipBaseline != null }
+	mustRunAfter 'test', 'transferTest'
+	workingDir projectDir.parentFile
+	doFirst {
+		def command = [devPython, file('../tools/junit_report.py').absolutePath, 'ratchet', '--profile', skipBaseline,
+				'--results', file('build/test-results').absolutePath, '--suites', 'test,transferTest',
+				'--executed', executedSuites.join(','),
+				'--baseline', file("src/test/skip-baseline/${skipBaseline}.tsv").absolutePath,
+				'--actual', file("build/skip-baseline/skips-actual-${skipBaseline}.tsv").absolutePath,
+				'--root', projectDir.parentFile.absolutePath]
+		if (project.hasProperty('forbric.writeSkipBaseline')) command += '--write'
+		commandLine command
+	}
+}
+if (skipBaseline != null) tasks.named('check') { dependsOn 'skipRatchet' }
 tasks.register('writeDevClasspath') {
 	description = 'Write the current build paths for the portable launcher.'
 	doLast {

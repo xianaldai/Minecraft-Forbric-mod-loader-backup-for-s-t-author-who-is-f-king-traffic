@@ -1,7 +1,6 @@
 package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -9,6 +8,8 @@ import java.util.List;
 import java.util.function.Function;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
@@ -88,7 +89,7 @@ class C2meBlockUpdateRetargetTest {
 
 	private static ClassNode mixin() throws Exception {
 		Path jar = Path.of("build/compat-inputs/startup-20260930/c2me-notickvd.jar");
-		assumeTrue(Files.isRegularFile(jar), "C2ME 0.4.1-beta.1.0 notickvd fixture required");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(jar), "C2ME 0.4.1-beta.1.0 notickvd fixture required");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			return MixinFit.parse(zip.getInputStream(zip.getEntry(C2meBlockUpdateRetarget.MIXIN + ".class")).readAllBytes());
 		}

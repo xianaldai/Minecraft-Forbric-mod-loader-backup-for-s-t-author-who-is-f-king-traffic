@@ -1,5 +1,7 @@
 package net.forbric.kernel.compat;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.objectweb.asm.ClassReader;
@@ -26,7 +28,6 @@ import java.util.zip.GZIPOutputStream;
 import java.util.zip.ZipFile;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Prepare only an explicit disposable save: byte preservation protects every unrelated world setting. */
 class PrepareWorldTest {
@@ -166,9 +167,8 @@ class PrepareWorldTest {
     }
 
     @Test void theCarrierReadsThisFlagAndUsesItToSuppressOnlyTheExperimentalBackupPrompt() throws Exception {
-        Path loader = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"));
-        Path merged = loader.resolve("run/merged-base/patched-mc-merged-26.2.jar");
-        assumeTrue(Files.isRegularFile(merged), "requires current staged merged base");
+        Path merged = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+        TestFixtures.require(Fixture.STAGED, Files.isRegularFile(merged), "requires current staged merged base");
         try (ZipFile zip = new ZipFile(merged.toFile())) {
             ClassNode data = read(zip, "net/minecraft/world/level/storage/PrimaryLevelData");
             MethodNode parse = data.methods.stream().filter(m -> m.name.equals("parse")).findFirst().orElseThrow();

@@ -2,7 +2,6 @@ package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -12,6 +11,8 @@ import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.AbstractInsnNode;
@@ -31,16 +32,15 @@ import org.objectweb.asm.tree.MethodInsnNode;
 class KernelClientResourcesShapeTest {
 	private static final Path RUNTIME =
 			Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
-	private static final Path MERGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"),
-			"run/merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String RELOADABLE = "net/minecraft/server/packs/resources/ReloadableResourceManager";
 	private static final String MULTI = "net/minecraft/server/packs/resources/MultiPackResourceManager";
 
 	@Test
 	void everyVanillaNameThePreloadSpellsIsOneTheMergedBaseDeclares() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED), "merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "merged base absent");
 		Path compiled = RUNTIME.resolve("net/forbric/kernel/runtime/KernelClientResources.class");
-		assumeTrue(Files.isRegularFile(compiled), "game-side class not compiled: " + compiled);
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled), "game-side class not compiled: " + compiled);
 
 		ClassNode ours = parse(Files.readAllBytes(compiled));
 		List<String> strings = new ArrayList<>();

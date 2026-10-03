@@ -10,7 +10,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -41,6 +40,8 @@ import org.objectweb.asm.util.TraceClassVisitor;
 import net.fabricmc.api.EnvType;
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ForeignType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 class ForgeCreativeTabsInjectorTest {
 	private static final String TARGET = "net.minecraft.world.item.CreativeModeTab";
@@ -212,10 +213,9 @@ class ForgeCreativeTabsInjectorTest {
 	}
 	private static TransformContext context() { return new TransformContext(EnvType.CLIENT, false, "mojmap"); }
 	private static byte[] staged(String jar, String entry) throws Exception {
-		String old = System.getenv("FORBRIC_OLD");
-		Path run = old == null || old.isBlank() ? Path.of("..", "forbric-loader", "run") : Path.of(old, "run");
+		Path run = TestFixtures.stagedRoot();
 		Path path = run.resolve(jar);
-		assumeTrue(Files.isRegularFile(path), "staged artifact absent: " + path);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(path), "staged artifact absent: " + path);
 		try (ZipFile zip = new ZipFile(path.toFile())) {
 			assertNotNull(zip.getEntry(entry + ".class"), entry + " missing from " + path);
 			return zip.getInputStream(zip.getEntry(entry + ".class")).readAllBytes();

@@ -1,11 +1,12 @@
 package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.*;
 import java.util.List;
 import java.util.zip.ZipFile;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.api.parallel.Resources;
@@ -18,7 +19,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
 class ContinuitySpriteMixinAdapterTest {
 	private ClassNode mixin() throws Exception {
 		Path jar = Path.of("build/compat-inputs/player-loading/mods/continuity-3.0.1+26.2.jar");
-		assumeTrue(Files.isRegularFile(jar), "actual Continuity fixture required");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(jar), "actual Continuity fixture required");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			return MixinFit.parse(zip.getInputStream(zip.getEntry("me/pepperbell/continuity/client/mixin/SpriteSourceListMixin.class")).readAllBytes());
 		}

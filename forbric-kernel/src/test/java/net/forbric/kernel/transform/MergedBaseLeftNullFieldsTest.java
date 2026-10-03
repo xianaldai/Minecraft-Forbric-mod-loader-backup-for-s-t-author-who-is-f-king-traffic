@@ -3,7 +3,6 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -26,6 +25,9 @@ import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * The seven "exclusive-added field … left null" entries of merge-conflicts.txt, and why six of them are left
  * alone: nothing in the base reads them. That is pinned here as reader COUNTS over every class in the merged jar,
@@ -33,9 +35,8 @@ import org.objectweb.asm.tree.MethodNode;
  * player's world — re-read the field, do not re-bless the count.
  */
 class MergedBaseLeftNullFieldsTest {
-	private static final Path MERGED_BASE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
-	private static final Path FORGE_RUNTIME = forgeRuntime();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path FORGE_RUNTIME = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
 
 	/** owner#field → expected GETFIELD readers anywhere in the merged base. */
 	private static final Map<String, Integer> PINNED = Map.ofEntries(
@@ -49,7 +50,7 @@ class MergedBaseLeftNullFieldsTest {
 
 	@Test
 	void theReaderCountsOverTheWholeBaseAreExactlyThePinnedOnes() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		Map<String, Integer> counts = new LinkedHashMap<>();
 		for (String key : PINNED.keySet()) counts.put(key, 0);
 		try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {
@@ -101,7 +102,7 @@ class MergedBaseLeftNullFieldsTest {
 	/** forgeData is left alone for a reason that lives in the carrier, so the reason is pinned in bytecode too. */
 	@Test
 	void forgeDataIsWrittenByForgesOwnPingHookAndNullGuardedByItsOnlyReader() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE_RUNTIME), "staged Forge carrier absent: " + FORGE_RUNTIME);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE_RUNTIME), "staged Forge carrier absent: " + FORGE_RUNTIME);
 		ClassNode hooks = new ClassNode();
 		new ClassReader(bytesOf(FORGE_RUNTIME, "net/minecraftforge/client/ForgeHooksClient")).accept(hooks, 0);
 		int writes = 0;
@@ -131,7 +132,7 @@ class MergedBaseLeftNullFieldsTest {
 	}
 
 	private static byte[] bytesOf(Path jar, String internal) throws Exception {
-		assumeTrue(Files.isRegularFile(jar), "staged artifact absent: " + jar);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged artifact absent: " + jar);
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ZipEntry entry = zip.getEntry(internal + ".class");
 			assertNotNull(entry, internal + " not in " + jar.getFileName());
@@ -139,11 +140,5 @@ class MergedBaseLeftNullFieldsTest {
 				return in.readAllBytes();
 			}
 		}
-	}
-
-	private static Path forgeRuntime() {
-		String old = System.getenv("FORBRIC_OLD");
-		Path root = old == null || old.isBlank() ? Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader")) : Path.of(old);
-		return root.resolve("run/forge-runtime/forge-runtime.jar").normalize();
 	}
 }

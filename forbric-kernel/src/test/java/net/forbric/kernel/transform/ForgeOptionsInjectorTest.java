@@ -3,13 +3,13 @@ package net.forbric.kernel.transform;
 import net.forbric.kernel.TestFixtures;
 
 import static org.junit.jupiter.api.Assertions.*;
-import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.zip.ZipFile;
-import javax.tools.ToolProvider;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -17,6 +17,7 @@ import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.*;
 
+@ExecutesInjector(ForgeOptionsInjector.class)
 class ForgeOptionsInjectorTest {
 	@TempDir Path temporary;
 	@AfterEach void clearSwitch() { System.clearProperty("forbric.forgeClientInit"); }
@@ -61,17 +62,23 @@ class ForgeOptionsInjectorTest {
 		}
 	}
 
-	@Test void anEarlySaveRetainsUnknownF6WithoutOverwritingAnAlreadyRegisteredKey() throws Exception {
-		TestFixtures.requireFiles("compiled game side",Path.of("build/classes/java/runtime/net/forbric/kernel/runtime/KernelForgeOptions.class"));
-		Path source=temporary.resolve("net/minecraft/client");Files.createDirectories(source);
-		Files.writeString(source.resolve("KeyMapping.java"),"""
+	/**
+	 * Run, on a stand-in Options with the merged shape, against the kernel's real KernelForgeOptions compiled here from
+	 * src/runtime/java: its only game type is the KeyMapping the stand-in already provides, so this needs no staged game.
+	 */
+	@Test void anEarlySaveRetainsUnknownF6WithoutOverwritingAnAlreadyRegisteredKey() throws Throwable {
+		Path hook=Path.of("src/runtime/java/net/forbric/kernel/runtime/KernelForgeOptions.java");
+		assertTrue(Files.isRegularFile(hook),"the game-side hook's source is part of the checkout: "+hook.toAbsolutePath());
+		Map<String,byte[]> classes=new HashMap<>(InjectorExecution.compile(temporary,Map.of(
+			"net/forbric/kernel/runtime/KernelForgeOptions.java",Files.readString(hook),
+			"net.minecraft.client.KeyMapping","""
 			package net.minecraft.client;
 			public class KeyMapping {
 			  private final String name; public KeyMapping(String name) {this.name=name;}
 			  public String getName(){return name;}
 			}
-			""");
-		Files.writeString(source.resolve("Options.java"),"""
+			""",
+			"net.minecraft.client.Options","""
 			package net.minecraft.client;
 			import java.io.*;import java.util.*;
 			public class Options {
@@ -91,26 +98,23 @@ class ForgeOptionsInjectorTest {
 			  private void processOptions(FieldAccess access){access.write("key_key.known:key.keyboard.b");}
 			  public void save(){PrintWriter writer=new PrintWriter(buffer);processOptions(writer::println);writer.close();}
 			}
-			""");
-		assertEquals(0,ToolProvider.getSystemJavaCompiler().run(null,null,null,"--release","21","-d",temporary.toString(),
-				source.resolve("Options.java").toString(),source.resolve("KeyMapping.java").toString()));
-		Path classFile=source.resolve("Options.class");
-		byte[] original=Files.readAllBytes(classFile),changed=transformer.transform(ForgeOptionsInjector.TARGET,original,null);
-		assertNotSame(original,changed);Files.write(classFile,changed);
-		try(URLClassLoader loader=new URLClassLoader(new java.net.URL[]{temporary.toUri().toURL(),Path.of("build/classes/java/runtime").toAbsolutePath().toUri().toURL()},null)){
-			Class<?> options=Class.forName(ForgeOptionsInjector.TARGET,true,loader);Object instance=options.getConstructor().newInstance();
-			assertEquals(true,options.getField("captured").get(instance));
-			options.getMethod("save").invoke(instance);
-			String text=options.getField("buffer").get(instance).toString();
-			assertTrue(text.contains("key_key.future:key.keyboard.f6"),text);
-			assertEquals(1,text.lines().filter(s->s.startsWith("key_key.known:")).count(),text);
-			assertTrue(text.contains("key_key.known:key.keyboard.b"),text);
-			assertFalse(text.contains("key.keyboard.a"),text);
-			options.getMethod("load",boolean.class).invoke(instance,true);
-			options.getField("buffer").set(instance,new java.io.StringWriter());
-			options.getMethod("save").invoke(instance);
-			assertFalse(options.getField("buffer").get(instance).toString().contains("key_key.future"));
-		}
+			""")));
+		byte[] original=classes.get(ForgeOptionsInjector.OPTIONS),changed=transformer.transform(ForgeOptionsInjector.TARGET,original,null);
+		assertNotSame(original,changed);classes.put(ForgeOptionsInjector.OPTIONS,changed);
+		ClassLoader loader=InjectorExecution.load(classes);
+		assertEquals("",InjectorExecution.verify(changed,loader));
+		Class<?> options=Class.forName(ForgeOptionsInjector.TARGET,true,loader);Object instance=options.getConstructor().newInstance();
+		assertEquals(true,options.getField("captured").get(instance));
+		options.getMethod("save").invoke(instance);
+		String text=options.getField("buffer").get(instance).toString();
+		assertTrue(text.contains("key_key.future:key.keyboard.f6"),text);
+		assertEquals(1,text.lines().filter(s->s.startsWith("key_key.known:")).count(),text);
+		assertTrue(text.contains("key_key.known:key.keyboard.b"),text);
+		assertFalse(text.contains("key.keyboard.a"),text);
+		options.getMethod("load",boolean.class).invoke(instance,true);
+		options.getField("buffer").set(instance,new java.io.StringWriter());
+		options.getMethod("save").invoke(instance);
+		assertFalse(options.getField("buffer").get(instance).toString().contains("key_key.future"));
 	}
 
 	private static byte[] real() throws Exception {

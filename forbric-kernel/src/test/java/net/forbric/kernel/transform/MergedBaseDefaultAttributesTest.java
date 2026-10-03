@@ -19,16 +19,11 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -38,6 +33,9 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * {@code DefaultAttributes} is the single consumer both ecosystems patch, and the merge kept one of them.
  *
@@ -46,9 +44,7 @@ import org.objectweb.asm.tree.MethodNode;
  * the other would give a MinecraftForge mod's entity attributes that the game never looks for.
  */
 class MergedBaseDefaultAttributesTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String ENTRY = "net/minecraft/world/entity/ai/attributes/DefaultAttributes.class";
 	private static final String BINARY = "net.minecraft.world.entity.ai.attributes.DefaultAttributes";
 	private static final String KERNEL = "net/forbric/kernel/runtime/KernelForgeAttributes";
@@ -93,13 +89,6 @@ class MergedBaseDefaultAttributesTest {
 	}
 
 	private static byte[] original() throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
-		try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {
-			ZipEntry entry = zip.getEntry(ENTRY);
-			assumeTrue(entry != null, "DefaultAttributes absent from this base");
-			try (InputStream in = zip.getInputStream(entry)) {
-				return in.readAllBytes();
-			}
-		}
+		return TestFixtures.requireEntry(Fixture.STAGED, MERGED_BASE, ENTRY);
 	}
 }

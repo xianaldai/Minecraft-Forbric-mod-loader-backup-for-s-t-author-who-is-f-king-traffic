@@ -242,6 +242,45 @@ public final class DependencyDialog {
 		return answer;
 	}
 
+	/**
+	 * Why no window can be shown on this run, or null when one can: the same three guards {@link #offer} applies,
+	 * in the same order, for a caller that has its own question to ask.
+	 */
+	public static String noWindow(boolean isClient) {
+		if (!isClient) return "not the client";
+		if ("off".equalsIgnoreCase(System.getProperty(SWITCH, "on"))) return "-D" + SWITCH + "=off";
+		if (java.awt.GraphicsEnvironment.isHeadless() && !net.forbric.kernel.boot.MacAwtBootstrap.usesHeadlessFonts()) {
+			return "headless";
+		}
+		return null;
+	}
+
+	/**
+	 * The crash-suspects offer, in the same forked child: {@link DependencyDialogMain#WITHOUT},
+	 * {@link DependencyDialogMain#QUIT}, or {@link DependencyDialogMain#CONTINUE} for everything else — a closed
+	 * window, a timeout, a child that could not draw. Fail-open like the notice: no answer switches nothing off.
+	 * Ask {@link #noWindow} first; this only honours the dry run.
+	 */
+	public static int isolate(DependencyReport.Isolation isolation) throws Exception {
+		boolean dryRun = DRY_RUN.equalsIgnoreCase(System.getProperty(SWITCH, "on"));
+		int answer = askIsolation(isolation, dryRun ? List.of("-Djava.awt.headless=true") : List.of());
+		if (dryRun) {
+			ForbricLog.info("[Forbric/Deps] -D%s=dryRun — forked the crash-suspects offer with no display; it answered "
+					+ "%d without drawing anything", SWITCH, answer);
+		}
+		return answer;
+	}
+
+	static int askIsolation(DependencyReport.Isolation isolation, List<String> extraJvmArgs) throws Exception {
+		Path report = Files.createTempFile("forbric-isolation", ".tsv");
+		try {
+			DependencyReport.writeIsolation(report, isolation);
+			return fork(report, extraJvmArgs, Kind.ISOLATION);
+		} finally {
+			Files.deleteIfExists(report);
+		}
+	}
+
 	static int ask(List<DependencyReport.Row> rows) throws Exception {
 		return ask(rows, List.of(), List.of());
 	}
@@ -267,7 +306,7 @@ public final class DependencyDialog {
 		Path report = Files.createTempFile("forbric-deps", ".tsv");
 		try {
 			DependencyReport.write(report, rows, mixins, suspected);
-			return fork(report, extraJvmArgs, false);
+			return fork(report, extraJvmArgs, Kind.NOTICE);
 		} finally {
 			Files.deleteIfExists(report);
 		}
@@ -283,13 +322,29 @@ public final class DependencyDialog {
 		Path report = Files.createTempFile("forbric-compatibility", ".tsv");
 		try {
 			DependencyReport.writeConfirmation(report, confirmation);
-			return fork(report, extraJvmArgs, true);
+			return fork(report, extraJvmArgs, Kind.CONFIRMATION);
 		} finally {
 			Files.deleteIfExists(report);
 		}
 	}
 
-	private static int fork(Path report, List<String> extraJvmArgs, boolean confirmation) throws Exception {
+	/** Which of the child's three windows, and so which contract its exit code is read under. */
+	private enum Kind {
+		/** Fail-open: anything but quit launches. */
+		NOTICE(null),
+		/** Fail-closed: only an explicit continue approves. */
+		CONFIRMATION("--compatibility"),
+		/** Fail-open: anything but the two explicit buttons starts with every mod. */
+		ISOLATION("--isolation");
+
+		final String flag;
+
+		Kind(String flag) {
+			this.flag = flag;
+		}
+	}
+
+	private static int fork(Path report, List<String> extraJvmArgs, Kind kind) throws Exception {
 		try {
 			List<String> command = new ArrayList<>();
 			command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
@@ -305,7 +360,7 @@ public final class DependencyDialog {
 			command.add(ownJar());
 			command.add(DependencyDialogMain.class.getName());
 			command.add(report.toString());
-			if (confirmation) command.add("--compatibility");
+			if (kind.flag != null) command.add(kind.flag);
 
 			Process child = new ProcessBuilder(command)
 					.redirectOutput(ProcessBuilder.Redirect.INHERIT)
@@ -317,7 +372,7 @@ public final class DependencyDialog {
 			Thread reaper = new Thread(child::destroyForcibly, "forbric-deps-dialog-reaper");
 			Runtime.getRuntime().addShutdownHook(reaper);
 			try {
-				return await(child, confirmation);
+				return await(child, kind);
 			} finally {
 				if (child.isAlive()) child.destroyForcibly();
 				try {
@@ -335,15 +390,24 @@ public final class DependencyDialog {
 		}
 	}
 
-	private static int await(Process child, boolean confirmation) throws InterruptedException {
+	private static int await(Process child, Kind kind) throws InterruptedException {
 		if (!child.waitFor(TIMEOUT_MINUTES, java.util.concurrent.TimeUnit.MINUTES)) {
 			child.destroy();
 			ForbricLog.warn("[Forbric/Deps] the dialog did not answer within %d minutes — %s", TIMEOUT_MINUTES,
-					confirmation ? "continuation was not approved" : "launching anyway");
-			return confirmation ? DependencyDialogMain.QUIT : DependencyDialogMain.CONTINUE;
+					switch (kind) {
+						case CONFIRMATION -> "continuation was not approved";
+						case ISOLATION -> "starting with every mod";
+						case NOTICE -> "launching anyway";
+					});
+			return kind == Kind.CONFIRMATION ? DependencyDialogMain.QUIT : DependencyDialogMain.CONTINUE;
 		}
-		return confirmation && child.exitValue() != DependencyDialogMain.CONTINUE
-				? DependencyDialogMain.QUIT : child.exitValue();
+		int exit = child.exitValue();
+		return switch (kind) {
+			case CONFIRMATION -> exit != DependencyDialogMain.CONTINUE ? DependencyDialogMain.QUIT : exit;
+			case ISOLATION -> exit == DependencyDialogMain.WITHOUT || exit == DependencyDialogMain.QUIT
+					? exit : DependencyDialogMain.CONTINUE;
+			case NOTICE -> exit;
+		};
 	}
 
 	/**

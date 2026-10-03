@@ -24,7 +24,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
@@ -68,6 +67,8 @@ import org.objectweb.asm.tree.MethodNode;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.loader.impl.launch.FabricLauncher;
 import net.fabricmc.loader.impl.launch.FabricLauncherBase;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.classloading.ForbricClassLoader;
 import net.forbric.kernel.classloading.LoaderProbePolicy.Family;
 import net.forbric.kernel.fabric.KernelFabricLauncher;
@@ -630,7 +631,8 @@ class EnvironmentStripTransformerTest {
 		// Read from the compiled class, as TransformerRegistrationOrderTest does: KernelBoot.java has defeated grep.
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "main",
 				"net", "forbric", "kernel", "boot", "KernelBoot.class");
-		assumeTrue(Files.isRegularFile(compiled), "KernelBoot not compiled yet");
+		assertTrue(Files.isRegularFile(compiled),
+				"KernelBoot not found in the compiled src/main classes, which exist before any test runs");
 		ClassNode boot = node(Files.readAllBytes(compiled));
 
 		boolean phase = false;
@@ -774,7 +776,7 @@ class EnvironmentStripTransformerTest {
 	@Test
 	void creativeCoresLoaderLosesExactlyTheOneMethodNativeFabricRemoves() throws Exception {
 		Path jar = Path.of("build/compat-inputs/sweep90/mods/CreativeCore_FABRIC_v2.14.16_mc26.2.jar");
-		assumeTrue(Files.isRegularFile(jar), "sweep pack absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(jar), "sweep pack absent");
 		byte[] raw;
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			raw = zip.getInputStream(zip.getEntry("team/creative/creativecore/CreativeFabricLoader.class")).readAllBytes();

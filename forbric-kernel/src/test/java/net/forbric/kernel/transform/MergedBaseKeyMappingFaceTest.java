@@ -19,18 +19,15 @@ package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -52,8 +49,7 @@ import org.objectweb.asm.tree.MethodNode;
  * conflict context ignored, which is worse.
  */
 class MergedBaseKeyMappingFaceTest {
-	private static final Path MERGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String KEY_MAPPING = "net/minecraft/client/KeyMapping";
 	private static final String MF_CONTEXT = "Lnet/minecraftforge/client/settings/IKeyConflictContext;";
 	private static final String NEO_CONTEXT = "Lnet/neoforged/neoforge/client/settings/IKeyConflictContext;";
@@ -135,7 +131,7 @@ class MergedBaseKeyMappingFaceTest {
 			assertTrue(written.contains(NEO_MODIFIER),
 					m.desc + " never writes the NeoForge key modifier");
 		}
-		assumeTrue(checked > 0, "this base declares no MinecraftForge-typed KeyMapping constructor");
+		assertTrue(checked > 0, "content drift: this base declares no MinecraftForge-typed KeyMapping constructor");
 	}
 
 	/**
@@ -178,7 +174,7 @@ class MergedBaseKeyMappingFaceTest {
 							+ firstLookup + " — the lookup reads those fields back through the adapted "
 							+ "getKeyModifier(), so a write that comes after it is an NPE inside MinecraftForge");
 		}
-		assumeTrue(checked > 0, "this base has no MinecraftForge-typed constructor that registers a binding");
+		assertTrue(checked > 0, "content drift: this base has no MinecraftForge-typed constructor that registers a binding");
 	}
 
 	/**
@@ -207,7 +203,7 @@ class MergedBaseKeyMappingFaceTest {
 				}
 			}
 		}
-		assumeTrue(checked > 0, "this base has no MinecraftForge-typed constructor that registers a binding");
+		assertTrue(checked > 0, "content drift: this base has no MinecraftForge-typed constructor that registers a binding");
 	}
 
 	@Test
@@ -265,7 +261,7 @@ class MergedBaseKeyMappingFaceTest {
 
 			Class<?> forgeContexts = Class.forName("net.minecraftforge.client.settings.KeyConflictContext", true, cl);
 			Object inGame = enumOrField(forgeContexts, "IN_GAME");
-			assumeTrue(inGame != null, "the carrier's KeyConflictContext has no IN_GAME");
+			assertTrue(inGame != null, "content drift: the carrier's KeyConflictContext has no IN_GAME");
 
 			Object asNeo = toNeo.invoke(null, inGame);
 			assertTrue(asNeo != null && !asNeo.equals(inGame), "it must be adapted, not returned as-is");
@@ -283,12 +279,12 @@ class MergedBaseKeyMappingFaceTest {
 	 */
 	private static java.net.URLClassLoader gameSideLoader() throws IOException {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime").normalize();
-		Path run = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+		Path run = TestFixtures.stagedRoot();
 		Path forgeRt = run.resolve("forge-runtime/forge-runtime.jar");
 		Path neoRt = run.resolve("neoforge-runtime/neoforge-runtime.jar");
-		assumeTrue(Files.isDirectory(compiled) && Files.isRegularFile(forgeRt) && Files.isRegularFile(neoRt)
-						&& Files.isRegularFile(MERGED),
-				"the game-side set is not compiled, or the staged artifacts are absent");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "the game-side set is not compiled");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(forgeRt) && Files.isRegularFile(neoRt) && Files.isRegularFile(MERGED),
+				"the staged artifacts are absent");
 		List<java.net.URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), forgeRt.toUri().toURL(),
 				neoRt.toUri().toURL(), MERGED.toUri().toURL()));
 		// Touching the carrier's KeyModifier initialises it, and its display name reaches into the game — which
@@ -296,7 +292,7 @@ class MergedBaseKeyMappingFaceTest {
 		// itself puts on the classpath, so that is what goes here rather than chasing one NoClassDefFoundError
 		// at a time.
 		Path libraries = mcLibraries();
-		assumeTrue(libraries != null, "the Minecraft library tree is not where this machine keeps it — skipping");
+		TestFixtures.require(Fixture.MC_LIBRARIES, libraries != null, "the Minecraft library tree is not where this machine keeps it — skipping");
 		try (var jars = Files.walk(libraries)) {
 			for (Path jar : jars.filter(f -> f.toString().endsWith(".jar")).toList()) {
 				urls.add(jar.toUri().toURL());
@@ -345,21 +341,14 @@ class MergedBaseKeyMappingFaceTest {
 	}
 
 	private static byte[] original() throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED), "staged merged base absent — skipping the real-bytecode check");
-		try (ZipFile jar = new ZipFile(MERGED.toFile())) {
-			ZipEntry entry = jar.getEntry(KEY_MAPPING + ".class");
-			assumeTrue(entry != null, "KeyMapping absent — this is a server-only base");
-			try (InputStream in = jar.getInputStream(entry)) {
-				byte[] bytes = in.readAllBytes();
-				ClassNode node = new ClassNode();
-				new ClassReader(bytes).accept(node, ClassReader.SKIP_CODE);
-				boolean split = node.fields.stream().anyMatch(f -> "keyConflictContext".equals(f.name)
-								&& MF_CONTEXT.equals(f.desc))
-						&& node.fields.stream().anyMatch(f -> "keyConflictContext".equals(f.name)
-								&& NEO_CONTEXT.equals(f.desc));
-				assumeTrue(split, "this base no longer splits KeyMapping's conflict context");
-				return bytes;
-			}
-		}
+		byte[] bytes = TestFixtures.requireEntry(Fixture.STAGED, MERGED, KEY_MAPPING + ".class");
+		ClassNode node = new ClassNode();
+		new ClassReader(bytes).accept(node, ClassReader.SKIP_CODE);
+		boolean split = node.fields.stream().anyMatch(f -> "keyConflictContext".equals(f.name)
+						&& MF_CONTEXT.equals(f.desc))
+				&& node.fields.stream().anyMatch(f -> "keyConflictContext".equals(f.name)
+						&& NEO_CONTEXT.equals(f.desc));
+		assertTrue(split, "content drift: this base no longer splits KeyMapping's conflict context");
+		return bytes;
 	}
 }

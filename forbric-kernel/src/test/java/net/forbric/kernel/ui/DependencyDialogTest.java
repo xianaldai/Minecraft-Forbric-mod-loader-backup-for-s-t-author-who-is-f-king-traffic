@@ -325,6 +325,84 @@ class DependencyDialogTest {
 				List.of(suspicion()), List.of("-Djava.awt.headless=true")));
 	}
 
+	private static DependencyReport.Isolation isolation(String kept) {
+		return new DependencyReport.Isolation("crash-2026-10-03_12.00.00-client.txt", kept, List.of(
+				new DependencyReport.IsolationRow("sodium", "Sodium", "sodium-fabric-0.9.0.jar"),
+				new DependencyReport.IsolationRow("iris", "Iris Shaders", "iris-1.8.jar")));
+	}
+
+	@Test
+	void theCrashSuspectsOfferSurvivesTheRoundTripAndAnyMalformedLineIsRejected() throws Exception {
+		Path file = tmp.resolve("isolation.tsv");
+		DependencyReport.Isolation sent = new DependencyReport.Isolation("crash.txt", "Chloride",
+				List.of(new DependencyReport.IsolationRow("cwb", "Cubes\tWithout Borders", "cwb 4.1.jar")));
+		DependencyReport.writeIsolation(file, sent);
+		DependencyReport.Isolation read = DependencyReport.readIsolation(file);
+		assertEquals("crash.txt", read.report());
+		assertEquals("Chloride", read.kept());
+		assertEquals(List.of(new DependencyReport.IsolationRow("cwb", "Cubes Without Borders", "cwb 4.1.jar")), read.without());
+
+		DependencyReport.writeIsolation(file, isolation(""));
+		assertEquals("", DependencyReport.readIsolation(file).kept(), "no clash round-trips as no clash");
+
+		String good = Files.readString(file);
+		for (String bad : List.of(good.replace("--isolation-v1--", "--isolation-v2--"), good + "mod\tonly-two\n",
+				good + "surprise\tline\n", good.replace("kept\t-\n", ""), good + "report\tsecond.txt\n")) {
+			Files.writeString(file, bad);
+			assertThrows(java.io.IOException.class, () -> DependencyReport.readIsolation(file), bad);
+		}
+	}
+
+	@Test
+	void theCrashSuspectsOfferForkedWithNoDisplaySwitchesNothingOff() throws Exception {
+		// The real child, the real exit code: a child that cannot draw must start the game with every mod.
+		assertEquals(DependencyDialogMain.CONTINUE,
+				DependencyDialog.askIsolation(isolation(""), List.of("-Djava.awt.headless=true")));
+	}
+
+	@Test
+	void theOfferIsStartWithoutThenEverythingThenQuitAndEnterNeverQuits() {
+		for (DialogLang lang : DialogLang.all()) {
+			javax.swing.JOptionPane pane = DependencyDialogMain.isolationPane(lang, isolation(""), new javax.swing.JLabel("x"));
+			Object[] options = pane.getOptions();
+			assertEquals(lang.get("button.isolation.without", "Sodium, Iris Shaders"), options[0], lang.tag());
+			assertEquals(lang.get("button.isolation.everything"), options[1], lang.tag());
+			assertEquals(lang.get("button.quit"), options[2], lang.tag());
+			assertEquals(options[0], pane.getInitialValue(), lang.tag() + ": Enter must not be able to quit the game");
+
+			assertEquals(DependencyDialogMain.WITHOUT, DependencyDialogMain.isolationAnswerFrom(lang, isolation(""), options[0]));
+			assertEquals(DependencyDialogMain.CONTINUE, DependencyDialogMain.isolationAnswerFrom(lang, isolation(""), options[1]));
+			assertEquals(DependencyDialogMain.QUIT, DependencyDialogMain.isolationAnswerFrom(lang, isolation(""), options[2]));
+			// A closed window, Escape, or nothing at all switches nothing off.
+			for (Object closed : new Object[] { null, javax.swing.JOptionPane.UNINITIALIZED_VALUE,
+					Integer.valueOf(javax.swing.JOptionPane.CLOSED_OPTION) }) {
+				assertEquals(DependencyDialogMain.CONTINUE, DependencyDialogMain.isolationAnswerFrom(lang, isolation(""), closed));
+			}
+		}
+	}
+
+	@Test
+	void theOfferNamesTheModsTheirJarsAndHowToUndoIt() {
+		List<String> blocks = DependencyDialogMain.isolationBlocks(EN, isolation(""));
+		assertTrue(blocks.get(0).startsWith("The game crashed the last time it ran, and the crash points at these mods:"), blocks.get(0));
+		assertTrue(blocks.get(0).contains("Sodium  (sodium-fabric-0.9.0.jar)") && blocks.get(0).contains("Iris Shaders  (iris-1.8.jar)"),
+				blocks.get(0));
+		assertTrue(blocks.get(1).contains("forbric-disabled.txt") && blocks.get(1).contains("delete its line"), blocks.get(1));
+		assertTrue(blocks.get(2).contains("guess") && blocks.get(2).contains("Closing this window starts the game with every mod"),
+				blocks.get(2));
+		assertTrue(DependencyDialogMain.isolationBlocks(EN, isolation("Chloride")).get(0).contains("clash with Chloride"));
+		assertTrue(DependencyDialogMain.isolationDetails(EN, isolation("")).contains("crash-reports/crash-2026-10-03_12.00.00-client.txt"));
+		// Every language tells the player which file holds the switch, under its real name.
+		for (DialogLang lang : DialogLang.all()) {
+			assertTrue(lang.get("isolation.without").contains("forbric-disabled.txt"), lang.tag());
+		}
+		// More than three mods: the button names three and says there are more, instead of growing off the window.
+		List<DependencyReport.IsolationRow> five = new ArrayList<>();
+		for (int i = 1; i <= 5; i++) five.add(new DependencyReport.IsolationRow("m" + i, "Mod " + i, "m" + i + ".jar"));
+		assertEquals("Start without Mod 1, Mod 2, Mod 3 …", DependencyDialogMain.isolationOptions(EN,
+				new DependencyReport.Isolation("crash.txt", "", five))[0]);
+	}
+
 	@Test
 	void withTheSwitchOffTheConfirmationAsksNothingAndSoApprovesNothing() throws Exception {
 		String before = System.getProperty(DependencyDialog.SWITCH);

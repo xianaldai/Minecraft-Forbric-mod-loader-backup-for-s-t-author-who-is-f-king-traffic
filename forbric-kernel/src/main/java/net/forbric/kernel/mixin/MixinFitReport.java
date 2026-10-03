@@ -128,10 +128,11 @@ public final class MixinFitReport {
 		}
 	}
 
-	private record Parsed(String pkg, Set<String> mixins) {
+	/** @param arrays each entry's array ({@code mixins}, {@code client} or {@code server}), the first that names it */
+	record Parsed(String pkg, Set<String> mixins, Map<String, String> arrays) {
 	}
 
-	private static Parsed parseConfig(byte[] json) {
+	static Parsed parseConfig(byte[] json) {
 		UnmodifiableConfig config;
 		try (Reader reader = new InputStreamReader(new ByteArrayInputStream(json), StandardCharsets.UTF_8)) {
 			config = JsonFormat.fancyInstance().createParser().parse(reader);
@@ -142,17 +143,18 @@ public final class MixinFitReport {
 		if (pkg == null || pkg.toString().isEmpty()) return null;
 
 		Set<String> mixins = new LinkedHashSet<>();
+		Map<String, String> arrays = new LinkedHashMap<>();
 		for (String key : List.of("mixins", "client", "server")) {
 			if (config.get(List.of(key)) instanceof List<?> list) {
 				for (Object element : list) {
-					if (element instanceof String s && !s.isBlank()) mixins.add(s.trim());
+					if (element instanceof String s && !s.isBlank() && mixins.add(s.trim())) arrays.put(s.trim(), key);
 				}
 			}
 		}
-		return mixins.isEmpty() ? null : new Parsed(pkg.toString(), mixins);
+		return mixins.isEmpty() ? null : new Parsed(pkg.toString(), mixins, arrays);
 	}
 
-	private static Map<String, byte[]> mixinConfigs(Map<String, byte[]> content) {
+	static Map<String, byte[]> mixinConfigs(Map<String, byte[]> content) {
 		Map<String, byte[]> out = new LinkedHashMap<>();
 		for (Map.Entry<String, byte[]> e : content.entrySet()) {
 			String name = e.getKey();
@@ -166,7 +168,7 @@ public final class MixinFitReport {
 	}
 
 	/** A jar plus every mod jar nested inside it (Fabric {@code META-INF/jars}, Forge {@code META-INF/jarjar}). */
-	private static Map<String, Map<String, byte[]>> expand(Path jar) throws IOException {
+	static Map<String, Map<String, byte[]>> expand(Path jar) throws IOException {
 		Map<String, Map<String, byte[]>> units = new LinkedHashMap<>();
 		Map<String, byte[]> top = readJar(jar);
 		units.put(jar.getFileName().toString(), top);
@@ -180,7 +182,7 @@ public final class MixinFitReport {
 		return units;
 	}
 
-	private static Map<String, byte[]> readJar(Path jar) throws IOException {
+	static Map<String, byte[]> readJar(Path jar) throws IOException {
 		return readZip(Files.readAllBytes(jar));
 	}
 
@@ -191,7 +193,9 @@ public final class MixinFitReport {
 			while ((entry = in.getNextEntry()) != null) {
 				if (entry.isDirectory()) continue;
 				String name = entry.getName();
-				boolean wanted = name.endsWith(".class") || name.endsWith(".json") || name.endsWith(".jar");
+				// The tomls name a Forge-family unit's mod id, for MixinOverlapLint.
+				boolean wanted = name.endsWith(".class") || name.endsWith(".json") || name.endsWith(".jar")
+						|| name.equals("META-INF/mods.toml") || name.equals("META-INF/neoforge.mods.toml");
 				if (wanted) out.put(name, in.readAllBytes());
 			}
 		}

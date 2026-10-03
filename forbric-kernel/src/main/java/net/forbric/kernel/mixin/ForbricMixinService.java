@@ -470,7 +470,10 @@ public final class ForbricMixinService
 				KernelGuestMixinAdapter.reportNamedSuppressions(name, bytes, sources, r -> readAdapterClass(r), envType);
 			}
 
-			if (!relax && drop.isEmpty()) return new ByteArrayInputStream(bytes);
+			if (!relax && drop.isEmpty()) {
+				SERVED.put(name, bytes);
+				return new ByteArrayInputStream(bytes);
+			}
 
 			if (relax) {
 				// Three independent relaxations, each for a different way a guest mixin meets the merged base:
@@ -511,10 +514,29 @@ public final class ForbricMixinService
 						MixinConfigOwners.describe(name));
 			}
 
-			return new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8));
+			byte[] served = json.getBytes(StandardCharsets.UTF_8);
+			SERVED.put(name, served);
+			return new ByteArrayInputStream(served);
 		} catch (IOException e) {
 			throw new RuntimeException("Forbric: failed rewriting mixin config " + name, e);
 		}
+	}
+
+	/** Each config as {@link #getResourceAsStream} last served it to Mixin, after the kernel's drops. */
+	private static final java.util.Map<String, byte[]> SERVED = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * The JSON Mixin read for {@code config}: what was served when this service rewrote or inspected it, the resource
+	 * itself when it passed through untouched, null when there is neither.
+	 */
+	public static byte[] servedConfig(String config) {
+		byte[] served = SERVED.get(config);
+		return served != null ? served : readGameResource(config);
+	}
+
+	/** {@link #readAdapterClass}, for a pass that judges mixins after Mixin has prepared the configs. */
+	public static java.util.function.Function<String, byte[]> adapterResource() {
+		return ForbricMixinService::readAdapterClass;
 	}
 
 	/** Reads a game resource ({@code some/pkg/Name.class}) to its bytes, or null. */

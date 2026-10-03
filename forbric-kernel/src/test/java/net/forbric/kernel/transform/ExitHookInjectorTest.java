@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -43,11 +42,12 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /** Every return of {@code Minecraft.close()} and {@code DedicatedServer.onServerExit()} calls the loader's watcher sweep; nothing else is touched. */
 class ExitHookInjectorTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String MINECRAFT = "net/minecraft/client/Minecraft";
 	private static final String MINECRAFT_NAME = "net.minecraft.client.Minecraft";
 	private static final String HOOK_OWNER = "net/forbric/kernel/interop/ClientShutdown";
@@ -67,7 +67,7 @@ class ExitHookInjectorTest {
 
 	@Test
 	void theRealMergedCloseIsHookedAndStillVerifies() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] in = readClass(MINECRAFT + ".class");
 		byte[] out = transform(MINECRAFT_NAME, in);
 		assertTrue(out != in);
@@ -81,7 +81,7 @@ class ExitHookInjectorTest {
 
 	@Test
 	void theRealMergedDedicatedServerExitIsHookedAndStillVerifies() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		String server = "net/minecraft/server/dedicated/DedicatedServer";
 		byte[] in = readClass(server + ".class");
 		byte[] out = transform(server.replace('/', '.'), in);

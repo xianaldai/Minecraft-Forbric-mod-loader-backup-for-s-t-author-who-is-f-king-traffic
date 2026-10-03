@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -39,6 +38,9 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Covers {@code Mob.getSpawnReason()} against the REAL staged base.
  *
@@ -51,9 +53,7 @@ import org.objectweb.asm.tree.MethodNode;
  * repository's merge emits.
  */
 class MergedBaseSpawnReasonTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String ENTRY = "net/minecraft/world/entity/Mob.class";
 	private static final String OWNER = "net/minecraft/world/entity/Mob";
 	private static final String SPAWN_REASON = "Lnet/minecraft/world/entity/EntitySpawnReason;";
@@ -111,9 +111,9 @@ class MergedBaseSpawnReasonTest {
 	void anotherClassKeepsItsOwnSpawnFields() throws Exception {
 		// The rule is pinned to Mob by name. A subclass cannot read Mob's private field anyway, but a rule that
 		// rewrote by field name alone would be a rule waiting to hit an unrelated class.
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
 		byte[] other = readClass("net/minecraft/world/entity/LivingEntity.class");
-		assumeTrue(other != null, "LivingEntity absent from this base");
+		assertNotNull(other, "content drift: LivingEntity absent from this base");
 
 		// Byte identity used to be the assertion here, and it stopped being available the moment a LATER repair
 		// found something of its own in LivingEntity (the radians-to-degrees constant, in
@@ -157,14 +157,14 @@ class MergedBaseSpawnReasonTest {
 	}
 
 	private static byte[] original() throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] in = readClass(ENTRY);
-		assumeTrue(in != null, "Mob absent from this base");
+		assertNotNull(in, "content drift: Mob absent from this base");
 		ClassNode node = new ClassNode();
 		new ClassReader(in).accept(node, 0);
 		boolean split = node.fields.stream().anyMatch(f -> "spawnReason".equals(f.name))
 				&& node.fields.stream().anyMatch(f -> "spawnType".equals(f.name));
-		assumeTrue(split, "this base no longer splits Mob's spawn field — nothing to repair");
+		assertTrue(split, "content drift: this base no longer splits Mob's spawn field — nothing to repair");
 		return in;
 	}
 

@@ -20,15 +20,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -38,6 +33,9 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.VarInsnNode;
+
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * Covers the tooltip repair, whose whole symptom was a load-report row.
@@ -52,9 +50,7 @@ import org.objectweb.asm.tree.VarInsnNode;
  * after the merge changed underneath it.
  */
 class MergedBaseItemTooltipTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String ITEM_STACK = "net/minecraft/world/item/ItemStack";
 	private static final String BRIDGE = "net/forbric/kernel/runtime/KernelItemTooltips";
 	private static final String FORGE_FACTORY = "net/minecraftforge/event/ForgeEventFactory";
@@ -62,7 +58,6 @@ class MergedBaseItemTooltipTest {
 	@Test
 	void theMergedBaseOnlyEverAsksMinecraftForge() throws Exception {
 		byte[] bytes = readMergedBase();
-		assumeTrue(bytes != null, "merged base not staged");
 
 		MethodNode tooltip = tooltipLines(parse(bytes));
 		assertNotNull(tooltip, "the merged ItemStack must still have getTooltipLines");
@@ -75,7 +70,6 @@ class MergedBaseItemTooltipTest {
 	@Test
 	void theRepairPostsNeoForgesEventWithTheRealContextAndDisplay() throws Exception {
 		byte[] bytes = readMergedBase();
-		assumeTrue(bytes != null, "merged base not staged");
 
 		MethodNode tooltip = tooltipLines(parse(transform(bytes)));
 		assertNotNull(tooltip);
@@ -102,7 +96,6 @@ class MergedBaseItemTooltipTest {
 	@Test
 	void aSecondPassLeavesTheRepairedClassAlone() throws Exception {
 		byte[] bytes = readMergedBase();
-		assumeTrue(bytes != null, "merged base not staged");
 
 		byte[] once = transform(bytes);
 		assertSame(once, transform(once), "a body that already posts must not be rewritten");
@@ -134,13 +127,6 @@ class MergedBaseItemTooltipTest {
 	}
 
 	private static byte[] readMergedBase() throws Exception {
-		if (!Files.isRegularFile(MERGED_BASE)) return null;
-		try (ZipFile jar = new ZipFile(MERGED_BASE.toFile())) {
-			ZipEntry entry = jar.getEntry(ITEM_STACK + ".class");
-			if (entry == null) return null;
-			try (InputStream in = jar.getInputStream(entry)) {
-				return in.readAllBytes();
-			}
-		}
+		return TestFixtures.requireEntry(Fixture.STAGED, MERGED_BASE, ITEM_STACK + ".class");
 	}
 }

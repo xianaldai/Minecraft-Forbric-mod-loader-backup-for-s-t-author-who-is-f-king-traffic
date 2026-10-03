@@ -10,7 +10,6 @@
 package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -22,8 +21,9 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Consumer;
-import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Label;
 import org.objectweb.asm.MethodVisitor;
@@ -48,7 +48,8 @@ final class ForgeSpawnFixture extends ClassLoader {
 		super(ForgeSpawnFixture.class.getClassLoader());
 		this.hideForge = hideForge;
 		runtime = Path.of(System.getProperty("forbric.test.runtimeClasses", "build/classes/java/runtime"));
-		assumeTrue(Files.isRegularFile(runtime.resolve(ROOT.replace('.', '/') + ".class")), "runtime source set not compiled");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(runtime.resolve(ROOT.replace('.', '/') + ".class")),
+				"runtime source set not compiled");
 		for (String suffix : new String[] {"", "$MergedSpawnPredicate", "$Operation"}) {
 			put(FORGE + suffix, staged("forge-runtime/forge-runtime.jar", FORGE + suffix));
 			put(NEO + suffix, staged("neoforge-runtime/neoforge-runtime.jar", NEO + suffix));
@@ -161,13 +162,9 @@ final class ForgeSpawnFixture extends ClassLoader {
 	}
 	private void put(String name, byte[] bytes) { definitions.put(name, bytes); }
 	static byte[] staged(String jar, String name) throws Exception {
-		String old = System.getenv("FORBRIC_OLD");
-		Path run = old == null || old.isBlank() ? Path.of("..", "forbric-loader", "run") : Path.of(old, "run");
-		Path path = run.resolve(jar); assumeTrue(Files.isRegularFile(path), "staged artifact absent: " + path);
-		try (ZipFile zip = new ZipFile(path.toFile())) {
-			assertNotNull(zip.getEntry(name.replace('.', '/') + ".class"));
-			return zip.getInputStream(zip.getEntry(name.replace('.', '/') + ".class")).readAllBytes();
-		}
+		Path path = TestFixtures.stagedRoot().resolve(jar);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(path), "staged artifact absent: " + path);
+		return TestFixtures.requireEntry(Fixture.STAGED, path, name.replace('.', '/') + ".class");
 	}
 	private static Object objectMethod(Object self, Method method, Object[] args) {
 		return switch (method.getName()) {

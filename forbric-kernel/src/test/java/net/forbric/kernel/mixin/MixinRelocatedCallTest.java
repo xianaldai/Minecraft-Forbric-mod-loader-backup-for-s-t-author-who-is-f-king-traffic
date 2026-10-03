@@ -9,8 +9,8 @@ import java.util.List;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassReader;
@@ -92,8 +92,8 @@ class MixinRelocatedCallTest {
 	}
 
 	private static ClassNode merged(boolean relayed) throws Exception {
-		Path jar = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"), "run/merged-base/patched-mc-merged-26.2.jar");
-		Assumptions.assumeTrue(Files.isRegularFile(jar), "actual game required");
+		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "actual game required");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			byte[] bytes = zip.getInputStream(zip.getEntry("net/minecraft/world/item/ItemStack.class")).readAllBytes();
 			if (relayed) bytes = new ItemUseOnInjector().transform("net.minecraft.world.item.ItemStack", bytes, null);
@@ -104,7 +104,7 @@ class MixinRelocatedCallTest {
 	}
 
 	private static ClassNode game(Path jar) throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(jar), "actual game required");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(jar), "actual game required");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ClassNode node = new ClassNode();
 			new ClassReader(zip.getInputStream(zip.getEntry("net/minecraft/world/item/ItemStack.class")).readAllBytes()).accept(node, 0);

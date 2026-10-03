@@ -36,6 +36,7 @@ import net.forbric.api.ModCatalog;
 import net.forbric.kernel.metadata.forge.ForgeModEntry;
 import net.forbric.kernel.metadata.forge.ForgeModsToml;
 import net.forbric.kernel.metadata.forge.ModsTomlParser;
+import net.forbric.kernel.discovery.MetadataFailures;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
@@ -92,12 +93,29 @@ public final class KernelModCatalog {
 					d.name.isEmpty() ? mod.getDisplayName() : d.name, mod.getVersion(), d.description, d.authors,
 					fileName(mod.getSource()), d.icon, bundledBy(mod.getSource(), modsDir)));
 		}
+		addUnreadable(entries, modsDir);
 		ModCatalog.publish(entries);
 		ForbricLog.info("[Forbric/Catalog] %d installed mod(s) for the unified Mods screen: %d Fabric, %d NeoForge,"
 						+ " %d MinecraftForge — plus %d jar(s) they carry inside themselves, which are running and "
 						+ "are not what a player means by \"my mods\"",
 				ModCatalog.all().size(), ModCatalog.count(Ecosystem.FABRIC), ModCatalog.count(Ecosystem.NEOFORGE),
 				ModCatalog.count(Ecosystem.FORGE), ModCatalog.everything().size() - ModCatalog.all().size());
+	}
+
+	/**
+	 * A jar in {@code mods/} whose metadata nothing could read produced no mod above, yet a player installed it.
+	 * Without a row its confirmed finding would be reported as belonging to no installed mod — the section that
+	 * exists for Forbric's own problems — and the Mods screen would not list it at all.
+	 */
+	private static void addUnreadable(List<ModCatalog.Entry> entries, Path modsDir) {
+		if (modsDir == null) return;
+		Path dir = modsDir.toAbsolutePath().normalize();
+		for (MetadataFailures.Lost lost : MetadataFailures.lost()) {
+			String file = lost.jar().getFileName().toString();
+			if (!dir.equals(lost.jar().getParent()) || entries.stream().anyMatch(e -> e.jar().equals(file))) continue;
+			entries.add(new ModCatalog.Entry(lost.ecosystem(), lost.modId(), lost.modId(), "", "", List.of(), file, "", "")
+					.withStatus(ModCatalog.Status.FAILED, lost.detail()));
+		}
 	}
 
 	/**

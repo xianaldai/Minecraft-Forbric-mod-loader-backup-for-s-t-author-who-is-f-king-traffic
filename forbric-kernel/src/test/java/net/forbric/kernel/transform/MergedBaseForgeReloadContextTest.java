@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -23,15 +22,17 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * W5: the carrier's {@code AddReloadListenerEvent.getConditionContext()} invokes a Forge-typed accessor on
  * {@code ReloadableServerResources} that the merged class does not declare. The repair edits the CARRIER class,
  * turning that one invokevirtual into {@code invokestatic KernelForgeConditions.contextOf(RSR)}.
  */
 class MergedBaseForgeReloadContextTest {
-	private static final Path MERGED_BASE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
-	private static final Path FORGE_RUNTIME = forgeRuntime();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path FORGE_RUNTIME = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
 	private static final String EVENT = "net/minecraftforge/event/AddReloadListenerEvent";
 	private static final String RSR = "net/minecraft/server/ReloadableServerResources";
 	private static final String FORGE_CONTEXT = "Lnet/minecraftforge/common/crafting/conditions/ICondition$IContext;";
@@ -82,7 +83,7 @@ class MergedBaseForgeReloadContextTest {
 	void theAdapterExistsWithThatExactDescriptorInTheCompiledRuntime() throws Exception {
 		Path compiled = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"),
 				KERNEL + ".class");
-		assumeTrue(Files.isRegularFile(compiled), "runtime helper not compiled");
+		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled), "runtime helper not compiled");
 		ClassNode node = parse(Files.readAllBytes(compiled));
 		boolean found = false;
 		for (MethodNode method : node.methods) {
@@ -115,7 +116,7 @@ class MergedBaseForgeReloadContextTest {
 	}
 
 	private static byte[] bytesOf(Path jar, String internal) throws Exception {
-		assumeTrue(Files.isRegularFile(jar), "staged artifact absent: " + jar);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged artifact absent: " + jar);
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ZipEntry entry = zip.getEntry(internal + ".class");
 			assertNotNull(entry, internal + " not in " + jar.getFileName());
@@ -123,11 +124,5 @@ class MergedBaseForgeReloadContextTest {
 				return in.readAllBytes();
 			}
 		}
-	}
-
-	private static Path forgeRuntime() {
-		String old = System.getenv("FORBRIC_OLD");
-		Path root = old == null || old.isBlank() ? Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader")) : Path.of(old);
-		return root.resolve("run/forge-runtime/forge-runtime.jar").normalize();
 	}
 }

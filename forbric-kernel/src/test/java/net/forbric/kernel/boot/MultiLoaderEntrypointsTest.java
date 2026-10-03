@@ -1,7 +1,6 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -13,6 +12,8 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 
 import net.forbric.api.Ecosystem;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -106,8 +107,7 @@ class MultiLoaderEntrypointsTest {
 		List<String> names = List.of("animalgarden-bison-1.0.0-forge-26.2-65.0.0.jar",
 				"aquariuslibs-1.2.0-forge-26.2-65.0.0.jar", "bannerstone-0.1.2.jar");
 		boolean available = names.stream().allMatch(name -> Files.isRegularFile(mods.resolve(name)));
-		if ("1".equals(System.getenv("FORBRIC_COMPAT_FIXTURES_REQUIRED"))) assertTrue(available, "real baseline fixtures absent");
-		assumeTrue(available, "requires the prepared random baseline jars");
+		TestFixtures.require(Fixture.THIRD_PARTY, available, "requires the prepared random baseline jars");
 		for (int i = 0; i < names.size(); i++) {
 			Path jar = mods.resolve(names.get(i));
 			assertEquals(i < 2 ? Ecosystem.FORGE : Ecosystem.FABRIC, MultiLoaderArbiter.ownerOf(jar), names.get(i));

@@ -2,7 +2,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -26,6 +25,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
@@ -49,7 +49,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  */
 @ResourceLock("system-properties")
 class WrapperEntryAddedInjectorTest {
-	private static final Path STAGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"));
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path NEO_CARRIER = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final Path FORGE_CARRIER = STAGED.resolve("merged-base/forge-runtime-interop.jar");
@@ -181,8 +181,8 @@ class WrapperEntryAddedInjectorTest {
 		final Entries entries = new Entries();
 
 		Game(boolean repaired, boolean fabric) throws Exception {
-			assumeTrue(Runtime.version().feature() >= 25, "the merged game is class-file 69, which only Java 25 links");
-			for (Path jar : List.of(MERGED, NEO_CARRIER, FORGE_CARRIER)) assumeTrue(Files.isRegularFile(jar), jar + " absent");
+			TestFixtures.require(Fixture.JAVA_25, Runtime.version().feature() >= 25, "the merged game is class-file 69, which only Java 25 links");
+			for (Path jar : List.of(MERGED, NEO_CARRIER, FORGE_CARRIER)) TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), jar + " absent");
 			Map<String, byte[]> defined = new HashMap<>();
 			byte[] wrapperBytes = NativeCoremodParityTest.read(FORGE_CARRIER, WRAPPER);
 			defined.put(dotted(WRAPPER), repaired ? new WrapperEntryAddedInjector().transform(WrapperEntryAddedInjector.WRAPPER, wrapperBytes, null) : wrapperBytes);
@@ -190,7 +190,7 @@ class WrapperEntryAddedInjectorTest {
 			defined.put(dotted(MENU_TYPE), withoutInitializer(NativeCoremodParityTest.read(MERGED, MENU_TYPE)));
 			List<URL> urls = new ArrayList<>(List.of(MERGED.toUri().toURL(), NEO_CARRIER.toUri().toURL(), FORGE_CARRIER.toUri().toURL()));
 			if (fabric) {
-				assumeTrue(Files.isRegularFile(FABRIC_API), "actual Fabric API fixture required");
+				TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(FABRIC_API), "actual Fabric API fixture required");
 				defined.put(dotted(MAPPED_REGISTRY), listenable(NativeCoremodParityTest.read(MERGED, MAPPED_REGISTRY)));
 				modules = Files.createTempDirectory("wrapper-entry-events");
 				for (String module : List.of("fabric-api-base", "fabric-registry-sync-v0", "fabric-networking-api-v1", "fabric-menu-api-v1")) {
@@ -204,7 +204,7 @@ class WrapperEntryAddedInjectorTest {
 					"io/netty/netty-common", "io/netty/netty-buffer", "org/joml/joml", "com/mojang/authlib",
 					"org/apache/commons/commons-lang3", "com/mojang/logging")) {
 				Path library = newestUnder(pattern);
-				assumeTrue(library != null, "no " + pattern + " jar in the local Minecraft libraries");
+				TestFixtures.require(Fixture.MC_LIBRARIES, library != null, "no " + pattern + " jar in the local Minecraft libraries");
 				urls.add(library.toUri().toURL());
 			}
 			// Identifier's codecs name Netty's; they moved between releases (netty-codec, then netty-codec-base).

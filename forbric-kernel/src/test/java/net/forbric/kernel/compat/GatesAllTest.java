@@ -91,6 +91,30 @@ class GatesAllTest {
 				result.output().lines().toList());
 	}
 
+	/**
+	 * A second working tree links its fixtures to the main checkout's. A gate that asks for its own copy must get a
+	 * real directory then, not a second link to the original that it would write its world and mods into.
+	 */
+	@Test void aGateGetsARealCopyOfAFixtureThatIsASymlink() throws Exception {
+		Path fixture = Files.createDirectories(temporary.resolve("main-checkout/client-merged-pack"));
+		Files.createDirectories(fixture.resolve("saves/World"));
+		Path options = Files.writeString(fixture.resolve("options.txt"), "original\n");
+		Path gates = Files.createDirectory(temporary.resolve("linked-gates"));
+		Files.createSymbolicLink(gates.resolve("client-merged-pack"), fixture);
+		write(gates, "gate-m9.sh", "# GATE-PARALLEL: clone=client-merged-pack:M9_RUNDIR mem=100\n"
+				+ "[ -d \"$M9_RUNDIR\" ] && [ ! -L \"$M9_RUNDIR\" ] || exit 1\n"
+				+ "echo changed > \"$M9_RUNDIR/options.txt\"\nmkdir \"$M9_RUNDIR/saves/Other\"\n");
+		var env = Map.of("FORBRIC_GATE_DIR", gates.toString(),
+				"FORBRIC_GATE_RESULTS", temporary.resolve("linked-results").toString());
+		var result = CompatProbeProcess.run(temporary, env, "bash", "gates-all.sh");
+		assertEquals(0, result.exitCode(), result.output());
+		assertEquals("original\n", Files.readString(options));
+		assertFalse(Files.exists(fixture.resolve("saves/Other")), "the gate wrote into the main checkout's fixture");
+		Path copy = gates.resolve(".gate-clones/gate-m9/client-merged-pack");
+		assertFalse(Files.isSymbolicLink(copy));
+		assertEquals("changed\n", Files.readString(copy.resolve("options.txt")));
+	}
+
 	private static void write(Path gates, String name, String body) throws Exception {
 		Files.writeString(gates.resolve(name), "#!/usr/bin/env bash\n" + body);
 	}

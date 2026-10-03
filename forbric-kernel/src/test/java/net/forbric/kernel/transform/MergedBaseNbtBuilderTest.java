@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -24,6 +23,9 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * {@code CompoundTag.builder()} — the static every {@code IForgeBlockPos.toCompoundTag()} and
  * {@code ForgeHooks.createEmptyStructure} links against, and which the merged base does not declare.
@@ -35,9 +37,8 @@ import org.objectweb.asm.tree.TypeInsnNode;
  * constructor, and idempotence.
  */
 class MergedBaseNbtBuilderTest {
-	private static final Path MERGED_BASE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"merged-base", "patched-mc-merged-26.2.jar").normalize();
-	private static final Path FORGE_RUNTIME = forgeRuntime();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path FORGE_RUNTIME = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
 	private static final String COMPOUND_TAG = "net/minecraft/nbt/CompoundTag";
 	private static final String BUILDER = "net/minecraftforge/common/util/INBTBuilder$Builder";
 	private static final String DESC = "()L" + BUILDER + ";";
@@ -72,7 +73,7 @@ class MergedBaseNbtBuilderTest {
 
 	@Test
 	void everyCarrierCallSiteNowResolves() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE_RUNTIME), "staged Forge carrier absent: " + FORGE_RUNTIME);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE_RUNTIME), "staged Forge carrier absent: " + FORGE_RUNTIME);
 		ClassNode after = parse(transform(COMPOUND_TAG));
 		List<String> unresolved = new ArrayList<>();
 		int sites = 0;
@@ -95,7 +96,7 @@ class MergedBaseNbtBuilderTest {
 
 	@Test
 	void theCarrierTypeItNewsStillHasAPublicNoArgConstructor() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE_RUNTIME), "staged Forge carrier absent: " + FORGE_RUNTIME);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE_RUNTIME), "staged Forge carrier absent: " + FORGE_RUNTIME);
 		ClassNode builder = parse(bytesOf(FORGE_RUNTIME, BUILDER));
 		MethodNode ctor = declared(builder, "<init>", "()V");
 		assertNotNull(ctor, BUILDER + " lost its no-arg constructor — the emitted body would NoSuchMethodError");
@@ -132,7 +133,7 @@ class MergedBaseNbtBuilderTest {
 	}
 
 	private static byte[] bytesOf(Path jar, String internal) throws Exception {
-		assumeTrue(Files.isRegularFile(jar), "staged artifact absent: " + jar);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged artifact absent: " + jar);
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ZipEntry entry = zip.getEntry(internal + ".class");
 			assertNotNull(entry, internal + " not in " + jar.getFileName());
@@ -140,11 +141,5 @@ class MergedBaseNbtBuilderTest {
 				return in.readAllBytes();
 			}
 		}
-	}
-
-	private static Path forgeRuntime() {
-		String old = System.getenv("FORBRIC_OLD");
-		Path root = old == null || old.isBlank() ? Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader")) : Path.of(old);
-		return root.resolve("run/forge-runtime/forge-runtime.jar").normalize();
 	}
 }

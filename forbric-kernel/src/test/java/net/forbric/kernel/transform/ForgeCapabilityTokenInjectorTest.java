@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.net.URL;
@@ -24,10 +23,12 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /** The carrier's own CapabilityTokenSubclass plugin, driven by the kernel over the carrier's own token classes. */
 class ForgeCapabilityTokenInjectorTest {
-	private static final Path FORGE = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run",
-			"forge-runtime", "forge-runtime.jar").normalize();
+	private static final Path FORGE = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
 
 	@Test
 	void theItemHandlerTokenGetsAGetTypeReturningItsTypeArgument() throws Exception {
@@ -72,10 +73,10 @@ class ForgeCapabilityTokenInjectorTest {
 	}
 
 	private static ForgeCapabilityTokenInjector injector() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE), "staged Forge carrier absent: " + FORGE);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE), "staged Forge carrier absent: " + FORGE);
 		URLClassLoader loader = new URLClassLoader(new URL[] { FORGE.toUri().toURL() }, ForgeCapabilityTokenInjectorTest.class.getClassLoader());
 		ForgeCapabilityTokenInjector injector = ForgeCapabilityTokenInjector.create(loader);
-		assumeTrue(injector != null, "the carrier's CapabilityTokenSubclass plugin could not be created");
+		assertNotNull(injector, "content drift: the carrier's CapabilityTokenSubclass plugin could not be created");
 		return injector;
 	}
 

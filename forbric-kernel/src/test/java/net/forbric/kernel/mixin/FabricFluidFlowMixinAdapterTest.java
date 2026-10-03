@@ -5,12 +5,13 @@ import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.*;
 import java.nio.file.*;
 import java.util.zip.ZipFile;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 class FabricFluidFlowMixinAdapterTest {
 	private ClassNode mixin() throws Exception {
 		Path path=Path.of("build/compat-inputs/player-loading/api/fabric-block-api-v1-3.1.0+53515aab9e.jar");
-		assumeTrue(Files.isRegularFile(path),"actual current Fabric Block API fixture required");
+		TestFixtures.require(Fixture.THIRD_PARTY,Files.isRegularFile(path),"actual current Fabric Block API fixture required");
 		try(ZipFile zip=new ZipFile(path.toFile())){return MixinFit.parse(zip.getInputStream(zip.getEntry("net/fabricmc/fabric/mixin/block/LiquidBlockMixin.class")).readAllBytes());}
 	}
 	@Test void bothLiveCarrierPathsCallTheOriginalFabricVetoAndKeepTheirNativeOperations() throws Exception {

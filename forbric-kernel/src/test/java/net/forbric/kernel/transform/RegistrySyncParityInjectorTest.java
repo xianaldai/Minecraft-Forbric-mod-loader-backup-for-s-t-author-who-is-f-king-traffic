@@ -21,13 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -41,6 +36,8 @@ import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
 import net.fabricmc.api.EnvType;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * Pins {@link RegistrySyncParityInjector} against the REAL staged carrier bytecode.
@@ -59,9 +56,7 @@ import net.fabricmc.api.EnvType;
  * is a live upgrade hazard, not a hypothetical. It should go red here instead.
  */
 class RegistrySyncParityInjectorTest {
-	private static final Path FORGE_RUNTIME =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "forge-runtime", "forge-runtime.jar")
-					.normalize();
+	private static final Path FORGE_RUNTIME = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
 
 	private static final String WRAPPER = "net.minecraftforge.registries.NamespacedWrapper";
 	private static final String WRAPPER_PENDING_TAGS = WRAPPER + "$3";
@@ -76,7 +71,6 @@ class RegistrySyncParityInjectorTest {
 	@Test
 	void theThirdAnonymousClassIsStillTheOneImplementingPendingTags() throws Exception {
 		ClassNode node = realClass(WRAPPER_PENDING_TAGS);
-		assumeTrue(node != null, "staged forge-runtime absent — skipping real-bytecode check");
 
 		assertTrue(node.interfaces.contains(PENDING_TAGS_INTERFACE),
 				WRAPPER_PENDING_TAGS + " no longer implements " + PENDING_TAGS_INTERFACE
@@ -88,7 +82,6 @@ class RegistrySyncParityInjectorTest {
 	@Test
 	void theCaptureFieldTheContractReadsStillExists() throws Exception {
 		ClassNode node = realClass(WRAPPER_PENDING_TAGS);
-		assumeTrue(node != null, "staged forge-runtime absent");
 
 		FieldNode bindings = null;
 		for (FieldNode f : node.fields) {
@@ -102,7 +95,6 @@ class RegistrySyncParityInjectorTest {
 	@Test
 	void theRealPendingTagsClassGainsAVerifiableContents() throws Exception {
 		byte[] in = realBytes(WRAPPER_PENDING_TAGS);
-		assumeTrue(in != null, "staged forge-runtime absent");
 
 		byte[] out = injector.transform(WRAPPER_PENDING_TAGS, in, ctx());
 		assertTrue(out != in, "the pending-tags contract was not added");
@@ -116,7 +108,6 @@ class RegistrySyncParityInjectorTest {
 	@Test
 	void theRealWrapperGainsBothEcosystemsRemapContracts() throws Exception {
 		byte[] in = realBytes(WRAPPER);
-		assumeTrue(in != null, "staged forge-runtime absent");
 
 		ClassNode out = parse(injector.transform(WRAPPER, in, ctx()));
 
@@ -174,19 +165,11 @@ class RegistrySyncParityInjectorTest {
 	}
 
 	private static ClassNode realClass(String binaryName) throws Exception {
-		byte[] b = realBytes(binaryName);
-		return b == null ? null : parse(b);
+		return parse(realBytes(binaryName));
 	}
 
 	private static byte[] realBytes(String binaryName) throws Exception {
-		if (!Files.isRegularFile(FORGE_RUNTIME)) return null;
-		try (ZipFile zip = new ZipFile(FORGE_RUNTIME.toFile())) {
-			ZipEntry e = zip.getEntry(binaryName.replace('.', '/') + ".class");
-			if (e == null) return null;
-			try (InputStream in = zip.getInputStream(e)) {
-				return in.readAllBytes();
-			}
-		}
+		return TestFixtures.requireEntry(Fixture.STAGED, FORGE_RUNTIME, binaryName.replace('.', '/') + ".class");
 	}
 
 	/** A stand-in that already declares {@code contents()}, like a future carrier might. */

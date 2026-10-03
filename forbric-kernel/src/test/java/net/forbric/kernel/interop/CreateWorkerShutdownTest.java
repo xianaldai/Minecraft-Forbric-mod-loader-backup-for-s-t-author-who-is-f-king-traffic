@@ -7,6 +7,8 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.tools.ToolProvider;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -14,7 +16,7 @@ class CreateWorkerShutdownTest {
 	@TempDir Path root;
 	@Test void realFlywheelWorkersDrainAndJoinWithoutCallingTheLazyFactory() throws Exception {
 		Path jar = Path.of(System.getProperty("forbric.createFlyJar", "build/compat-inputs/create-fly/create-fly.jar"));
-		org.junit.jupiter.api.Assumptions.assumeTrue(Files.isRegularFile(jar));
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(jar), "Create Fly jar absent: " + jar);
 		String prefix="com/zurrtum/create/client/flywheel/impl/";
 		Map<String,String> sources=Map.of(
 				"com/google/common/base/Preconditions.java", "package com.google.common.base; public class Preconditions {public static void checkArgument(boolean ok,Object reason){if(!ok)throw new IllegalArgumentException(String.valueOf(reason));}}",

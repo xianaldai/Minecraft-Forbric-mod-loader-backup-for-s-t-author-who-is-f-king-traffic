@@ -22,7 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
@@ -46,6 +45,9 @@ import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * MinecraftForge writes a modified binding into options.txt as {@code key.keyboard.o:CONTROL_OR_COMMAND} and then
  * hands that whole string to {@code InputConstants.getKey} before splitting the modifier off — so vanilla's
@@ -58,9 +60,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  */
 @org.junit.jupiter.api.parallel.ResourceLock("system-properties")
 class MergedBaseKeyModifierSuffixTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String INPUT_CONSTANTS = "com/mojang/blaze3d/platform/InputConstants";
 	private static final String KEY = INPUT_CONSTANTS + "$Key";
 	private static final String GET_KEY_DESC = "(Ljava/lang/String;)L" + KEY + ";";
@@ -88,7 +88,7 @@ class MergedBaseKeyModifierSuffixTest {
 
 	@Test
 	void theRealMergedBaseStillNeedsItAndStaysVerifiable() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] in = readClass(INPUT_CONSTANTS + ".class");
 		byte[] out = transform(in);
 		assertTrue(out != in, "the staged merged base must still need the repair — if it stopped, re-derive the test");

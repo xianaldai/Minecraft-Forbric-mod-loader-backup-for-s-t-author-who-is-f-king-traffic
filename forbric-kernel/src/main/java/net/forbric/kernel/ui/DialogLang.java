@@ -268,6 +268,20 @@ public final class DialogLang {
 			"details.search", "search: {0}",
 			"details.mixin", "{0}  —  {1}",
 			"details.anchors", "could not find {0}",
+			"isolation.title", "Forbric — the game crashed last time",
+			"isolation.intro", "The game crashed the last time it ran, and the crash points at these mods:",
+			"isolation.intro.clash", "The game crashed the last time it ran because these mods clash with {0}. Forbric "
+					+ "can keep {0} and start without:",
+			"isolation.bullet", "{0}  ({1})",
+			"isolation.without", "Starting without them writes their file names into forbric-disabled.txt, next to "
+					+ "your mods folder, and Forbric does not load them. The files stay where they are. To turn one back on, "
+					+ "delete its line from forbric-disabled.txt.",
+			"isolation.note", "This is a guess: the crash points at these mods, which does not prove they are at "
+					+ "fault. Closing this window starts the game with every mod, as before.",
+			"isolation.details.report", "The crash report is crash-reports/{0}; the analysis is "
+					+ ".forbric-kernel/crash-analysis.txt.",
+			"button.isolation.without", "Start without {0}",
+			"button.isolation.everything", "Start with everything",
 			"details.log", "The same findings are in logs/latest.log, under [Forbric/Deps]."));
 
 	// ---------------------------------------------------------------------------------------------------------
@@ -319,6 +333,19 @@ public final class DialogLang {
 			"details.search", "搜索：{0}",
 			"details.mixin", "{0}  —  {1}",
 			"details.anchors", "没找到 {0}",
+			"isolation.title", "Forbric —— 上次游戏崩溃了",
+			"isolation.intro", "上次运行时游戏崩溃了，崩溃指向这些 mod：",
+			"isolation.intro.clash", "上次运行时游戏崩溃了，因为这些 mod 和 {0} 互相冲突。Forbric 可以保留 {0}，"
+					+ "不加载下面这些再启动：",
+			"isolation.bullet", "{0}（{1}）",
+			"isolation.without", "选择不加载它们启动，Forbric 会把它们的文件名写进 mods 文件夹旁边的 "
+					+ "forbric-disabled.txt，之后不再加载它们。文件本身不会被移动。想重新启用哪个，就把它那一行从 "
+					+ "forbric-disabled.txt 里删掉。",
+			"isolation.note", "这只是个猜测：崩溃指向这些 mod，并不能证明是它们的问题。关掉这个窗口，"
+					+ "游戏会像以前一样加载全部 mod 启动。",
+			"isolation.details.report", "崩溃报告在 crash-reports/{0}，分析在 .forbric-kernel/crash-analysis.txt。",
+			"button.isolation.without", "不加载 {0} 启动",
+			"button.isolation.everything", "全部照常启动",
 			"details.log", "同样的内容也在 logs/latest.log 里，搜 [Forbric/Deps] 就能找到。"));
 
 	// -------------------------------------------------------------------------------------------------------
@@ -371,6 +398,19 @@ public final class DialogLang {
 			"details.search", "搜尋：{0}",
 			"details.mixin", "{0}  —  {1}",
 			"details.anchors", "找不到 {0}",
+			"isolation.title", "Forbric —— 上次遊戲崩潰了",
+			"isolation.intro", "上次執行時遊戲崩潰了，崩潰指向這些模組：",
+			"isolation.intro.clash", "上次執行時遊戲崩潰了，因為這些模組和 {0} 互相衝突。Forbric 可以保留 {0}，"
+					+ "不載入下面這些再啟動：",
+			"isolation.bullet", "{0}（{1}）",
+			"isolation.without", "選擇不載入它們啟動，Forbric 會把它們的檔名寫進 mods 資料夾旁邊的 "
+					+ "forbric-disabled.txt，之後不再載入它們。檔案本身不會被移動。想重新啟用哪個，就把它那一行從 "
+					+ "forbric-disabled.txt 裡刪掉。",
+			"isolation.note", "這只是猜測：崩潰指向這些模組，並不能證明是它們的問題。關掉這個視窗，"
+					+ "遊戲會像以前一樣載入全部模組啟動。",
+			"isolation.details.report", "崩潰報告在 crash-reports/{0}，分析在 .forbric-kernel/crash-analysis.txt。",
+			"button.isolation.without", "不載入 {0} 啟動",
+			"button.isolation.everything", "全部照常啟動",
 			"details.log", "同樣的內容也記在 logs/latest.log 的 [Forbric/Deps] 底下。"));
 
 	// -------------------------------------------------------------------------------------------------------
@@ -428,6 +468,21 @@ public final class DialogLang {
 			"details.search", "検索：{0}",
 			"details.mixin", "{0}  ——  {1}",
 			"details.anchors", "{0} が見つかりませんでした",
+			"isolation.title", "Forbric — 前回ゲームがクラッシュしました",
+			"isolation.intro", "前回の起動でゲームがクラッシュしました。クラッシュはこれらのMODを指しています:",
+			"isolation.intro.clash", "前回の起動で、これらのMODが {0} と競合したためゲームがクラッシュしました。"
+					+ "Forbric は {0} を残し、次のMODなしで起動できます:",
+			"isolation.bullet", "{0}（{1}）",
+			"isolation.without", "これらなしで起動すると、ファイル名が mods フォルダーの隣にある forbric-disabled.txt "
+					+ "に書き込まれ、Forbric はそれらを読み込みません。ファイル自体はそのまま残ります。元に戻すには、"
+					+ "forbric-disabled.txt からその行を削除してください。",
+			"isolation.note", "これは推測です。クラッシュがこれらのMODを指していても、"
+					+ "原因だと証明されたわけではありません。このウィンドウを閉じると、"
+					+ "これまでどおりすべてのMODで起動します。",
+			"isolation.details.report", "クラッシュレポートは crash-reports/{0}、分析は "
+					+ ".forbric-kernel/crash-analysis.txt にあります。",
+			"button.isolation.without", "{0} なしで起動",
+			"button.isolation.everything", "すべて読み込んで起動",
 			"details.log", "同じ内容は logs/latest.log の [Forbric/Deps] にも記録されています。"));
 
 	// -------------------------------------------------------------------------------------------------------
@@ -483,6 +538,20 @@ public final class DialogLang {
 			"details.search", "검색: {0}",
 			"details.mixin", "{0}  —  {1}",
 			"details.anchors", "{0}을(를) 찾지 못했습니다",
+			"isolation.title", "Forbric — 지난번에 게임이 크래시되었습니다",
+			"isolation.intro", "지난번 실행에서 게임이 크래시되었고, 크래시는 다음 모드를 가리킵니다:",
+			"isolation.intro.clash", "지난번 실행에서 다음 모드가 {0}와(과) 서로 충돌해 게임이 크래시되었습니다. "
+					+ "Forbric은 {0}을(를) 남기고 다음 모드 없이 실행할 수 있습니다:",
+			"isolation.bullet", "{0}  ({1})",
+			"isolation.without", "이 모드 없이 실행하면 파일 이름이 mods 폴더 옆의 forbric-disabled.txt에 기록되고, "
+					+ "Forbric은 해당 모드를 불러오지 않습니다. 파일은 그대로 남습니다. 다시 켜려면 forbric-disabled.txt에서 "
+					+ "해당 줄을 지우세요.",
+			"isolation.note", "이것은 추측입니다. 크래시가 이 모드들을 가리킨다고 해서 원인이라는 증거는 아닙니다. 이 "
+					+ "창을 닫으면 이전처럼 모든 모드로 실행합니다.",
+			"isolation.details.report", "크래시 보고서는 crash-reports/{0}, 분석은 "
+					+ ".forbric-kernel/crash-analysis.txt에 있습니다.",
+			"button.isolation.without", "{0} 없이 실행",
+			"button.isolation.everything", "모두 불러와 실행",
 			"details.log", "같은 내용이 logs/latest.log의 [Forbric/Deps] 항목에도 기록되어 있습니다."));
 
 	// -------------------------------------------------------------------------------------------------------
@@ -539,6 +608,19 @@ public final class DialogLang {
 			"details.search", "поиск: {0}",
 			"details.mixin", "{0}  —  {1}",
 			"details.anchors", "не удалось найти {0}",
+			"isolation.title", "Forbric — в прошлый раз игра вылетела",
+			"isolation.intro", "В прошлый раз игра вылетела, и вылет указывает на эти моды:",
+			"isolation.intro.clash", "В прошлый раз игра вылетела, потому что эти моды конфликтуют с {0}. Forbric "
+					+ "может оставить {0} и запустить игру без:",
+			"isolation.bullet", "{0}  ({1})",
+			"isolation.without", "Если запустить без них, Forbric запишет имена их файлов в forbric-disabled.txt рядом "
+					+ "с папкой mods и не будет их загружать. Сами файлы останутся на месте. Чтобы снова включить мод, "
+					+ "удалите его строку из forbric-disabled.txt.",
+			"isolation.note", "Это догадка: вылет указывает на эти моды, но это не доказывает, что виноваты они. Если "
+					+ "закрыть это окно, игра запустится со всеми модами, как раньше.",
+			"isolation.details.report", "Отчёт о вылете: crash-reports/{0}; разбор: .forbric-kernel/crash-analysis.txt.",
+			"button.isolation.without", "Запустить без {0}",
+			"button.isolation.everything", "Запустить со всеми модами",
 			"details.log", "Те же сведения есть в logs/latest.log, в разделе [Forbric/Deps]."));
 
 	// -------------------------------------------------------------------------------------------------------
@@ -595,6 +677,20 @@ public final class DialogLang {
 			"details.search", "Suche: {0}",
 			"details.mixin", "{0}  —  {1}",
 			"details.anchors", "{0} nicht gefunden",
+			"isolation.title", "Forbric — das Spiel ist beim letzten Mal abgestürzt",
+			"isolation.intro", "Das Spiel ist beim letzten Start abgestürzt, und der Absturz deutet auf diese Mods:",
+			"isolation.intro.clash", "Das Spiel ist beim letzten Start abgestürzt, weil diese Mods mit {0} "
+					+ "kollidieren. Forbric kann {0} behalten und ohne diese starten:",
+			"isolation.bullet", "{0}  ({1})",
+			"isolation.without", "Startest du ohne sie, schreibt Forbric ihre Dateinamen in forbric-disabled.txt neben "
+					+ "deinem mods-Ordner und lädt sie nicht. Die Dateien bleiben, wo sie sind. Um einen Mod wieder "
+					+ "einzuschalten, lösche seine Zeile aus forbric-disabled.txt.",
+			"isolation.note", "Das ist eine Vermutung: Der Absturz deutet auf diese Mods, beweist aber nicht, dass sie "
+					+ "schuld sind. Schließt du dieses Fenster, startet das Spiel wie bisher mit allen Mods.",
+			"isolation.details.report", "Der Absturzbericht ist crash-reports/{0}, die Analyse "
+					+ ".forbric-kernel/crash-analysis.txt.",
+			"button.isolation.without", "Ohne {0} starten",
+			"button.isolation.everything", "Mit allen Mods starten",
 			"details.log", "Dieselben Ergebnisse stehen in logs/latest.log unter [Forbric/Deps]."));
 
 	// -------------------------------------------------------------------------------------------------------
@@ -653,6 +749,20 @@ public final class DialogLang {
 			"details.search", "recherche : {0}",
 			"details.mixin", "{0}  —  {1}",
 			"details.anchors", "impossible de trouver {0}",
+			"isolation.title", "Forbric — le jeu a planté la dernière fois",
+			"isolation.intro", "Le jeu a planté lors du dernier lancement, et le plantage désigne ces mods :",
+			"isolation.intro.clash", "Le jeu a planté lors du dernier lancement parce que ces mods entrent en conflit "
+					+ "avec {0}. Forbric peut garder {0} et démarrer sans :",
+			"isolation.bullet", "{0}  ({1})",
+			"isolation.without", "Démarrer sans eux inscrit leurs noms de fichiers dans forbric-disabled.txt, à côté "
+					+ "de votre dossier mods, et Forbric ne les charge plus. Les fichiers restent où ils sont. Pour en "
+					+ "réactiver un, supprimez sa ligne de forbric-disabled.txt.",
+			"isolation.note", "Ce n'est qu'une supposition : le plantage désigne ces mods, ce qui ne prouve pas qu'ils "
+					+ "sont en cause. Fermer cette fenêtre lance le jeu avec tous les mods, comme avant.",
+			"isolation.details.report", "Le rapport de plantage est crash-reports/{0} ; l'analyse est "
+					+ ".forbric-kernel/crash-analysis.txt.",
+			"button.isolation.without", "Démarrer sans {0}",
+			"button.isolation.everything", "Démarrer avec tout",
 			"details.log", "Les mêmes informations se trouvent dans logs/latest.log, sous [Forbric/Deps]."));
 
 	// -------------------------------------------------------------------------------------------------------
@@ -709,6 +819,20 @@ public final class DialogLang {
 			"details.search", "búsqueda: {0}",
 			"details.mixin", "{0}  —  {1}",
 			"details.anchors", "no se encontró {0}",
+			"isolation.title", "Forbric — el juego se cerró por un error la última vez",
+			"isolation.intro", "El juego se cerró por un error la última vez que se ejecutó, y el error apunta a estos mods:",
+			"isolation.intro.clash", "El juego se cerró por un error la última vez porque estos mods chocan con {0}. "
+					+ "Forbric puede conservar {0} e iniciar sin:",
+			"isolation.bullet", "{0}  ({1})",
+			"isolation.without", "Si inicias sin ellos, Forbric escribe sus nombres de archivo en "
+					+ "forbric-disabled.txt, junto a tu carpeta mods, y no los carga. Los archivos se quedan donde están. "
+					+ "Para volver a activar uno, borra su línea de forbric-disabled.txt.",
+			"isolation.note", "Es una suposición: el error apunta a estos mods, pero eso no demuestra que sean los "
+					+ "culpables. Si cierras esta ventana, el juego se inicia con todos los mods, como antes.",
+			"isolation.details.report", "El informe del error está en crash-reports/{0}; el análisis, en "
+					+ ".forbric-kernel/crash-analysis.txt.",
+			"button.isolation.without", "Iniciar sin {0}",
+			"button.isolation.everything", "Iniciar con todo",
 			"details.log", "Los mismos resultados están en logs/latest.log, bajo [Forbric/Deps]."));
 
 	// -------------------------------------------------------------------------------------------------------
@@ -765,5 +889,19 @@ public final class DialogLang {
 			"details.search", "buscar: {0}",
 			"details.mixin", "{0}  —  {1}",
 			"details.anchors", "não foi possível encontrar {0}",
+			"isolation.title", "Forbric — o jogo travou da última vez",
+			"isolation.intro", "O jogo travou da última vez que foi aberto, e o travamento aponta para estes mods:",
+			"isolation.intro.clash", "O jogo travou da última vez porque estes mods entram em conflito com {0}. O "
+					+ "Forbric pode manter {0} e iniciar sem:",
+			"isolation.bullet", "{0}  ({1})",
+			"isolation.without", "Iniciar sem eles grava os nomes dos arquivos em forbric-disabled.txt, ao lado da sua "
+					+ "pasta mods, e o Forbric não os carrega. Os arquivos ficam onde estão. Para reativar um, apague a "
+					+ "linha dele em forbric-disabled.txt.",
+			"isolation.note", "Isto é um palpite: o travamento aponta para estes mods, o que não prova que a culpa é "
+					+ "deles. Fechar esta janela inicia o jogo com todos os mods, como antes.",
+			"isolation.details.report", "O relatório do travamento está em crash-reports/{0}; a análise, em "
+					+ ".forbric-kernel/crash-analysis.txt.",
+			"button.isolation.without", "Iniciar sem {0}",
+			"button.isolation.everything", "Iniciar com tudo",
 			"details.log", "As mesmas informações estão em logs/latest.log, sob [Forbric/Deps]."));
 }

@@ -15,9 +15,10 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.mixin.MixinFit;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassReader;
@@ -31,8 +32,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  */
 @ResourceLock("system-properties")
 class CompostablesFallbackInjectorTest {
-	private static final Path MERGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"),
-			"run/merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path MODS = Path.of("build/compat-inputs/sweep90/mods");
 	private static final String COMPOSTER = "net/minecraft/world/level/block/ComposterBlock";
 	private static final String INPUT = COMPOSTER + "$InputContainer";
@@ -215,7 +215,8 @@ class CompostablesFallbackInjectorTest {
 	}
 
 	static byte[] entry(Path jar, String internal) throws Exception {
-		Assumptions.assumeTrue(Files.isRegularFile(jar) && Files.isRegularFile(MERGED), "sweep pack or merged base absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(jar), "sweep pack absent: " + jar);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "merged base absent: " + MERGED);
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ZipEntry entry = zip.getEntry(internal + ".class");
 			assertNotNull(entry, internal + " in " + jar);
@@ -226,7 +227,7 @@ class CompostablesFallbackInjectorTest {
 	/** A class from one of fabric-api 0.161's nested modules, as the sweep ships it. */
 	static byte[] fabricApi(String module, String internal) throws Exception {
 		Path api = MODS.resolve("fabric-api-0.161.0+26.2.jar");
-		Assumptions.assumeTrue(Files.isRegularFile(api), "sweep pack absent");
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(api), "sweep pack absent");
 		try (ZipFile zip = new ZipFile(api.toFile())) {
 			ZipEntry nested = zip.stream().filter(e -> e.getName().startsWith("META-INF/jars/" + module + "-")).findFirst().orElseThrow();
 			try (ZipInputStream inner = new ZipInputStream(new ByteArrayInputStream(zip.getInputStream(nested).readAllBytes()))) {

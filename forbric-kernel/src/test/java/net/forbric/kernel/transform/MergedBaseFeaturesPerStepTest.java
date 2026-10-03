@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -40,6 +39,9 @@ import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * Covers giving {@code ChunkGenerator.featuresPerStep} vanilla's descriptor back, against the REAL staged base.
  *
@@ -52,9 +54,7 @@ import org.objectweb.asm.tree.MethodNode;
  * any Fabric biome modification installed does not start.
  */
 class MergedBaseFeaturesPerStepTest {
-	private static final Path MERGED_BASE =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run", "merged-base",
-					"patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final String ENTRY = "net/minecraft/world/level/chunk/ChunkGenerator.class";
 	private static final String BINARY = "net.minecraft.world.level.chunk.ChunkGenerator";
 	private static final String LAZY = "Lnet/minecraftforge/common/util/ClearableLazy;";
@@ -186,13 +186,13 @@ class MergedBaseFeaturesPerStepTest {
 	}
 
 	private static byte[] original() throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
 		byte[] in = readClass(ENTRY);
-		assumeTrue(in != null, "ChunkGenerator absent from this base");
+		assertNotNull(in, "content drift: ChunkGenerator absent from this base");
 		ClassNode node = new ClassNode();
 		new ClassReader(in).accept(node, 0);
-		assumeTrue(node.fields.stream().anyMatch(f -> "featuresPerStep".equals(f.name) && LAZY.equals(f.desc)),
-				"this base no longer re-types ChunkGenerator.featuresPerStep — nothing to repair");
+		assertTrue(node.fields.stream().anyMatch(f -> "featuresPerStep".equals(f.name) && LAZY.equals(f.desc)),
+				"content drift: this base no longer re-types ChunkGenerator.featuresPerStep — nothing to repair");
 		return in;
 	}
 

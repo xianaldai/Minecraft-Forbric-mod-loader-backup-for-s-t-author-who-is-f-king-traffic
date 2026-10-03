@@ -162,11 +162,19 @@ def libraries(metadata, system=None, arch=None):
                 yield native
 
 
-def stage_minecraft(mc, native_dir, arch=None):
+NO_ASSETS = '.no-assets'
+
+
+def assets_skipped(mc):
+    """True when this Minecraft directory was prepared with --no-assets (enough for tests and dedicated servers)."""
+    return (mc / NO_ASSETS).is_file()
+
+
+def stage_minecraft(mc, native_dir, arch=None, assets=True):
     metadata = json.loads((mc / f'versions/{MC_VERSION}/{MC_VERSION}.json').read_text())
     native_dir.mkdir(parents=True, exist_ok=True)
     entries = list(libraries(metadata, arch=arch))
-    print(f'[dev] Resolving {len(entries)} platform libraries and Minecraft assets', flush=True)
+    print(f'[dev] Resolving {len(entries)} platform libraries' + (' and Minecraft assets' if assets else ''), flush=True)
     for entry in entries:
         jar = confined(mc / 'libraries', entry['path'])
         fetch(entry['url'], jar, entry['sha1'], size=entry.get('size'),
@@ -178,6 +186,22 @@ def stage_minecraft(mc, native_dir, arch=None):
                     destination = native_dir / Path(name).name
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_bytes(archive.read(name))
+    if assets:
+        stage_assets(mc, metadata)
+        (mc / NO_ASSETS).unlink(missing_ok=True)
+    else:
+        # Unit tests and dedicated-server gates never read assets; only the client does. Leave a marker so a later
+        # client launch knows to fetch them instead of reporting a broken install.
+        (mc / NO_ASSETS).write_text('prepared with --no-assets\n')
+        print('[dev] Assets skipped (--no-assets): enough for tests and dedicated servers, not for the client', flush=True)
+    # Forge-family runtimes omit JLine as a game-provided library, but vanilla metadata does not list it.
+    for name, sha in CONSOLE_PINS:
+        relative = f'org/jline/{name}/3.25.1/{name}-3.25.1.jar'
+        fetch('https://repo.maven.apache.org/maven2/' + relative, mc / 'libraries' / relative,
+              sha, 'sha256', cache=default_minecraft_dir() / 'libraries' / relative)
+
+
+def stage_assets(mc, metadata):
     index = metadata['assetIndex']
     path = mc / 'assets/indexes' / (index['id'] + '.json')
     fetch(index['url'], path, index['sha1'], size=index.get('size'),
@@ -195,11 +219,6 @@ def stage_minecraft(mc, native_dir, arch=None):
             if count % 1000 == 0:
                 print(f'[dev] Assets: {count}/{len(objects)}', flush=True)
     print(f'[dev] {len(objects)} assets ready', flush=True)
-    # Forge-family runtimes omit JLine as a game-provided library, but vanilla metadata does not list it.
-    for name, sha in CONSOLE_PINS:
-        relative = f'org/jline/{name}/3.25.1/{name}-3.25.1.jar'
-        fetch('https://repo.maven.apache.org/maven2/' + relative, mc / 'libraries' / relative,
-              sha, 'sha256', cache=default_minecraft_dir() / 'libraries' / relative)
 
 
 def java_bin(requested=None):
@@ -258,18 +277,19 @@ def prepare(args, java, env):
     gradle('forbric-kernel-installer', ['devToolsJar'], env)
     tools = ROOT / 'forbric-kernel-installer/build/libs/forbric-dev-tools.jar'
     subprocess.run([java, '-jar', str(tools), str(mc), str(stage), java], cwd=ROOT, env=env, check=True)
-    stage_minecraft(mc, natives, env['FORBRIC_DEV_ARCH'])
+    stage_minecraft(mc, natives, env['FORBRIC_DEV_ARCH'], assets=not getattr(args, 'no_assets', False))
     for name, url, sha in API_PINS:
         fetch(url, STATE / 'api' / name, sha, 'sha256')
     print('[dev] Prepared. Launch with python3 tools/dev.py client (Windows: py tools/dev.py client).', flush=True)
 
 
-def ready(mc, stage, natives, arch=None):
+def ready(mc, stage, natives, arch=None, assets=True):
+    """Prepared for this use. assets=False is for tests and dedicated servers, which never read them."""
     basic = (all((stage / p).is_file() for p in STAGED_FILES)
             and all((STATE / 'api' / name).is_file() and digest(STATE / 'api' / name) == sha
                     for name, _, sha in API_PINS)
             and (mc / f'versions/{MC_VERSION}/{MC_VERSION}.json').is_file()
-            and (mc / 'assets/indexes').is_dir() and natives.is_dir())
+            and (not assets or (mc / 'assets/indexes').is_dir()) and natives.is_dir())
     if not basic:
         return False
     metadata = json.loads((mc / f'versions/{MC_VERSION}/{MC_VERSION}.json').read_text())
@@ -277,6 +297,8 @@ def ready(mc, stage, natives, arch=None):
         return False
     if any(not (mc / f'libraries/org/jline/{name}/3.25.1/{name}-3.25.1.jar').is_file() for name, _ in CONSOLE_PINS):
         return False
+    if not assets:
+        return any(p.is_file() for p in natives.iterdir())
     index = confined(mc / 'assets/indexes', metadata['assetIndex']['id'] + '.json')
     if not index.is_file():
         return False
@@ -381,7 +403,10 @@ def java_command(java, argument_file, arguments, windows=None, launcher=None):
 
 def launch(args, java, env):
     mc, stage, instance, natives = options(args, env['FORBRIC_DEV_ARCH'])
-    if not ready(mc, stage, natives, env['FORBRIC_DEV_ARCH']):
+    if args.command == 'client' and args.no_assets:
+        raise RuntimeError('the client needs Minecraft assets; drop --no-assets')
+    need_assets = args.command == 'client' or not (args.no_assets or assets_skipped(mc))
+    if not ready(mc, stage, natives, env['FORBRIC_DEV_ARCH'], assets=need_assets):
         if args.no_build:
             raise RuntimeError('development inputs missing; run prepareDev first')
         prepare(args, java, env)
@@ -435,9 +460,13 @@ def doctor(args):
         path = STATE / 'api' / name
         if not path.is_file() or digest(path) != sha:
             failures.append('missing or incorrect API: ' + str(path))
-    if not ready(mc, stage, natives, arch):
+    skipped = assets_skipped(mc)
+    if not ready(mc, stage, natives, arch, assets=not skipped):
         failures.append('Minecraft libraries/assets/natives or staged APIs need preparation')
     print(f'[dev] Minecraft: {mc}\n[dev] Stage: {stage}\n[dev] Instance: {instance}')
+    if skipped:
+        print('[dev] Assets were deliberately not prepared (--no-assets): tests and servers only; '
+              'run prepare without it before launching the client')
     for message in failures:
         print('[dev] NEEDS PREPARATION: ' + message)
     print('[dev] ' + ('run python3 tools/dev.py prepare' if failures else 'ready'))
@@ -454,6 +483,8 @@ def main(argv=None):
     parser.add_argument('--java', help='JDK home or java executable; FORBRIC_JAVA, JAVA_HOME, then PATH')
     parser.add_argument('--jvm', action='append', default=[], help='repeat --jvm=-Dkey=value')
     parser.add_argument('--accept-eula', action='store_true', help='accept https://aka.ms/MinecraftEULA for the dev server')
+    parser.add_argument('--no-assets', action='store_true',
+                        help='prepare: skip the ~1 GB of Minecraft assets; enough for tests and dedicated servers')
     parser.add_argument('--dry-run', action='store_true', help='build and print launch command without starting Minecraft')
     parser.add_argument('--no-build', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--gate', default='m0', help='gate name, e.g. m0 or m33-transfer')
@@ -472,6 +503,9 @@ def main(argv=None):
         if args.command == 'tool-test':
             subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', str(ROOT / 'tools'), '-p', 'test_*.py'], check=True, cwd=ROOT)
             subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', str(KERNEL / 'run/compat'), '-p', 'test_*.py'], check=True, cwd=KERNEL)
+            # mac/ is not a package, so the call above never descends into it; its tools import each other flat.
+            mac = KERNEL / 'run/compat/mac'
+            subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', str(mac), '-t', str(mac), '-p', 'test_*.py'], check=True, cwd=KERNEL)
             return 0
         java = java_bin(args.java)
         env = java_environment(java, minimum=21 if args.command == 'test' else 25)
@@ -483,7 +517,7 @@ def main(argv=None):
             gradle('forbric-kernel', ['check'], env)
         elif args.command == 'integration':
             mc, stage, _, natives = options(args, env['FORBRIC_DEV_ARCH'])
-            if not ready(mc, stage, natives, env['FORBRIC_DEV_ARCH']):
+            if not ready(mc, stage, natives, env['FORBRIC_DEV_ARCH'], assets=not (args.no_assets or assets_skipped(mc))):
                 prepare(args, java, env)
             gradle('forbric-kernel', ['cleanTest', 'cleanTransferTest', 'integrationTest'] + build_properties(mc, stage), env)
         elif args.command == 'gate':

@@ -11,6 +11,7 @@ Results append to per-mod/results.jsonl; evidence per jar in per-mod/<jar>/.
 """
 import hashlib, json, os, shlex, shutil, subprocess, sys, time
 from pathlib import Path
+from sweep_verdict import classify_run, mod_status, subject_strict
 
 HERE = Path(os.environ.get('PERMOD_DATA', str(Path(__file__).resolve().parents[3] / 'build' / 'sweep100-mac-network')))
 TOOLS = Path(__file__).resolve().parent
@@ -47,31 +48,6 @@ def prepare(jars):
     shutil.copy2(FIXTURES / 'options-base.txt', INST / 'options.txt')
 
 
-def classify_run(driver, console, crashes):
-    if crashes or 'Game crashed' in console or 'Preparing crash report' in console:
-        return 'CRASH'
-    if 'PASS client' in driver:
-        return 'PASS'
-    if 'stopped producing output' in driver:
-        return 'STALL' if 'joined world via quick-play' not in console else 'STALL_IN_WORLD'
-    if 'joined world via quick-play' not in console:
-        return 'NO_WORLD'
-    if 'drew=False' in driver:
-        return 'NOT_DRAWN'
-    return 'FAIL'
-
-
-def mod_status(jar, report):
-    rows = [m for m in report.get('mods', []) if m.get('jar') == jar]
-    own = {m['modId'] for m in rows}
-    rows += [m for m in report.get('mods', []) if m.get('bundledBy') in own and m not in rows]
-    if not rows:
-        return 'ABSENT', []
-    worst = 'FAILED' if any(m['status'] == 'FAILED' for m in rows) else \
-            'DEGRADED' if any(m['status'] != 'OK' for m in rows) else 'OK'
-    return worst, [f"{m['modId']}={m['status']}" for m in rows if m['status'] != 'OK']
-
-
 def test(jar, deps):
     before = kernel_fingerprint()
     inputs = {name: hashlib.sha256((DATA / 'mods' / name).read_bytes()).hexdigest() for name in [jar] + deps}
@@ -106,9 +82,7 @@ def test(jar, deps):
     dependency_issues = [m['modId'] + '=' + m['status'] for m in report.get('mods', []) if m.get('status') != 'OK']
     missing = json.loads((DATA / 'closure-missing.json').read_text()) if (DATA / 'closure-missing.json').exists() else {}
     unresolved = {name: missing[name] for name in [jar] + deps if missing.get(name)}
-    strict = (run == 'PASS' and status == 'OK' and bool(report.get('mods')) and
-              not dependency_issues and not unresolved and not report.get('catalogFailures') and
-              report.get('confirmedRequired', 0) == 0)
+    strict = subject_strict(run, status, report, unresolved)
     for stack in INST.glob('thread-dump-*.txt'):
         shutil.copy2(stack, ev / stack.name)
     if kernel_fingerprint() != before:

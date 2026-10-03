@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,6 +33,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
@@ -54,8 +54,7 @@ import org.objectweb.asm.tree.MethodNode;
  * verify, so a test that merely defines the broken class passes.
  */
 class MergedBaseFrameRecomputerTest {
-	private static final Path RUN = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run")
-			.normalize();
+	private static final Path RUN = TestFixtures.stagedRoot();
 	private static final Path MERGED = RUN.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path FORGE_RT = RUN.resolve("forge-runtime/forge-runtime.jar");
 	private static final Path NEO_RT = RUN.resolve("neoforge-runtime/neoforge-runtime.jar");
@@ -194,7 +193,7 @@ class MergedBaseFrameRecomputerTest {
 
 	/** Reads class bytes out of the staged jars, exactly as the loader's resource lookup would. */
 	private Function<String, byte[]> resolver() throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED) && Files.isRegularFile(FORGE_RT) && Files.isRegularFile(NEO_RT),
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED) && Files.isRegularFile(FORGE_RT) && Files.isRegularFile(NEO_RT),
 				"staged merged base and carriers absent — skipping the real-hierarchy check");
 		List<ZipFile> jars = new ArrayList<>();
 		for (Path p : List.of(MERGED, FORGE_RT, NEO_RT)) {
@@ -221,15 +220,9 @@ class MergedBaseFrameRecomputerTest {
 		};
 	}
 
-	private byte[] victimBytes() throws IOException {
-		assumeTrue(Files.isRegularFile(IPN), "InventoryProfilesNext not staged — skipping the real-jar check");
-		try (ZipFile jar = new ZipFile(IPN.toFile())) {
-			ZipEntry entry = jar.getEntry(VICTIM + ".class");
-			assumeTrue(entry != null, "the class moved in this build of the mod");
-			try (InputStream in = jar.getInputStream(entry)) {
-				return in.readAllBytes();
-			}
-		}
+	private byte[] victimBytes() {
+		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(IPN), "InventoryProfilesNext not staged — skipping the real-jar check");
+		return TestFixtures.requireEntry(Fixture.THIRD_PARTY, IPN, VICTIM + ".class");
 	}
 
 	/** A loader over the staged game jars that can also be handed bytes directly. */
@@ -252,7 +245,7 @@ class MergedBaseFrameRecomputerTest {
 	 * tree the build resolves brigadier from.
 	 */
 	private GameLoader gameLoader() throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED) && Files.isRegularFile(FORGE_RT) && Files.isRegularFile(NEO_RT),
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED) && Files.isRegularFile(FORGE_RT) && Files.isRegularFile(NEO_RT),
 				"staged jars absent");
 		List<Path> paths = new ArrayList<>(List.of(MERGED, FORGE_RT, NEO_RT));
 		// The mod's own jar and its library: linkage reads the signatures of all 66 methods, most of which name
@@ -262,7 +255,7 @@ class MergedBaseFrameRecomputerTest {
 		if (Files.isRegularFile(libipn)) paths.add(libipn);
 		for (String artifact : List.of("com/mojang/datafixerupper", "it/unimi/dsi/fastutil")) {
 			Path lib = newestUnder(artifact);
-			assumeTrue(lib != null, artifact + " absent from the Minecraft library tree — skipping");
+			TestFixtures.require(Fixture.MC_LIBRARIES, lib != null, artifact + " absent from the Minecraft library tree — skipping");
 			paths.add(lib);
 		}
 		java.net.URL[] urls = new java.net.URL[paths.size()];

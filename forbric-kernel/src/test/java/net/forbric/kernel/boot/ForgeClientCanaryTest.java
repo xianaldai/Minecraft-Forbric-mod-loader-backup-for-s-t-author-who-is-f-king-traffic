@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -17,6 +16,8 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.objectweb.asm.ClassReader;
@@ -33,8 +34,9 @@ class ForgeClientCanaryTest {
 
 	@Test
 	void packagedCanarySubscribesTheThreeEventsOnlyBehindItsClientClassBoundary() throws Exception {
-		Path jar = WorldgenCanaryDataTest.LOADER.resolve("run/forge-runtime/forbriclive.jar");
-		assumeTrue(Files.isRegularFile(jar), "build canaries with forbric-loader/run/build-testmods.sh");
+		Path jar = WorldgenCanaryDataTest.STAGED.resolve("forge-runtime/forbriclive.jar");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar),
+				"build canaries with forbric-loader/run/build-testmods.sh");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ClassNode client = new ClassNode();
 			new ClassReader(bytes(zip, "forbric/live/ForbricLiveClient.class")).accept(client, 0);
@@ -75,8 +77,9 @@ class ForgeClientCanaryTest {
 
 	@Test
 	void presetListenerUsesTheModsBusGroupAndTheGateRequiresItsDelivery() throws Exception {
-		Path jar = WorldgenCanaryDataTest.LOADER.resolve("run/forge-runtime/forbriclive.jar");
-		assumeTrue(Files.isRegularFile(jar), "build canaries with forbric-loader/run/build-testmods.sh");
+		Path jar = WorldgenCanaryDataTest.STAGED.resolve("forge-runtime/forbriclive.jar");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar),
+				"build canaries with forbric-loader/run/build-testmods.sh");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ClassNode client = new ClassNode();
 			new ClassReader(bytes(zip, "forbric/live/ForbricLiveClient.class")).accept(client, 0);

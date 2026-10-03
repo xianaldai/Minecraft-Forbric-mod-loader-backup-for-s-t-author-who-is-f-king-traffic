@@ -2,7 +2,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -19,16 +18,19 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /** Each isModdedPayload in the merged common listeners' handleCustomPayload is followed by the kernel's verdict. */
 @ResourceLock("system-properties")
 class ForeignPayloadReceiveInjectorTest {
-	private static final Path MERGED = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"))
+	private static final Path MERGED = TestFixtures.stagedRoot()
 			.resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	@AfterEach void reset() { System.clearProperty(ForeignPayloadReceiveInjector.PROPERTY); }
 
 	@Test void bothCommonListenersAskTheKernelAfterNeoForge() throws Exception {
-		assumeTrue(Files.isRegularFile(MERGED), "merged base not staged: " + MERGED);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "merged base not staged: " + MERGED);
 		for (String target : ForeignPayloadReceiveInjector.TARGETS) {
 			byte[] original = NativeCoremodParityTest.read(MERGED, target.replace('.', '/'));
 			byte[] out = new ForeignPayloadReceiveInjector().transform(target, original, null);

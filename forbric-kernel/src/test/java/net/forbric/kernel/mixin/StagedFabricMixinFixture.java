@@ -3,14 +3,14 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.zip.*;
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.*;
 /** Reads unmodified upstream modules; no test-written stand-in for their injection contracts. */
 final class StagedFabricMixinFixture {
  static ClassNode mixin(String module,String name)throws Exception{
-  Path api=TestFixtures.fabricApi();assumeTrue(Files.isRegularFile(api),"actual Fabric API fixture required");
+  Path api=TestFixtures.fabricApi();TestFixtures.require(Fixture.STAGED,Files.isRegularFile(api),"actual Fabric API fixture required");
   try(ZipFile z=new ZipFile(api.toFile())){
    ZipEntry e=z.stream().filter(x->x.getName().startsWith("META-INF/jars/"+module+"-")).findFirst().orElseThrow();
    try(ZipInputStream inner=new ZipInputStream(z.getInputStream(e))){for(ZipEntry entry;(entry=inner.getNextEntry())!=null;)if(entry.getName().equals(name+".class"))return MixinFit.parse(inner.readAllBytes());}
@@ -21,9 +21,8 @@ final class StagedFabricMixinFixture {
   return game("net/minecraft/world/entity/LivingEntity",vanilla);
  }
  static ClassNode game(String name,boolean vanilla)throws Exception{
-  Path p=vanilla?TestFixtures.vanillaJar():
-    Path.of(System.getenv().getOrDefault("FORBRIC_OLD","../forbric-loader"),"run/merged-base/patched-mc-merged-26.2.jar");
-  assumeTrue(Files.isRegularFile(p),"actual game required");
+  Path p=vanilla?TestFixtures.vanillaJar():TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+  TestFixtures.require(vanilla?Fixture.MC_LIBRARIES:Fixture.STAGED,Files.isRegularFile(p),"actual game required");
   try(ZipFile z=new ZipFile(p.toFile())){return MixinFit.parse(z.getInputStream(z.getEntry(name+".class")).readAllBytes());}
  }
  static MethodNode method(ClassNode c,String name){return c.methods.stream().filter(m->m.name.equals(name)).findFirst().orElseThrow();}

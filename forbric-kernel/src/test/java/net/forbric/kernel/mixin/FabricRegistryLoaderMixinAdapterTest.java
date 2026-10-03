@@ -1,15 +1,16 @@
 package net.forbric.kernel.mixin;
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.nio.file.*;
 import java.util.zip.ZipFile;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.*;
 
 class FabricRegistryLoaderMixinAdapterTest {
 	private ClassNode mixin() throws Exception {
-		Path path=Path.of("build/compat-inputs/player-loading/api/fabric-registry-sync-v0-7.1.1+c7bd5b8e9e.jar");assumeTrue(Files.isRegularFile(path));
+		Path path=Path.of("build/compat-inputs/player-loading/api/fabric-registry-sync-v0-7.1.1+c7bd5b8e9e.jar");TestFixtures.require(Fixture.THIRD_PARTY,Files.isRegularFile(path),path+" absent");
 		try(ZipFile zip=new ZipFile(path.toFile())){return MixinFit.parse(zip.getInputStream(zip.getEntry("net/fabricmc/fabric/mixin/registry/sync/RegistryDataLoaderMixin.class")).readAllBytes());}
 	}
 	@Test void serverBindingAndAsyncCaptureUseBothLiveOverloads() throws Exception {

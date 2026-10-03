@@ -19,7 +19,6 @@ package net.forbric.kernel.boot;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -44,6 +43,7 @@ import com.electronwill.nightconfig.core.UnmodifiableConfig;
 import com.electronwill.nightconfig.toml.TomlFormat;
 import com.electronwill.nightconfig.toml.TomlParser;
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -68,8 +68,7 @@ import net.forbric.kernel.metadata.forge.FmlConfigElements;
  * the one parent-loaded copy, so a carrier's bundled copy never defines a second {@code Config}.
  */
 class FmlTomlShapeOracleTest {
-	private static final Path RUN = Path.of(System.getenv().getOrDefault("FORBRIC_OLD",
-			System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path RUN = TestFixtures.stagedRoot().normalize();
 	private static final Path NEO_CARRIER = RUN.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final Path FORGE_CARRIER = RUN.resolve("merged-base/forge-runtime-interop.jar");
 
@@ -371,15 +370,15 @@ class FmlTomlShapeOracleTest {
 	// --- the oracle -------------------------------------------------------------------------------------------
 
 	private static URLClassLoader neoOracle() throws IOException {
-		assumeTrue(Files.isRegularFile(NEO_CARRIER), "staged neoforge-runtime.jar absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEO_CARRIER), "staged neoforge-runtime.jar absent");
 		return new URLClassLoader(new URL[] {NEO_CARRIER.toUri().toURL()}, FmlTomlShapeOracleTest.class.getClassLoader());
 	}
 
 	/** MinecraftForge's wrapper builds its answer with Guava, which Minecraft supplies and the kernel never ships. */
 	private static URLClassLoader forgeOracle() throws IOException {
-		assumeTrue(Files.isRegularFile(FORGE_CARRIER), "staged forge-runtime-interop.jar absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE_CARRIER), "staged forge-runtime-interop.jar absent");
 		Path guava = newestGuava();
-		assumeTrue(guava != null, "no Guava in the local Minecraft library tree");
+		TestFixtures.require(Fixture.MC_LIBRARIES, guava != null, "no Guava in the local Minecraft library tree");
 		return new URLClassLoader(new URL[] {FORGE_CARRIER.toUri().toURL(), guava.toUri().toURL()},
 				FmlTomlShapeOracleTest.class.getClassLoader());
 	}

@@ -1,15 +1,16 @@
 package net.forbric.kernel.transform;
 import static org.junit.jupiter.api.Assertions.*;
 import java.nio.file.*;
-import java.util.zip.ZipFile;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 class ServerCompatibilityTickInjectorTest {
  @Test void everyNormalReturnInTheActualServerHasOneCheckAndSecondPassDoesNothing() throws Exception {
-  Path jar=Path.of(System.getenv().getOrDefault("FORBRIC_OLD","../forbric-loader"),"run/merged-base/patched-mc-merged-26.2.jar");
-  org.junit.jupiter.api.Assumptions.assumeTrue(Files.isRegularFile(jar),"actual game fixture required");
-  byte[] bytes;try(ZipFile zip=new ZipFile(jar.toFile())){bytes=zip.getInputStream(zip.getEntry("net/minecraft/server/MinecraftServer.class")).readAllBytes();}
+  Path jar=TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+  TestFixtures.require(Fixture.STAGED,Files.isRegularFile(jar),"actual game fixture required");
+  byte[] bytes=TestFixtures.requireEntry(Fixture.STAGED,jar,"net/minecraft/server/MinecraftServer.class");
   var injector=new ServerCompatibilityTickInjector();byte[] transformed=injector.transform("net.minecraft.server.MinecraftServer",bytes,null);
   assertNotSame(bytes,transformed);assertSame(transformed,injector.transform("net.minecraft.server.MinecraftServer",transformed,null));
   ClassNode node=new ClassNode();new ClassReader(transformed).accept(node,0);int returns=0,checks=0;

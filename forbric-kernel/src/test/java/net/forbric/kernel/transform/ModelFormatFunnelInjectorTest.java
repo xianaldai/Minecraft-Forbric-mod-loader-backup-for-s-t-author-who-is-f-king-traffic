@@ -20,14 +20,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -43,6 +38,9 @@ import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /**
  * The funnel against the REAL {@code UnbakedModelParser$Deserializer} out of the staged NeoForge carrier: one call,
  * in the one place that is ahead of every NeoForge decision about {@code "loader"} and behind its "is this an
@@ -50,8 +48,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  */
 @org.junit.jupiter.api.parallel.ResourceLock("system-properties")
 class ModelFormatFunnelInjectorTest {
-	private static final Path STAGED =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path STAGED = TestFixtures.stagedRoot();
 	private static final Path NEO_CARRIER = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final String ENTRY = ModelFormatFunnelInjector.TARGET + ".class";
 	private static final String BINARY = ModelFormatFunnelInjector.TARGET.replace('/', '.');
@@ -183,13 +180,6 @@ class ModelFormatFunnelInjectorTest {
 	}
 
 	static byte[] original() throws IOException {
-		assumeTrue(Files.isRegularFile(NEO_CARRIER), "staged NeoForge carrier absent");
-		try (ZipFile zip = new ZipFile(NEO_CARRIER.toFile())) {
-			ZipEntry entry = zip.getEntry(ENTRY);
-			assumeTrue(entry != null, "UnbakedModelParser$Deserializer absent from this carrier");
-			try (InputStream in = zip.getInputStream(entry)) {
-				return in.readAllBytes();
-			}
-		}
+		return TestFixtures.requireEntry(Fixture.STAGED, NEO_CARRIER, ENTRY);
 	}
 }

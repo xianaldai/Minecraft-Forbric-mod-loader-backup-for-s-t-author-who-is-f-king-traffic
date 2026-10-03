@@ -2,7 +2,6 @@
 package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,16 +15,19 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
+
 /** MinecraftForge's attribute validate callback calls the kernel's gate instead of DefaultAttributes.validate. */
 @ResourceLock("system-properties")
 class ForgeAttributeValidationInjectorTest {
-	private static final Path FORGE = Path.of(System.getProperty("forbric.stagedRoot", "../forbric-loader/run"))
+	private static final Path FORGE = TestFixtures.stagedRoot()
 			.resolve("forge-runtime/forge-runtime.jar");
 
 	@AfterEach void reset() { System.clearProperty(ForgeAttributeValidationInjector.PROPERTY); }
 
 	@Test void onValidateGoesThroughTheKernel() throws Exception {
-		assumeTrue(Files.isRegularFile(FORGE), "forge runtime not staged: " + FORGE);
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE), "forge runtime not staged: " + FORGE);
 		String target = ForgeAttributeValidationInjector.TARGET;
 		byte[] original = NativeCoremodParityTest.read(FORGE, target.replace('.', '/'));
 		byte[] out = new ForgeAttributeValidationInjector().transform(target, original, null);

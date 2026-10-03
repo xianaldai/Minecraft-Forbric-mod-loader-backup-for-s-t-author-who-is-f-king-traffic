@@ -19,7 +19,6 @@ package net.forbric.kernel.boot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,6 +30,8 @@ import java.util.TreeSet;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
@@ -110,7 +111,7 @@ class KernelForgeGatherStatesTest {
 	@Test
 	void theCarrierKeepsTheSetAndTheseAreItsGatherStates() throws Exception {
 		Path jar = carrier();
-		assumeTrue(Files.isRegularFile(jar), jar + " absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), jar + " absent");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ClassNode loader = read(zip, MOD_LOADER);
 			FieldNode set = loader.fields.stream().filter(f -> f.name.equals("COMPLETED_STATES")).findFirst().orElseThrow();
@@ -136,7 +137,7 @@ class KernelForgeGatherStatesTest {
 		Path run = run();
 		List<Path> jars = List.of(run.resolve("merged-base/patched-mc-merged-26.2.jar"), carrier(),
 				run.resolve("neoforge-runtime/neoforge-runtime.jar"));
-		for (Path jar : jars) assumeTrue(Files.isRegularFile(jar), jar + " absent");
+		for (Path jar : jars) TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), jar + " absent");
 		TreeSet<String> readers = new TreeSet<>();
 		byte[] needle = "hasCompletedState".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
 		for (Path jar : jars) {
@@ -207,7 +208,7 @@ class KernelForgeGatherStatesTest {
 	}
 
 	private static Path run() {
-		return Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+		return TestFixtures.stagedRoot().normalize();
 	}
 
 	private static Path carrier() {

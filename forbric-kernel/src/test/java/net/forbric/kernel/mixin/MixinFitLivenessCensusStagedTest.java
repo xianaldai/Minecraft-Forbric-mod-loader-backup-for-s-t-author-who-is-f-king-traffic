@@ -1,7 +1,6 @@
 package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -37,6 +36,8 @@ import com.electronwill.nightconfig.core.UnmodifiableConfig;
 import com.electronwill.nightconfig.json.JsonFormat;
 
 import net.forbric.api.Ecosystem;
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * Census: every guest mixin of the five compatibility packs, judged as KernelGuestMixinAdapter judges it (MixinFit, then
@@ -52,10 +53,9 @@ import net.forbric.api.Ecosystem;
  */
 @ResourceLock("system-properties")
 class MixinFitLivenessCensusStagedTest {
-	private static final String OLD = System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader");
-	private static final Path MERGED = Path.of(OLD, "run/merged-base/patched-mc-merged-26.2.jar");
-	private static final Path INTEROP = Path.of(OLD, "run/merged-base/forge-runtime-interop.jar");
-	private static final Path NEO_RUNTIME = Path.of(OLD, "run/neoforge-runtime/neoforge-runtime.jar");
+	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path INTEROP = TestFixtures.stagedRoot().resolve("merged-base/forge-runtime-interop.jar");
+	private static final Path NEO_RUNTIME = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
 	private static final Map<String, Path> PACKS = new LinkedHashMap<>();
 	static {
 		String other = System.getenv("FORBRIC_LIVENESS_PACKS");    // "name=dir;name=dir": census those instead, report only
@@ -105,8 +105,8 @@ class MixinFitLivenessCensusStagedTest {
 
 	@Test
 	void exactlyThePinnedMixinsChangeVerdict() throws Exception {
-		for (Path p : List.of(MERGED, INTEROP, NEO_RUNTIME)) assumeTrue(Files.isRegularFile(p), p + " required");
-		for (Path p : PACKS.values()) assumeTrue(Files.isDirectory(p), p + " required (symlink it from the main checkout)");
+		for (Path p : List.of(MERGED, INTEROP, NEO_RUNTIME)) TestFixtures.require(Fixture.STAGED, Files.isRegularFile(p), p + " required");
+		for (Path p : PACKS.values()) TestFixtures.require(Fixture.THIRD_PARTY, Files.isDirectory(p), p + " required (symlink it from the main checkout)");
 		Map<String, byte[]> game = new HashMap<>();
 		for (Path jar : List.of(NEO_RUNTIME, INTEROP, MERGED)) game.putAll(read(Files.readAllBytes(jar), n -> n.endsWith(".class")));
 		// The one step of the transform chain that removes methods an injector binds to: the merge's orphaned duplicate

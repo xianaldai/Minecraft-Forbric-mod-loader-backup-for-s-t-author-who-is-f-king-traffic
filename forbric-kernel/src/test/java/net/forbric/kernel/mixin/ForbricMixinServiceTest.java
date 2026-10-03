@@ -16,6 +16,8 @@
 
 package net.forbric.kernel.mixin;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -119,6 +121,41 @@ class ForbricMixinServiceTest {
 			assertTrue(property.evidence().contains("source=-Dforbric.suppressMixins"), property.evidence().toString());
 			assertTrue(findings.stream().noneMatch(f -> f.id().contains("StillRunsMixin")), "a kept mixin is not reported");
 			assertTrue(net.forbric.api.CompatibilityFindings.confirmedRequired().isEmpty());
+		} finally {
+			ForbricMixinService.bind(null, net.fabricmc.api.EnvType.SERVER);
+			net.forbric.api.CompatibilityFindings.reset();
+		}
+	}
+
+	/**
+	 * What MixinOverlapLint reads: the config as Mixin was served it, so a mixin the kernel dropped is not half of an
+	 * overlap, and the jar's own bytes for a config nothing rewrote.
+	 */
+	@Test
+	void theServedConfigIsTheOneMixinReadNotTheJars(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+			throws Exception {
+		String config = "overlap-served.mixins.json";
+		String untouched = "overlap-untouched.mixins.json";
+		String json = "{\"package\":\"x.y\",\"mixins\":[\"Kept\",\"Dropped\"]}";
+		java.nio.file.Path jar = dir.resolve("served.jar");
+		try (var out = new java.util.jar.JarOutputStream(java.nio.file.Files.newOutputStream(jar))) {
+			for (String name : List.of(config, untouched)) {
+				out.putNextEntry(new java.util.jar.JarEntry(name));
+				out.write(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+				out.closeEntry();
+			}
+		}
+		System.setProperty("forbric.suppressMixins", config + ":Dropped");
+		try (var loader = new net.forbric.kernel.classloading.ForbricClassLoader(new java.net.URL[] {jar.toUri().toURL()},
+				getClass().getClassLoader())) {
+			ForbricMixinService.bind(loader, net.fabricmc.api.EnvType.CLIENT);
+			byte[] read;
+			try (var in = new ForbricMixinService().getResourceAsStream(config)) {
+				read = in.readAllBytes();
+			}
+			assertFalse(new String(read, java.nio.charset.StandardCharsets.UTF_8).contains("Dropped"), "precondition");
+			assertArrayEquals(read, ForbricMixinService.servedConfig(config));
+			assertEquals(json, new String(ForbricMixinService.servedConfig(untouched), java.nio.charset.StandardCharsets.UTF_8));
 		} finally {
 			ForbricMixinService.bind(null, net.fabricmc.api.EnvType.SERVER);
 			net.forbric.api.CompatibilityFindings.reset();

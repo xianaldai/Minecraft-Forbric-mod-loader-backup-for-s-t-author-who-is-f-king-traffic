@@ -17,7 +17,6 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -49,7 +48,8 @@ class DependencyAuditOrderingTest {
 	@Test
 	void theAuditRunsAfterMixinHasRegisteredItsConfigs() throws Exception {
 		MethodNode launch = method("launch");
-		assumeTrue(launch != null, "KernelBoot not compiled yet");
+		assertTrue(launch != null,
+				"KernelBoot.launch not found in the compiled src/main classes, which exist before any test runs");
 
 		int mixin = indexOfCall(launch, "init");
 		int audit = indexOfCall(launch, "reportDependencies");
@@ -65,7 +65,9 @@ class DependencyAuditOrderingTest {
 	void theSeederNoLongerRunsTheAuditItself() throws Exception {
 		// The other half: leaving the old call in place would make the assertion above true and change nothing.
 		MethodNode seeder = seederMethodThatBuildsPresence();
-		assumeTrue(seeder != null, "PassiveSeeder not compiled yet");
+		assertTrue(seeder != null,
+				"PassiveSeeder's presence-building method not found in the compiled src/main classes, which exist "
+						+ "before any test runs");
 
 		assertTrue(indexOfCall(seeder, "report") < 0,
 				"the seeder must hold the list rather than judging it, or the empty-list report is still there "

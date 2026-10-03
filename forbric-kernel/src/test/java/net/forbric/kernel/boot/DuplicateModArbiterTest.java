@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -92,7 +91,8 @@ class DuplicateModArbiterTest {
 		// 189 of com.electronwill.nightconfig.core into itself, and without this they WERE the whole recorded set
 		// for that mod on the live 28-mod instance.
 		String shadedLibrary = "org/objectweb/asm/ClassReader";
-		assumeTrue(ClassLoader.getSystemResource(shadedLibrary + ".class") != null,
+		// ASM is on the test classpath, which Gradle hands the system loader.
+		assertNotNull(ClassLoader.getSystemResource(shadedLibrary + ".class"),
 				"this check needs a class the system loader serves");
 		Path fabric = nestingJar(dir.resolve("s-fabric.jar"),
 				new String[] { "s/Shared", "s/OnlyFabric", "other/FromAnotherMod", shadedLibrary }, null);

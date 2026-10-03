@@ -1,7 +1,6 @@
 package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.nio.file.*;
 import java.util.*;
 import java.util.function.Consumer;
@@ -12,6 +11,7 @@ import net.forbric.api.CompatibilityFindings;
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ModCatalog;
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.*;
@@ -29,14 +29,14 @@ class CarpetMixinAdapterTest {
 	static final String SWAP_HOST="handlePlayerAction(Lnet/minecraft/network/protocol/game/ServerboundPlayerActionPacket;)V";
 	static final String BREAK_HOST="destroyBlock("+CarpetMixinAdapter.POS+")Z";
 	static ClassNode mixin(String name)throws Exception {
-		return from(CARPET,"carpet/mixins/"+name);
+		return from(Fixture.THIRD_PARTY,CARPET,"carpet/mixins/"+name);
 	}
 	static Path jarOf(String name) {
-		Path root=Path.of(System.getProperty("forbric.stagedRoot"));
+		Path root=TestFixtures.stagedRoot();
 		return root.resolve(name.startsWith("net/minecraftforge/")?"forge-runtime/forge-runtime.jar":name.startsWith("net/neoforged/")?"neoforge-runtime/neoforge-runtime.jar":"merged-base/patched-mc-merged-26.2.jar");
 	}
 	static ClassNode target(String name) {
-		try{return from(jarOf(name),name);}
+		try{return from(Fixture.STAGED,jarOf(name),name);}
 		catch(org.opentest4j.TestAbortedException e){throw e;}
 		catch(Exception e){throw new AssertionError(e);}
 	}
@@ -47,8 +47,8 @@ class CarpetMixinAdapterTest {
 		try(ZipFile zip=new ZipFile(jarOf(name).toFile())){var e=zip.getEntry(path);return e==null?null:zip.getInputStream(e).readAllBytes();}
 		catch(Exception e){throw new AssertionError(e);}
 	}
-	static ClassNode from(Path jar,String name)throws Exception {
-		assumeTrue(Files.isRegularFile(jar),"real fixture required: "+jar);
+	static ClassNode from(Fixture kind,Path jar,String name)throws Exception {
+		TestFixtures.require(kind,Files.isRegularFile(jar),"real fixture required: "+jar);
 		try(ZipFile zip=new ZipFile(jar.toFile())){ClassNode c=new ClassNode();new ClassReader(zip.getInputStream(zip.getEntry(name+".class"))).accept(c,0);return c;}
 	}
 	static byte[] bytes(ClassNode c){ClassWriter w=new ClassWriter(0);c.accept(w);return w.toByteArray();}
@@ -200,7 +200,7 @@ class CarpetMixinAdapterTest {
 	}
 	/** End to end through the census over carpet.mixins.json: no stale suspicion with the adapters, the old ones without. */
 	@Test void censusReportsNoRepairedAnchorAsMissing()throws Exception {
-		assumeTrue(Files.isRegularFile(CARPET),"real fixture required: "+CARPET);
+		TestFixtures.require(Fixture.THIRD_PARTY,Files.isRegularFile(CARPET),"real fixture required: "+CARPET);
 		byte[] config;try(ZipFile zip=new ZipFile(CARPET.toFile())){config=zip.getInputStream(zip.getEntry("carpet.mixins.json")).readAllBytes();}
 		Function<String,byte[]> resource=path->{if(!path.startsWith("carpet/"))return path.startsWith("net/")?staged(path):null;
 			try(ZipFile zip=new ZipFile(CARPET.toFile())){var e=zip.getEntry(path);return e==null?null:zip.getInputStream(e).readAllBytes();}catch(Exception e){throw new AssertionError(e);}};
@@ -223,7 +223,7 @@ class CarpetMixinAdapterTest {
 	}
 	@Test void vanillaAndDisabledRepairLeaveAllReleasedHandlersUntouched()throws Exception {
 		Path vanilla=TestFixtures.vanillaJar();
-		for(String name:NAMES){ClassNode c=mixin(name);byte[] before=bytes(c);java.util.function.Function<String,ClassNode> resolver=n->{try{return n.startsWith("net/minecraft/")?from(vanilla,n):null;}catch(Exception e){throw new AssertionError(e);}};
+		for(String name:NAMES){ClassNode c=mixin(name);byte[] before=bytes(c);java.util.function.Function<String,ClassNode> resolver=n->{try{return n.startsWith("net/minecraft/")?from(Fixture.MC_LIBRARIES,vanilla,n):null;}catch(Exception e){throw new AssertionError(e);}};
 			assertEquals(0,CarpetMixinAdapter.adapt(c,resolver)+CarpetFluidMixinAdapter.adapt(c,resolver));assertArrayEquals(before,bytes(c));}
 		withAdapters("off",()->{for(String name:NAMES)try{assertEquals(0,adapt(mixin(name)));}catch(Exception e){throw new AssertionError(e);}});
 	}

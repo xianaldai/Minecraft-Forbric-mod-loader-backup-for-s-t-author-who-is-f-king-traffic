@@ -18,10 +18,8 @@ package net.forbric.kernel.access;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -32,6 +30,8 @@ import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -51,8 +51,7 @@ import org.objectweb.asm.tree.MethodNode;
  * client setup.
  */
 class CarrierAccessTransformerTest {
-	private static final Path RUN =
-			Path.of(System.getenv().getOrDefault("FORBRIC_OLD", System.getProperty("user.dir") + "/../forbric-loader"), "run").normalize();
+	private static final Path RUN = TestFixtures.stagedRoot();
 	private static final Path MERGED_BASE = RUN.resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path FORGE_CARRIER = RUN.resolve("forge-runtime/forge-runtime.jar");
 
@@ -109,20 +108,13 @@ class CarrierAccessTransformerTest {
 		return node;
 	}
 
-	private static byte[] bytes() throws IOException {
-		assumeTrue(Files.isRegularFile(MERGED_BASE), "staged merged base absent");
-		try (ZipFile jar = new ZipFile(MERGED_BASE.toFile())) {
-			ZipEntry entry = jar.getEntry(MENU_SCREENS);
-			assumeTrue(entry != null, "MenuScreens absent from this base");
-			try (InputStream in = jar.getInputStream(entry)) {
-				return in.readAllBytes();
-			}
-		}
+	private static byte[] bytes() {
+		return TestFixtures.requireEntry(Fixture.STAGED, MERGED_BASE, MENU_SCREENS);
 	}
 
 	/** Every {@code META-INF/accesstransformer*.cfg} in the traditional MinecraftForge carrier. */
 	private static List<AtDirective> carrierDirectives() throws IOException {
-		assumeTrue(Files.isRegularFile(FORGE_CARRIER), "staged MinecraftForge carrier absent");
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE_CARRIER), "staged MinecraftForge carrier absent");
 
 		List<AtDirective> directives = new ArrayList<>();
 		try (ZipFile jar = new ZipFile(FORGE_CARRIER.toFile())) {
@@ -138,7 +130,7 @@ class CarrierAccessTransformerTest {
 				}
 			}
 		}
-		assumeTrue(!directives.isEmpty(), "this carrier ships no access transformer");
+		assertFalse(directives.isEmpty(), "the staged carrier ships no access transformer");
 		return directives;
 	}
 }

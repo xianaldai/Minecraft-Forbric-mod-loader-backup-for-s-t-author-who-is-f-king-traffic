@@ -7,13 +7,17 @@ import java.util.concurrent.atomic.*;
 import java.util.function.*;
 import java.lang.reflect.*;
 import net.forbric.kernel.TestFixtures;
+import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 /** Actual compiled filter + real DataResult. The baseline consumer demonstrates the cast failure. */
 class KernelForeignSkipConsumerTest {
  @Test void knownMarkerSkipsDataWhileNormalOptionalAndDecodeErrorsRemainIntact()throws Exception{
-  Path game=Path.of(System.getenv().getOrDefault("FORBRIC_OLD","../forbric-loader"),"run/merged-base/patched-mc-merged-26.2.jar");
-  Path compiled=Path.of("build/classes/java/runtime");org.junit.jupiter.api.Assumptions.assumeTrue(Files.exists(game)&&Files.exists(compiled),"actual game-side compilation required");
+  Path game=TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+  Path compiled=Path.of("build/classes/java/runtime");
+  TestFixtures.require(Fixture.STAGED,Files.exists(game),"the staged merged base required");
+  TestFixtures.require(Fixture.GAME_SIDE,Files.exists(compiled),"actual game-side compilation required");
   Path mc=TestFixtures.minecraftDir();
+  TestFixtures.require(Fixture.MC_LIBRARIES,Files.isRegularFile(mc.resolve("versions/26.2/26.2.json")),"no local Minecraft 26.2 version JSON");
   var json=com.electronwill.nightconfig.json.JsonFormat.fancyInstance().createParser().parse(Files.newBufferedReader(mc.resolve("versions/26.2/26.2.json")));
   List<URL> urls=new ArrayList<>(List.of(compiled.toUri().toURL(),game.toUri().toURL()));
   List<? extends com.electronwill.nightconfig.core.UnmodifiableConfig> libraries=json.get("libraries");

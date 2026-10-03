@@ -19,7 +19,6 @@ package net.forbric.kernel.boot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -52,7 +51,9 @@ class FabricMainEntrypointWindowTest {
 	@Test
 	void theConstructorHookRunsMainThenClient() throws Exception {
 		List<String> calls = fabricEntrypointCallsIn("onClientEntrypoints");
-		assumeTrue(!calls.isEmpty(), "KernelLifecycle not compiled yet");
+		assertTrue(!calls.isEmpty(),
+				"A Fabric entrypoint call in KernelLifecycle.onClientEntrypoints not found in the compiled src/main "
+						+ "classes, which exist before any test runs");
 
 		assertEquals(List.of("runMainEntrypoints", "runClientEntrypoints"), calls,
 				"Minecraft.<init> must run main then client, which is Hooks.startClient's own order");
@@ -67,7 +68,9 @@ class FabricMainEntrypointWindowTest {
 	@Test
 	void theRegistrationWindowAsksBeforeRunningMain() throws Exception {
 		MethodNode window = method("registerNeoForgeContent");
-		assumeTrue(window != null, "KernelLifecycle not compiled yet");
+		assertTrue(window != null,
+				"KernelLifecycle.registerNeoForgeContent not found in the compiled src/main classes, which exist "
+						+ "before any test runs");
 
 		boolean callsMain = false;
 		boolean asks = false;

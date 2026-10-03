@@ -1,0 +1,149 @@
+# Skipped tests this CI profile is allowed to have: suite<TAB>class<TAB>test<TAB>reason.
+# Compared on the first three columns; the reason is for the reader.
+# Regenerate: ./gradlew check -Pforbric.skipBaseline=ci-prepared -Pforbric.writeSkipBaseline
+# or copy skips-actual-ci-prepared.tsv from the CI artifact.
+test	net.forbric.kernel.boot.AbiLinkAuditStagedTest	theStagedClientPackHasNoDanglingForgeFamilyReference()	staged pack or carriers absent
+test	net.forbric.kernel.boot.DuplicateModArbiterStagedTest	theStagedJadePairReproducesTheJavadocsNumbers()	staged pack absent
+test	net.forbric.kernel.boot.ForgeClientCanaryTest	packagedCanarySubscribesTheThreeEventsOnlyBehindItsClientClassBoundary()	build canaries with forbric-loader/run/build-testmods.sh
+test	net.forbric.kernel.boot.ForgeClientCanaryTest	presetListenerUsesTheModsBusGroupAndTheGateRequiresItsDelivery()	build canaries with forbric-loader/run/build-testmods.sh
+test	net.forbric.kernel.boot.ForgeRegistrationA2ContractTest	commonProbeUsesTheGameTablesAndNoCanaryPostsItsOwnRegistrationEvents()	staged canary: $ROOT/forbric-kernel/.dev/staged/run/forge-runtime/forbriclive.jar
+test	net.forbric.kernel.boot.ForgeRegistrationA2ContractTest	realClientBusesRegisterContentAndRealConsumersAreRead()	staged canary: $ROOT/forbric-kernel/.dev/staged/run/forge-runtime/forbriclive.jar
+test	net.forbric.kernel.boot.FrapiRendererEvidenceTest	theRealSodiumBuildsAreToldApart()	[fixture:third-party] sodium fixtures absent: $ROOT/forbric-kernel/run/client-merged-pack/mods
+test	net.forbric.kernel.boot.GateWorldgenContractTest	theGateProbesExactlyTheBlocksThePackagedCanariesPlace()	build canaries with forbric-loader/run/build-testmods.sh
+test	net.forbric.kernel.boot.HookCallSiteCensusStagedTest	thePartialTableIsExactlyWhatTheCallSitesSay()	MinecraftForge's patched game absent
+test	net.forbric.kernel.boot.KernelBundledMixinExtrasStagedTest	[1] true	stage the popular compatibility pack and the boot jar (or set fixture overrides): $ROOT/forbric-kernel/build/compat-inputs/popular/mods/badpackets-forge-0.12.2.jar, $ROOT/forbric-kernel/build/libs/for
+test	net.forbric.kernel.boot.KernelBundledMixinExtrasStagedTest	[2] false	stage the popular compatibility pack and the boot jar (or set fixture overrides): $ROOT/forbric-kernel/build/compat-inputs/popular/mods/badpackets-forge-0.12.2.jar, $ROOT/forbric-kernel/build/libs/for
+test	net.forbric.kernel.boot.MultiLoaderEntrypointsTest	actualBisonAquariusAndBannerstoneUseTheirExecutableFamilies()	requires the prepared random baseline jars
+test	net.forbric.kernel.boot.PassiveSeederFileConfigTest	theRealLithiumFindsUnlitCampfiresOverride()	the player's pack is not here
+test	net.forbric.kernel.boot.WorldgenCanaryDataTest	theTwoCarriersPlaceDifferentNonOverworldBlocks()	build canaries with forbric-loader/run/build-testmods.sh
+test	net.forbric.kernel.interop.CreateWorkerShutdownTest	realFlywheelWorkersDrainAndJoinWithoutCallingTheLazyFactory()	assumption is not true
+test	net.forbric.kernel.interop.PayloadInteropPlayChannelsTest	everyNameTheRecordingSpellsExistsWhereItIsSpelled()	fabric-api's networking module absent
+test	net.forbric.kernel.metadata.forge.ModsTomlParserTest	theFixtureIsTheManifestLibjfShips()	the sweep's LibJF jar is not staged here
+test	net.forbric.kernel.mixin.BalmEffectVetoTest	aBalmThatAsksAnythingElseIsNotReimplemented()	sweep pack absent
+test	net.forbric.kernel.mixin.BalmEffectVetoTest	itsOwnSwitchAndTheAdaptersSwitchBothLeaveItAlone()	sweep pack absent
+test	net.forbric.kernel.mixin.BalmEffectVetoTest	onlyWhenNeoForgeAsksOncePerEffect()	sweep pack absent
+test	net.forbric.kernel.mixin.BalmEffectVetoTest	theDeadClearWrapBecomesAWrapOfNeoForgesPerEffectQuestion()	sweep pack absent
+test	net.forbric.kernel.mixin.BarrelRollCameraAdapterTest	actualModBindsOrdinaryMirroredAndBedCallsAndKeepsShareSlotValid()	assumption is not true
+test	net.forbric.kernel.mixin.BarrelRollCameraAdapterTest	vanillaShapeOffSwitchAndUnexpectedCarrierShapeRemainUntouched()	assumption is not true
+test	net.forbric.kernel.mixin.C2meBlockUpdateRetargetTest	aRestoredVanillaAnchorOrStaticHelperRefusesTheMove()	C2ME 0.4.1-beta.1.0 notickvd fixture required
+test	net.forbric.kernel.mixin.C2meBlockUpdateRetargetTest	localCaptureSliceGroupAndDifferentModRefuseTheMove()	C2ME 0.4.1-beta.1.0 notickvd fixture required
+test	net.forbric.kernel.mixin.C2meBlockUpdateRetargetTest	missingHelperCallOrDuplicatedStatusCheckRefusesTheMove()	C2ME 0.4.1-beta.1.0 notickvd fixture required
+test	net.forbric.kernel.mixin.C2meBlockUpdateRetargetTest	shippedC2meBindsToTheLiveNotificationCheckWithoutChangingItsHandler()	C2ME 0.4.1-beta.1.0 notickvd fixture required
+test	net.forbric.kernel.mixin.C2meBlockUpdateRetargetTest	vanillaAndTheDisabledRepairKeepTheOriginalSelector()	C2ME 0.4.1-beta.1.0 notickvd fixture required
+test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	blackstoneRunsOnlyAfterTheNativeRegistryDeclinesAnInteraction()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
+test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	breakRunsAfterPlayerWillDestroyOnTheLocalsVanillaCaptured()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
+test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	censusJudgesTheMixinsAsTheAdaptersHandThemToMixin()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
+test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	censusReportsNoRepairedAnchorAsMissing()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
+test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	deepslateUsesTheSelectedWaterInteractionAndPreservesTheOriginalRuleBody()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
+test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	fillHooksMoveTogetherToTheActualNotificationBody()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
+test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	fluidAdaptersBindToTheHostsTheFluidRepairLeaves()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
+test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	handSwapRunsBeforeTheNativeEventReadsTheHands()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
+test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	reshapedHostsRefuseTheWholeRetarget()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
+test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	reshapedNativeFluidLocalRefusesTheWholeRetarget()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
+test	net.forbric.kernel.mixin.CarpetMixinAdapterTest	vanillaAndDisabledRepairLeaveAllReleasedHandlersUntouched()	real fixture required: build/compat-inputs/carpet/mods/fabric-carpet-26.2+v260616.jar
+test	net.forbric.kernel.mixin.CarrierStubCensusTest	theShippedTableIsExactlyWhatTheArtifactsSay()	both carriers' patched game jars required for the forge=/neo= columns
+test	net.forbric.kernel.mixin.ContinuitySpriteMixinAdapterTest	aChangedLocalMapLayoutIsRefused()	actual Continuity fixture required
+test	net.forbric.kernel.mixin.ContinuitySpriteMixinAdapterTest	actualCallbacksMoveToTheLiveOverloadAndKeepTheOriginalLoaderMapArgument()	actual Continuity fixture required
+test	net.forbric.kernel.mixin.ContinuitySpriteMixinAdapterTest	vanillaAndDisabledRepairKeepTheUpstreamMixin()	actual Continuity fixture required
+test	net.forbric.kernel.mixin.CreateFluidMixinAdapterTest	nativeVanillaOrMissingLiveSiteLeaveTheHandlerUntouched()	real fixture required: $ROOT/forbric-kernel/build/compat-inputs/create-fly/create-fly.jar
+test	net.forbric.kernel.mixin.CreateFluidMixinAdapterTest	releasedHandlerRunsAtBothLiveSitesAndKeepsItsOriginalBody()	real fixture required: $ROOT/forbric-kernel/build/compat-inputs/create-fly/create-fly.jar
+test	net.forbric.kernel.mixin.CreateInjectionAdaptersTest	contextualFrictionAndResistanceKeepTheOriginalControlBlockDispatch()	real fixture required: $ROOT/forbric-kernel/build/compat-inputs/create-fly/create-fly.jar
+test	net.forbric.kernel.mixin.CreateInjectionAdaptersTest	interactionsKeepNativeTransactionsAndTheOriginalControlHandlers()	real fixture required: $ROOT/forbric-kernel/build/compat-inputs/create-fly/create-fly.jar
+test	net.forbric.kernel.mixin.CreateInjectionAdaptersTest	nativeBreathingSoundAndHudScopesPreserveTheOriginalCallbacks()	real fixture required: $ROOT/forbric-kernel/build/compat-inputs/create-fly/create-fly.jar
+test	net.forbric.kernel.mixin.CreateInjectionAdaptersTest	releasedCallbacksKeepTheirBodiesAndBindToTheReviewedLiveOperations()	real fixture required: $ROOT/forbric-kernel/build/compat-inputs/create-fly/create-fly.jar
+test	net.forbric.kernel.mixin.CreateKeyboardMixinAdapterTest	releasedNativeBodiesDispatchReleasePressAndRepeatExactlyOnce()	real fixture required: $ROOT/forbric-kernel/build/compat-inputs/create-fly/create-fly.jar
+test	net.forbric.kernel.mixin.CreateKeyboardMixinAdapterTest	vanillaKeepsTheOriginalReturnSelectors()	real fixture required: $ROOT/forbric-kernel/build/compat-inputs/create-fly/create-fly.jar
+test	net.forbric.kernel.mixin.CreateStructureMixinAdapterTest	aMissingCallerRefusesAllThreeSelectorsTogether()	real fixture required: $ROOT/forbric-kernel/build/compat-inputs/create-fly/create-fly.jar
+test	net.forbric.kernel.mixin.CreateStructureMixinAdapterTest	setupIterationAndCleanupMoveTogetherToTheCalledEntityPlacementBody()	real fixture required: $ROOT/forbric-kernel/build/compat-inputs/create-fly/create-fly.jar
+test	net.forbric.kernel.mixin.FabricBlockBreakMixinAdapterTest	aSecondBooleanOrAnotherProducerLeavesTheOrdinalAlone()	popular-pack Origins fixture absent
+test	net.forbric.kernel.mixin.FabricBlockBreakMixinAdapterTest	aStateThatIsNotTheOneReadFromTheLevelIsNotHandedOver()	popular-pack architectury fixture absent
+test	net.forbric.kernel.mixin.FabricBlockBreakMixinAdapterTest	apolisHarvestModifierMovesToTheOnlyBooleanNeoForgeHasAtMineBlock()	popular-pack Origins fixture absent
+test	net.forbric.kernel.mixin.FabricBlockBreakMixinAdapterTest	architecturysBreakHandlerCapturesNeoForgesFrameAndStillGetsItsTwoValues()	popular-pack architectury fixture absent
+test	net.forbric.kernel.mixin.FabricBlockBreakMixinAdapterTest	theSwitchAndOtherMixinsAreLeftAlone()	popular-pack architectury fixture absent
+test	net.forbric.kernel.mixin.FabricBlockBreakMixinAdapterTest	vanillasOwnBodyIsWhatBothWereWrittenFor()	popular-pack architectury fixture absent
+test	net.forbric.kernel.mixin.FabricCreativePagerMixinAdapterTest	keyboardKeepsItsExactBodyAndTheSecondPagerStateIsRemoved()	assumption is not true
+test	net.forbric.kernel.mixin.FabricFluidFlowMixinAdapterTest	bothLiveCarrierPathsCallTheOriginalFabricVetoAndKeepTheirNativeOperations()	actual current Fabric Block API fixture required
+test	net.forbric.kernel.mixin.FabricFluidFlowMixinAdapterTest	changedOrVanillaCarrierIsNotRewritten()	actual current Fabric Block API fixture required
+test	net.forbric.kernel.mixin.FabricRegistryInitializationMixinAdapterTest	bootstrapKeepsEveryNativeTrackerButDoesNotRedirectTheFreeze()	assumption is not true
+test	net.forbric.kernel.mixin.FabricRegistryInitializationMixinAdapterTest	clientAndServerRetainPostFreezeWorkAndClientUnmap()	assumption is not true
+test	net.forbric.kernel.mixin.FabricRegistryLoaderMixinAdapterTest	aVanillaLoaderKeepsTheOriginalHandlers()	assumption is not true
+test	net.forbric.kernel.mixin.FabricRegistryLoaderMixinAdapterTest	serverBindingAndAsyncCaptureUseBothLiveOverloads()	assumption is not true
+test	net.forbric.kernel.mixin.GuiItemCaptureMixinAdapterTest	theCaptureSelectsTheSubmissionAndDoesNotMoveTheTooltipCallback()	local fixture unavailable
+test	net.forbric.kernel.mixin.InsertedLambdaArgumentShimTest	actualFusionSpriteLoaderHookFollowsNeoForgesLiveLambda()	sweep pack absent
+test	net.forbric.kernel.mixin.InsertedLambdaArgumentShimTest	actualLitematicaOpaqueAndTranslucentHandlersFollowThePrunedLiveLambda()	local merged mod pack: run/client-merged-pack/mods
+test	net.forbric.kernel.mixin.KernelClientHookMixinAnchorsTest	fancyMenusOriginalInitializerFollowsTheLiveRelayWithoutChangingItsShift()	local game or mod fixture unavailable
+test	net.forbric.kernel.mixin.KernelClientHookMixinAnchorsTest	originalHooksAndDisabledAdapterAreLeftAsCompiled()	local game or mod fixture unavailable
+test	net.forbric.kernel.mixin.MergedBaseMixinCompatPinnedContractsTest	thePinnedContractPrefilterTurnsAwayOnlyWhatTheParseWould()	build/compat-inputs/sweep90/mods/owo-lib-0.13.1+26.2.jar is not present beside this checkout or the staged one
+test	net.forbric.kernel.mixin.MixinAddedMembersTest	morecullingsShadowOfFabricRenderersMeshResolves()	sweep90 pack absent
+test	net.forbric.kernel.mixin.MixinAtShapeTest	architecturysNaturalSpawnerRedirectIsUnwrapped()	popular inputs absent
+test	net.forbric.kernel.mixin.MixinFitLivenessCensusStagedTest	exactlyThePinnedMixinsChangeVerdict()	build/compat-inputs/sweep90/mods required (symlink it from the main checkout)
+test	net.forbric.kernel.mixin.MixinLocalsCaptureTest	actualCreativeCoreConfigurationRedirectIsSoftened()	sweep pack absent
+test	net.forbric.kernel.mixin.MixinLocalsCaptureTest	architecturysServerPlayerGameModeCaptureIsSoftened()	popular inputs absent
+test	net.forbric.kernel.mixin.MixinRetargetCarrierHelperStagedTest	betterMountHudsFoodRedirectMovesToExtractFoodLevel()	$ROOT/forbric-kernel/build/compat-inputs/sweep90/mods/bettermounthud-1.3.1.jar absent (symlink build/compat-inputs from the main checkout)
+test	net.forbric.kernel.mixin.MixinRetargetCarrierHelperStagedTest	fabricRenderingsHudMixinPlanIsTheSameWithTheSplitRuleOnOrOff()	$ROOT/forbric-kernel/build/compat-inputs/sweep90/mods/fabric-api-0.161.0+26.2.jar absent (symlink build/compat-inputs from the main checkout)
+test	net.forbric.kernel.mixin.MixinRetargetCarrierHelperStagedTest	highlightersSlotMarkFollowsTheDecorationsIntoRenderSlotContents()	$ROOT/forbric-kernel/build/compat-inputs/sweep90/mods/Highlighter-26.2-forge-1.2.2.jar absent (symlink build/compat-inputs from the main checkout)
+test	net.forbric.kernel.mixin.MixinRetargetCarrierHelperStagedTest	puzzleslibsFogColourFollowsTheSetIntoClientHooks()	$ROOT/forbric-kernel/build/compat-inputs/sweep90/mods/PuzzlesLib-v26.2.4-mc26.2.x-Fabric.jar absent (symlink build/compat-inputs from the main checkout)
+test	net.forbric.kernel.mixin.MixinRetargetSubstitutedCallTest	fusionsRealMixinOnTheRealMergedBase()	sweep pack or staged merged base absent
+test	net.forbric.kernel.mixin.MixinShearsRelayTest	aWrapStillBoundToOtherIsCallsKeepsThemAndAnswersTheCarrierToo()	sweep pack absent
+test	net.forbric.kernel.mixin.MixinShearsRelayTest	aWrapWhoseCallIsGoneMovesToTheCarrierCall()	sweep pack absent
+test	net.forbric.kernel.mixin.MixinShearsRelayTest	onlyAFabricModsReviewedShapeIsRelayed()	sweep pack absent
+test	net.forbric.kernel.mixin.MixinStubRebindTest	aByTypeLocalIsLeftWhereTheBodyDoesNotDecideIt()	build/compat-inputs/sweep90/mods/fusion-1.3.15a-forge-mc26.2.jar absent
+test	net.forbric.kernel.mixin.MixinStubRebindTest	aNeoForgeModsMixinIsLeftAsNeoForgeWouldHaveIt()	run/client-popular/mods/architectury-fabric-21.1.10.jar absent
+test	net.forbric.kernel.mixin.MixinStubRebindTest	aPairVanillaAlreadyHasStaysWhereTheModPutIt()	local merged mod pack: run/client-merged-pack/mods
+test	net.forbric.kernel.mixin.MixinStubRebindTest	aShareGroupMovesWholeOrNotAtAll()	build/compat-inputs/sweep90/mods/owo-lib-0.13.1+26.2.jar absent
+test	net.forbric.kernel.mixin.MixinStubRebindTest	aShareGroupWithASharerThisCannotReadStays()	build/compat-inputs/sweep90/mods/owo-lib-0.13.1+26.2.jar absent
+test	net.forbric.kernel.mixin.MixinStubRebindTest	architecturysBreakSpeedMovesToTheBodyAndStillReceivesTheState()	run/client-popular/mods/architectury-fabric-21.1.10.jar absent
+test	net.forbric.kernel.mixin.MixinStubRebindTest	coreLibsModelHookMovesWrappedWithItsByTypeLocal()	build/compat-inputs/sweep90/mods/supermartijn642corelib-1.1.24b-fabric-mc26.2.jar absent
+test	net.forbric.kernel.mixin.MixinStubRebindTest	fusionsOverlayHookMovesWithTheOnlyModelDiscoveryInTheBody()	build/compat-inputs/sweep90/mods/fusion-1.3.15a-forge-mc26.2.jar absent
+test	net.forbric.kernel.mixin.MixinStubRebindTest	fusionsSpriteCaptureMovesToTheBodyMinecraftForgeRan()	build/compat-inputs/sweep90/mods/fusion-1.3.15a-forge-mc26.2.jar absent
+test	net.forbric.kernel.mixin.MixinStubRebindTest	fusionsVerdictFindsTheAnchorWhereTheRebindPutsIt()	fusion and the merged base required
+test	net.forbric.kernel.mixin.MixinStubRebindTest	malilibsFormatRestoreMovesToTheBodyClientLanguageCalls()	malilib absent from the merged pack
+test	net.forbric.kernel.mixin.MixinStubRebindTest	owosLangHooksMoveTogetherToTheBodyClientLanguageCalls()	build/compat-inputs/sweep90/mods/owo-lib-0.13.1+26.2.jar absent
+test	net.forbric.kernel.mixin.MixinStubRebindTest	owosVerdictFollowsTheGroup()	owo and the merged base required
+test	net.forbric.kernel.mixin.MixinStubRebindTest	theSwitchMovesNothing()	run/client-popular/mods/architectury-fabric-21.1.10.jar absent
+test	net.forbric.kernel.mixin.MixinStubRebindTest	theVerdictFollowsTheRebind()	malilib absent from the merged pack
+test	net.forbric.kernel.mixin.MixinSubtypeOwnerRetargetTest	thePredicateCheckMovesToTheSameCallThroughCodec()	lithostitched's Fabric jar required
+test	net.forbric.kernel.mixin.MixinSubtypeOwnerRetargetTest	vanillasOwnCallTheSwitchAndAMissingLocalAreLeftAlone()	lithostitched's Fabric jar required
+test	net.forbric.kernel.mixin.NestHostFieldWritesTest	actualC2meVolatileAndSynchronizedGuardsAreNotSuppressed()	assumption is not true
+test	net.forbric.kernel.mixin.PostMixinFixupsAliasTargetTest	everyShippedFabricRegistrySyncHasExactlyTheWarningsCheckRepaired()	no fabric-registry-sync in the compatibility packs on this machine
+test	net.forbric.kernel.runtime.KernelFabricFluidBehaviorsTest	aLookupThatBreaksAnswersNoBehaviourType()	sweep pack absent
+test	net.forbric.kernel.runtime.KernelFabricFluidBehaviorsTest	aQuestionDuringTheFirstResolveWaitsForIt()	sweep pack absent
+test	net.forbric.kernel.runtime.KernelFabricFluidBehaviorsTest	aRegisteredTagAnswersNeoForgesQuestionsFromItsBehaviour()	sweep pack absent
+test	net.forbric.kernel.runtime.KernelFabricFluidBehaviorsTest	aRegistryThatDoesNotLinkIsTreatedAsAbsent()	sweep pack absent
+test	net.forbric.kernel.runtime.KernelFabricFluidBehaviorsTest	minecraftForgesFamilyAnswersTheSame()	sweep pack absent
+test	net.forbric.kernel.runtime.KernelFabricFluidBehaviorsTest	offReportsNoBehaviourType()	sweep pack absent
+test	net.forbric.kernel.runtime.KernelFabricFluidBehaviorsTest	withoutFabricApiNoTagHasAType()	sweep pack absent
+test	net.forbric.kernel.runtime.KernelModInfoConfigTest	notEnoughCrashesDescribesAKernelModAsNeoForgeLetsIt()	the sweep's Not Enough Crashes jar is not here
+test	net.forbric.kernel.runtime.KernelModInfoConfigTest	puzzlesLibReadsItsAuthorsAndHomepage()	the popular pack's Puzzles Lib jar is not here
+test	net.forbric.kernel.transform.CompatPluginPlatformInjectorTest	actualPluginsKeepValidLocalsAndNativeBranches()	local mod fixture absent
+test	net.forbric.kernel.transform.CompostablesFallbackInjectorTest	bclibsFourCompostableWrapsFindTheirCallsOnlyAfterTheRepair()	sweep pack or merged base absent
+test	net.forbric.kernel.transform.CompostablesFallbackInjectorTest	fabricTransfersComposterReadsTheBlocksOwnAnswer()	sweep pack absent
+test	net.forbric.kernel.transform.CompostablesFallbackInjectorTest	offLeavesAllThreeClassesAsMerged()	sweep pack absent
+test	net.forbric.kernel.transform.CorpseNameTagAdapterTest	actualReviewedConstructorMovesOneReadAndKeepsTheOriginalJarAndOtherInstructions()	local merged mod pack: run/client-merged-pack/mods/corpse-neoforge-1.1.17+26.2.jar
+test	net.forbric.kernel.transform.CorpseNameTagAdapterTest	executeTheActualConstructorBeforeAndAfterWithoutOpeningAWindow()	local merged mod pack: run/client-merged-pack/mods/corpse-neoforge-1.1.17+26.2.jar
+test	net.forbric.kernel.transform.CorpseNameTagAdapterTest	nonzeroBehaviorChangedBodyExistingLegacyFieldAndAbsentReplacementRefuse()	local merged mod pack: run/client-merged-pack/mods/corpse-neoforge-1.1.17+26.2.jar
+test	net.forbric.kernel.transform.CreativePagerBridgeInjectorTest	owoLibsMixinFitsOnlyOnceTheBridgeRan()	build/compat-inputs/sweep90/mods/owo-lib-0.13.1+26.2.jar is not present beside this checkout or the staged one
+test	net.forbric.kernel.transform.EnvironmentStripTransformerTest	creativeCoresLoaderLosesExactlyTheOneMethodNativeFabricRemoves()	sweep pack absent
+test	net.forbric.kernel.transform.FabricHooksCallTest	owosOwnFreezeMixinsFitTheRealGameOnBothSides()	sweep pack absent
+test	net.forbric.kernel.transform.FmlContextLoaderRewriterTest	libJfsOwnMixinPluginIsRewrittenAtItsOneCast()	the sweep90 pack (build/compat-inputs) is not linked into this checkout
+test	net.forbric.kernel.transform.IrisEarlyGamePathTransformerTest	theRealPluginNoLongerConstructsItsGameProviderToReadOptions()	actual Iris plugin required
+test	net.forbric.kernel.transform.MergedBaseFrameRecomputerTest	anUnresolvableHierarchyLeavesTheClassAlone()	InventoryProfilesNext not staged — skipping the real-jar check
+test	net.forbric.kernel.transform.MergedBaseFrameRecomputerTest	theConstantPoolSharingWriterIsNotUsed()	InventoryProfilesNext not staged — skipping the real-jar check
+test	net.forbric.kernel.transform.MergedBaseFrameRecomputerTest	theRealModLinksAgainstTheRealMergedBase()	InventoryProfilesNext not staged — skipping the real-jar check
+test	net.forbric.kernel.transform.MergedBaseFrameRecomputerTest	theRecomputedFrameNamesWhatTheRealHierarchySays()	InventoryProfilesNext not staged — skipping the real-jar check
+test	net.forbric.kernel.transform.MergedBaseLostAncestorsTest	everyStructuralConflictTheBuilderReportedIsAccountedFor()	the merge report is absent
+test	net.forbric.kernel.transform.MergedBaseSnippetFunnelTest	fabricRenderingsSnippetWrapFitsAfterTheFunnel()	fabric-api jar absent from run/client-kernel/mods
+test	net.forbric.kernel.transform.NativeCoremodParityTest	theTargetListIsNeoForgesAndMinecraftForgesLessTheTrialSpawner()	native NeoForge coremods jar absent
+test	net.forbric.kernel.transform.PortingLayerAbiInjectorTest	aMethodReferenceToThePortsScreenConstructorIsReAimedAtTheCarriers()	ShoulderSurfing not staged — skipping
+test	net.forbric.kernel.transform.PortingLayerAbiInjectorTest	aPortWithADifferentNumberOfCallSitesIsRefusedWhole()	ForgeConfigAPIPort not staged — skipping the real-bytecode check
+test	net.forbric.kernel.transform.PortingLayerAbiInjectorTest	everyModIdKeyedRegistrationGoesThroughTheBridgeWithTheTrackerAsArgumentZero()	ForgeConfigAPIPort not staged — skipping the real-bytecode check
+test	net.forbric.kernel.transform.PortingLayerAbiInjectorTest	nothingAboutTheFramesOrTheStackMoved()	ForgeConfigAPIPort not staged — skipping the real-bytecode check
+test	net.forbric.kernel.transform.PortingLayerAbiInjectorTest	theSpecAdapterGainsTheMethodTheCarrierCallsOnEveryRegistration()	ForgeConfigAPIPort not staged — skipping the real-bytecode check
+test	net.forbric.kernel.transform.PortingLayerAbiInjectorTest	theStaticTrackerFieldReadIsKeptSoTheStackStillBalances()	ForgeConfigAPIPort not staged — skipping the real-bytecode check
+test	net.forbric.kernel.transform.RegistryDirectoryOwnerInjectorTest	aRegistriesThatTookFabricsModifierHandsFabricRegistriesVanillasDirectory()	build/compat-inputs/sweep90/mods/fabric-api-0.161.0+26.2.jar absent — skipping real-bytes check
+test	net.forbric.kernel.transform.RegistryDirectoryOwnerInjectorTest	everyOtherRegistryEndsWhereItsOwnLoaderPutsIt()	build/compat-inputs/sweep90/mods/fabric-api-0.161.0+26.2.jar absent — skipping real-bytes check
+test	net.forbric.kernel.transform.RegistryDirectoryOwnerInjectorTest	forceHandsFabricRegistriesVanillasDirectoryWithoutAsking()	build/compat-inputs/sweep90/mods/fabric-api-0.161.0+26.2.jar absent — skipping real-bytes check
+test	net.forbric.kernel.transform.RegistryDirectoryOwnerInjectorTest	withoutFabricsModifierInRegistriesEveryRegistryKeepsTheMergedDirectory()	build/compat-inputs/sweep90/mods/fabric-api-0.161.0+26.2.jar absent — skipping real-bytes check
+test	net.forbric.kernel.transform.RegistryDirectoryOwnerInjectorTest	woversRegistriesReadTheDirectoryWoverShipsAsOnNativeFabric()	build/compat-inputs/sweep90/mods/fabric-api-0.161.0+26.2.jar absent — skipping real-bytes check
+test	net.forbric.kernel.transform.SpawnPositionCallsInjectorTest	architecturysChunkGenerationRedirectFitsTheRewrittenNaturalSpawner()	popular-pack architectury fixture absent
+test	net.forbric.kernel.transform.SpawnPositionCallsInjectorTest	architecturysRedirectsFitTheRewrittenSpawnerAndMissedTheMergedOne()	popular-pack architectury fixture absent
