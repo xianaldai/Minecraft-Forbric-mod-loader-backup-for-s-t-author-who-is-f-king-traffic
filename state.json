@@ -323,12 +323,17 @@
      "a": "Zxis233",
      "d": "f2c9de665da8",
      "t": "2026-10-02T15:25:23Z"
+    },
+    "5966158204": {
+     "a": "Wudarensheng",
+     "d": "56a71d3339ba",
+     "t": "2026-10-03T05:59:21Z"
     }
    },
-   "comments_through": "2026-10-02T15:25:23Z",
+   "comments_through": "2026-10-03T05:59:21Z",
    "state": "open",
    "title": "\u62ffai\u9010\u884creview\u4e86\u4e00\u4e0b",
-   "updated_at": "2026-10-02T15:25:24Z"
+   "updated_at": "2026-10-03T05:59:21Z"
   },
   "25": {
    "body": "5b43242653dd",
@@ -510,6 +515,14 @@
    "title": "\u8ddf[UNOFFICIAL]TaCZ Refabricated\u4e0d\u517c\u5bb9",
    "updated_at": "2026-10-02T14:04:34Z"
   },
+  "32": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "33": {
    "body": "83bd74f1c5f0",
    "comments": {},
@@ -671,6 +684,14 @@
    "title": "Pin that load-report.txt follows the system language; let gate-m24 read it in Chinese",
    "updated_at": "2026-10-02T16:12:43Z"
   },
+  "43": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "44": {
    "body": "4727bcaf0ad5",
    "comments": {
@@ -697,11 +718,54 @@
   },
   "46": {
    "body": "613ea5a25ff5",
+   "comments": {
+    "5964598239": {
+     "a": "Ray-T-r",
+     "d": "1630d7e26ddd",
+     "t": "2026-10-03T02:27:29Z"
+    }
+   },
+   "comments_through": "2026-10-03T02:27:29Z",
+   "state": "closed",
+   "title": "\u88c5\u4e0a\u94a0-neoforge\u7248\u65e0\u6cd5\u542f\u52a8",
+   "updated_at": "2026-10-03T02:27:39Z"
+  },
+  "47": {
+   "body": "247af014ab46",
    "comments": {},
    "comments_through": "",
-   "state": "open",
-   "title": "\u88c5\u4e0a\u94a0-neoforge\u7248\u65e0\u6cd5\u542f\u52a8",
-   "updated_at": "2026-10-03T01:26:50Z"
+   "state": "closed",
+   "title": "Publish how many kernel tests CI skips, and fail when a new one does",
+   "updated_at": "2026-10-03T04:12:13Z"
+  },
+  "48": {
+   "body": "cdbbeebad76d",
+   "comments": {
+    "5964974616": {
+     "a": "yiyuyan",
+     "d": "e5bd5eaa899b",
+     "t": "2026-10-03T03:14:53Z"
+    },
+    "5965043803": {
+     "a": "woshixiaoheizi114514",
+     "d": "bfb0e9a923dc",
+     "t": "2026-10-03T03:24:57Z"
+    },
+    "5965068902": {
+     "a": "nuoge2333",
+     "d": "5c3b05e98184",
+     "t": "2026-10-03T03:28:35Z"
+    },
+    "5965069357": {
+     "a": "Ray-T-r",
+     "d": "8c401095330f",
+     "t": "2026-10-03T03:28:40Z"
+    }
+   },
+   "comments_through": "2026-10-03T03:28:40Z",
+   "state": "closed",
+   "title": "\u4e0e\u4fe1\u96c5\u4e92\u8054\u548ckilt\u4e0d\u517c\u5bb9",
+   "updated_at": "2026-10-03T03:28:44Z"
   },
   "5": {
    "body": "df58248c414f",
