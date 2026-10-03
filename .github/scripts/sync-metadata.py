@@ -31,6 +31,9 @@ added to the archive issue:
     edit is the copy already sitting above), or one it deleted (noted with the author and
     time it was posted, so the copy here stands as the last text known to exist)
   * deletion, or a transfer that removes the issue from upstream's listing
+  * a gap in upstream's numbering -- an item that came and went between two runs, so that
+    nothing here ever held a copy of it or a watermark to notice it by. The number itself is
+    all there is to rebuild, and it gets an entry of its own saying so
   * a release deleted upstream, or a release asset withdrawn
 
 That is the point of this repository: an upstream that quietly closes an
@@ -468,6 +471,73 @@ def main():
                         "deleted": True}
             dirty = True
 
+    # ---- numbers upstream has retired
+    # Issues and pull requests share one counter per repository, and GitHub never reuses a
+    # number: deleting an item, or transferring it away, retires its number and later listings
+    # simply skip it. So a hole below the highest number is evidence that something was there
+    # and is not served any more. Every other check in this file starts from a watermark, which
+    # means the item that matters most here -- one that appeared and vanished between two runs,
+    # leaving this fork nothing to have a watermark for -- used to leave no trace at all. A
+    # hole with no watermark is exactly that item.
+    highest = max(by_number, default=0)
+    unrecorded = 0
+    for number in range(1, highest + 1):
+        n = str(number)
+        if number in by_number or n in known:
+            continue
+        # A short page is not proof of a deletion, the same way it is not proof for an item this
+        # fork already holds: ask for the thing itself, in both the shapes it could have had, and
+        # believe the hole only when every lookup comes back empty.
+        if api("/repos/%s/issues/%d" % (UPSTREAM_REPO, number)) is not None:
+            continue
+        if api("/repos/%s/pulls/%d" % (UPSTREAM_REPO, number)) is not None:
+            continue
+        if unrecorded >= 25:
+            # A bulk deletion is not worth 400 API calls in one run; the rest are still holes
+            # next run, when this loop starts over from the same place.
+            print("::warning::more than 25 retired numbers to record; the rest wait for the "
+                  "next run")
+            break
+        unrecorded += 1
+        lower = [k for k in by_number if k < number]
+        higher = [k for k in by_number if k > number]
+        if lower and higher:
+            neighbours = "between upstream #%d and #%d, which this fork does hold" \
+                % (max(lower), min(higher))
+        else:
+            neighbours = "at the edge of upstream's numbering"
+        print("upstream #%d was retired before this fork could read it" % number)
+        create_issue(
+            "%s upstream #%d: retired before this fork could read it" % (MIRROR_TAG, number),
+            "\n".join([
+                MARKER,
+                "Upstream number: %d" % number,
+                "-->",
+                "",
+                "> **There is nothing to read here.** Upstream's numbering says something was, "
+                "and this fork never saw it while it was alive.",
+                "",
+                "Issues and pull requests in a repository share one counter, and GitHub never "
+                "reuses a number: deleting an item, or transferring it to another repository, "
+                "retires its number and later listings skip it. This run read upstream's issues "
+                "and pull requests as far as #%d, and #%d is in neither. Asking for it directly "
+                "answers 404 as an issue and as a pull request alike, so it existed and it is "
+                "gone." % (highest, number),
+                "",
+                "No title, body or comment could be kept: it appeared and was retired between "
+                "two syncs, and the sync before this one had nothing to compare against. All "
+                "that survives is the fact of it, %s." % neighbours,
+                "",
+                "Source: https://github.com/%s/issues/%d (404 at the time of writing)"
+                % (UPSTREAM_REPO, number),
+                "",
+                "Detected %s." % stamp(),
+            ]),
+            [])
+        known[n] = {"state": None, "title": None, "body": None, "updated_at": None,
+                    "deleted": True, "never_seen": True}
+        dirty = True
+
     # ---- new issues, and any archive that has gone missing from this fork
     for issue in upstream_issues:
         n = str(issue["number"])
@@ -503,11 +573,14 @@ def main():
             continue
         now = by_number.get(number)
         if now is None:
+            if old.get("deleted"):
+                # Recorded on an earlier run. There is nothing left to confirm, and one lookup
+                # per already-known deletion adds up on a sync that runs often.
+                continue
             # Gone from the listing. Confirm directly before calling it deleted: the listing
             # has been seen to drop items for some tokens, and a false "deleted" here would be
             # exactly the kind of lie this archive exists to avoid.
-            if api("/repos/%s/issues/%d" % (UPSTREAM_REPO, number)) is None and \
-               not (old.get("deleted")):
+            if api("/repos/%s/issues/%d" % (UPSTREAM_REPO, number)) is None:
                 archive_url = "https://github.com/%s/issues/%d" % (UPSTREAM_REPO, number)
                 post_event(mirror_number, [
                     "**Upstream no longer serves this item: deleted, or moved somewhere a "
