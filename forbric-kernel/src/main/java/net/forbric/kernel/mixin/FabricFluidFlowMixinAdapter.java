@@ -50,13 +50,26 @@ public final class FabricFluidFlowMixinAdapter {
 				&& call.owner.equals("net/minecraft/world/level/ScheduledTickAccess") && call.name.equals("scheduleTick")
 				&& call.desc.equals("(" + POS + "Lnet/minecraft/world/level/material/Fluid;I)V")) schedules.add(call);
 		if (schedules.size() != 1) return 0;
-		original.visibleAnnotations.remove(MixinFit.injectorOf(original));
-		original.name += "$forbricOriginal";
+		retainOriginal(original, MixinFit.injectorOf(original));
 		for (int i=0;i<hosts.size();i++) mixin.methods.add(wrapper(mixin, original, hosts.get(i), nativeCalls.get(i)));
 		mixin.methods.add(scheduleWrapper(mixin, original, shape, schedules.getFirst()));
 		ForbricLog.info("[Forbric/FluidFlow] Fabric's original ALLOW callback now guards both carrier interactions "
 				+ "and the neighbor-shape scheduling path; denied flow does not schedule a fluid tick");
 		return 3;
+	}
+
+	/**
+	 * Keeps a mod's {@code shouldSpreadLiquid} handler as a plain private method the wrappers call, under the kernel's
+	 * {@code $forbricOriginal} name and marked {@code @Unique}. fabric-block-api and Create Fly both name their handler
+	 * {@code shouldSpreadLiquid}, so both renames land on {@code shouldSpreadLiquid$forbricOriginal} in the same
+	 * {@code LiquidBlock}: as a plain method Mixin kept the first and skipped the second ("Method overwrite conflict"),
+	 * and the second mod's wrappers then called the first mod's body — with Create Fly installed fabric-api's
+	 * {@code FluidFlowEvents.ALLOW} never fired. {@code @Unique} makes Mixin rename the later one and the calls to it.
+	 */
+	static void retainOriginal(MethodNode original, AnnotationNode injector) {
+		original.visibleAnnotations.remove(injector);
+		original.name += "$forbricOriginal";
+		original.visibleAnnotations.add(new AnnotationNode("Lorg/spongepowered/asm/mixin/Unique;"));
 	}
 
 	private static MethodNode scheduleWrapper(ClassNode mixin, MethodNode original, MethodNode host, MethodInsnNode nativeCall) {

@@ -44,8 +44,7 @@ public final class CreateFluidMixinAdapter {
 			if (nativeCalls.size() != 1) return 0;
 			hosts.add(host); calls.add(nativeCalls.getFirst());
 		}
-		original.visibleAnnotations.remove(injection);
-		original.name += "$forbricOriginal";
+		FabricFluidFlowMixinAdapter.retainOriginal(original, injection);
 		for (int i = 0; i < hosts.size(); i++) mixin.methods.add(FabricFluidFlowMixinAdapter.wrapper(mixin, original, hosts.get(i), calls.get(i)));
 		ForbricLog.info("[Forbric/Create] original fluid interaction callback now guards both live carrier reaction sites");
 		return 2;
