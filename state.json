@@ -1110,12 +1110,44 @@
    "title": "\u4e0e\u4fe1\u96c5\u4e92\u8054\u548ckilt\u4e0d\u517c\u5bb9",
    "updated_at": "2026-10-03T13:21:45Z"
   },
+  "49": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "5": {
    "body": "df58248c414f",
    "comments": {},
    "state": "closed",
    "title": "\u592a\u4e71\u4e86",
    "updated_at": "2026-10-02T15:26:51Z"
+  },
+  "50": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "51": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "52": {
+   "body": "b080dda543bb",
+   "comments": {},
+   "comments_through": "",
+   "state": "open",
+   "title": "[crash] create-fly + fabric-api \u2192 `Registry is already frozen (minecraft:root / create:arm_interaction_point_type)` during `Bootstrap.bootStrap`",
+   "updated_at": "2026-10-04T00:40:36Z"
   },
   "6": {
    "body": "5787b95dba3d",
