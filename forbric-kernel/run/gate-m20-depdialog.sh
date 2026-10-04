@@ -30,18 +30,23 @@
 # the real report, forks the real child JVM, reads the real exit code — with AWT disabled inside the child, so it
 # finds it cannot draw. Everything but the pixels.
 #
-# ONE WINDOW, AND THE ANSWER IS WHAT HAPPENS. The candidate arbitration records an unmet hard dependency as a
-# confirmed required loss, and a required loss needs an explicit continue. That question is asked IN this window,
+# ONE WINDOW, AND THE ANSWER IS WHAT HAPPENS. When the candidate arbitration records an unmet hard dependency as a
+# confirmed required loss, that loss needs an explicit continue, and the question is asked IN this window,
 # fail-closed, not in a second one: the notice is folded into it. So what the unanswerable dry run must mean
 # depends on the policy, and every step below sets its policy explicitly and reads the machine report instead of
 # assuming:
-#   * ask   — required losses present: ONE fork, which cannot approve, and the launch stops with the typed exit 78
-#             and no crash report. The old gate stayed green here on "launching anyway" while the kernel stopped
-#             the launch nine lines later.
+#   * ask   — required losses present: ONE fork, which cannot draw, so nobody answered it: not consent, and not the
+#             player's refusal either. The question moves into the game's own window, which asks on the title screen
+#             before the player can open a world; a launch told to open one at once (--quickPlay…) is refused
+#             instead (issue #57: on FCL the window's process cannot start at all, and reading that as
+#             "no" stopped every launch while showing the player nothing). The old gate stayed green here on
+#             "launching anyway" while the kernel stopped the launch nine lines later.
 #   * continue — nothing needs an answer: the fail-open notice is forked once and says "launching anyway", and the
 #             boot must really get past BOTH decisions — "Sound engine started" comes after the client-setup
 #             decision inside Minecraft.<init>.
-# With no required loss in the report, ask degrades to the continue case, and the gate asserts that instead.
+# With no required loss in the report, ask degrades to the continue case, and the gate asserts that instead -- which
+# is what the dependency canary alone produces, so the last two steps add a mod that fails on purpose
+# (build-broken-canary.sh) to put a real required loss in front of ask and of the off switch.
 # GATE-PARALLEL: rundirs=server-depdialog,client-depdialog mem=3000
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
@@ -50,6 +55,8 @@ SLOG="$BUILD/gate-m20-server.log"
 CLOG="$BUILD/gate-m20-client.log"
 OFFLOG="$BUILD/gate-m20-off.log"
 CONTLOG="$BUILD/gate-m20-continue.log"
+REQLOG="$BUILD/gate-m20-ask-required.log"
+REQOFFLOG="$BUILD/gate-m20-off-required.log"
 SRV="$KERNEL/run/server-depdialog"
 CLI="$KERNEL/run/client-depdialog"
 WORK="$BUILD/depdialog-canary"
@@ -176,7 +183,7 @@ check_absent "no crash report for a policy decision" "Preparing crash report|Gam
 # every loading decision; records its exit code ("killed" when the gate had to stop a client that kept running)
 # and keeps the game log and the machine report beside the log.
 run_client() {
-  local log="$1" policy="$2" mode="$3" pid i code
+  local log="$1" policy="$2" mode="$3" until="${4:-Sound engine started|Game crashed|Mod Loading has failed}" pid i code
   : > "$log"
   rm -f "$log.exit" "$CLI/logs/latest.log" "$CLI/.forbric-kernel/compatibility-report.json"
   FORBRIC_COMPAT_POLICY="$policy" FORBRIC_DEP_DIALOG="$mode" FORBRIC_JVM="${M20_EXTRA_JVM:-}" RUNDIR="$CLI" \
@@ -185,8 +192,16 @@ run_client() {
   echo "[kernel] client pid=$pid policy=$policy dialog=$mode (killed by pid only — another client may be running)"
   for i in $(seq 1 240); do
     kill -0 "$pid" 2>/dev/null || { echo "[kernel] client left on its own after ~${i}s"; break; }
-    grep -qaE 'Sound engine started|Game crashed|Mod Loading has failed' "$CLI/logs/latest.log" 2>/dev/null \
-      && { echo "[kernel] client got past loading after ~${i}s"; break; }
+    if grep -qaE "$until" "$CLI/logs/latest.log" 2>/dev/null; then
+      # "Sound engine started" comes during the first resource reload; the game's own prompt only after it. Under
+      # ask, a run with a required loss in its report is waited on until the game asks, stops, or crashes.
+      req=$(report_field "$CLI/.forbric-kernel/compatibility-report.json" 'report["confirmedRequired"]')
+      if [ "$policy" = ask ] && [ "$req" != missing ] && [ "$req" -gt 0 ] 2>/dev/null \
+          && ! grep -qaE 'asking in the game|launch stopped|Game crashed' "$CLI/logs/latest.log" 2>/dev/null; then
+        sleep 1; continue
+      fi
+      echo "[kernel] client got past loading after ~${i}s"; break
+    fi
     sleep 1
   done
   if kill -0 "$pid" 2>/dev/null; then
@@ -216,12 +231,14 @@ assert_eq "exactly one dialog was forked: the notice is not a second window" "1"
 check_absent "nothing quit the game on the player's behalf" "Forbric/Deps\] the player chose to quit" "$CLOG"
 CREQ=$(report_field "$CLOG.json" 'report["confirmedRequired"]')
 if [ "$CREQ" != "missing" ] && [ "$CREQ" -gt 0 ] 2>/dev/null; then
-  check "the one window was the confirmation, and with no display it could not approve" \
-    "Forbric/Deps\] -Dforbric.dependencyDialog=dryRun — forked the dialog for [0-9]+ finding\(s\) with no display; it answered 1 \(not approved\)" "$CLOG.game"
+  check "the one window was the confirmation, and with no display nobody could answer it" \
+    "Forbric/Deps\] -Dforbric.dependencyDialog=dryRun — forked the dialog for [0-9]+ finding\(s\) with no display; it answered 3 \(could not show it\)" "$CLOG.game"
+  check "so the question went to the game, approving nothing" \
+    "Forbric/Compatibility\] the confirmation window could not be shown; [0-9]+ required feature loss\(es\) will be asked about in the game's own window" "$CLOG"
   check_absent "it did not also say it was launching anyway" "Forbric/Deps\] launching anyway" "$CLOG"
-  assert_eq "the unapproved launch stopped with the typed policy stop" "78" "$(cat "$CLOG.exit" 2>/dev/null)"
-  check "and said so" "launch stopped by compatibility policy" "$CLOG"
-  check_absent "never reached the game" "Sound engine started" "$CLOG"
+  check_absent "nothing stopped the launch before the player was asked" "Forbric/Compatibility\] launch stopped" "$CLOG"
+  check "and the game asked, in its own window" \
+    "Forbric/Compatibility\] asking in the game about [0-9]+ required feature loss\(es\) the launch could not ask about in a window" "$CLOG"
 else
   check "nothing required: the one window was the fail-open notice" \
     "Forbric/Deps\] launching anyway with 1 finding\(s\)" "$CLOG"
@@ -257,10 +274,43 @@ if [ "$OREQ" != "missing" ] && [ "$OREQ" -gt 0 ] 2>/dev/null; then
   assert_eq "and the launch stopped with the typed policy stop" "78" "$(cat "$OFFLOG.exit" 2>/dev/null)"
 fi
 
+step "ask with a required loss: a window nobody can answer moves the question into the game"
+"$KERNEL/run/build-broken-canary.sh" >"$BUILD/gate-m20-broken-canary.log" 2>&1 \
+  || echo "[kernel] FAIL the broken canary did not build — see $BUILD/gate-m20-broken-canary.log"
+# The broken mod alone: with the dependency canary beside it the first decision (before any entrypoint has run, so
+# before this loss exists) would show the fail-open notice as a window of its own, and the count below would be two.
+rm -f "$CLI/mods/"*.jar
+cp "$KERNEL/run/canary/forbricbrokencanary.jar" "$CLI/mods/" 2>/dev/null
+run_client "$REQLOG" ask dryRun 'asking in the game|launch stopped|Game crashed|Mod Loading has failed'
+RREQ=$(report_field "$REQLOG.json" 'report["confirmedRequired"]')
+if [ "$RREQ" != missing ] && [ "$RREQ" -gt 0 ] 2>/dev/null; then
+  echo "[kernel] PASS the broken mod is a confirmed required loss ($RREQ)"
+else
+  echo "[kernel] FAIL the broken mod is a confirmed required loss (got $RREQ)"; FAIL=1
+fi
+assert_eq "one window, the confirmation" "1" "$(forks "$REQLOG.game")"
+check "it could not be shown" \
+  "Forbric/Deps\] -Dforbric.dependencyDialog=dryRun — forked the dialog for [0-9]+ finding\(s\) with no display; it answered 3 \(could not show it\)" "$REQLOG.game"
+check "so the launch handed the question to the game and approved nothing" \
+  "Forbric/Compatibility\] the confirmation window could not be shown; [0-9]+ required feature loss\(es\) will be asked about in the game's own window" "$REQLOG"
+check_absent "nothing stopped the launch before the player was asked" "Forbric/Compatibility\] launch stopped" "$REQLOG"
+check "the game asked on its own screen, Launch anyway or Quit" \
+  "Forbric/Compatibility\] asking in the game about [0-9]+ required feature loss\(es\) the launch could not ask about in a window" "$REQLOG"
+assert_eq "and it was still waiting for the answer when the gate stopped it" "killed" "$(cat "$REQLOG.exit" 2>/dev/null)"
+check_absent "no crash" "Preparing crash report|Game crashed" "$REQLOG"
+
+step "off with a required loss: the switch is an explicit no-window, so the launch is not approved"
+run_client "$REQOFFLOG" ask off
+check "with no window a required loss is not approved" "continuation was not approved" "$REQOFFLOG"
+assert_eq "and the launch stopped with the typed policy stop" "78" "$(cat "$REQOFFLOG.exit" 2>/dev/null)"
+check_absent "no child was forked" "forked the dialog" "$REQOFFLOG"
+check_absent "and nothing was handed to the game" "asking in the game" "$REQOFFLOG"
+rm -f "$CLI/mods/forbricbrokencanary.jar"
+
 step "M20 result"
 if [ "${FAIL:-0}" -eq 0 ]; then
   echo "[kernel] ✅ M20 GATE GREEN — an unmet hard dependency reaches the player in one window on a client, nothing on a server, and each answer is what happened"
 else
-  echo "[kernel] ❌ M20 GATE RED — see $SLOG / $CLOG / $CONTLOG / $OFFLOG"
+  echo "[kernel] ❌ M20 GATE RED — see $SLOG / $CLOG / $CONTLOG / $OFFLOG / $REQLOG / $REQOFFLOG"
   exit 1
 fi

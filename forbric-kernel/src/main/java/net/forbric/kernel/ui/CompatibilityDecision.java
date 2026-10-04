@@ -18,6 +18,15 @@ public final class CompatibilityDecision {
 	public enum Policy { ASK, CONTINUE, STRICT }
 	private static final Set<String> ACCEPTED = new LinkedHashSet<>();
 	private static final Set<String> QUEUED = new LinkedHashSet<>();
+	/**
+	 * Required losses the launch could not ask about in a window, handed to the game's own prompt. Not accepted: the
+	 * game asks before anything else, and a refusal there stops it, as Quit in the window would have.
+	 */
+	private static final Set<String> IN_GAME = new LinkedHashSet<>();
+	/** The client's arguments that open a world as soon as the game has loaded, e.g. {@code --quickPlaySingleplayer}. */
+	private static final Set<String> QUICK_PLAY = Set.of("--quickPlaySingleplayer", "--quickPlayMultiplayer", "--quickPlayRealms");
+	/** The argument of this launch that opens a world straight away, or null. */
+	private static volatile String opensAWorldAtOnce;
 	private static volatile boolean launchStopRequested;
 
 	private CompatibilityDecision() { }
@@ -30,6 +39,21 @@ public final class CompatibilityDecision {
 			case "strict" -> Policy.STRICT;
 			default -> Policy.STRICT;
 		};
+	}
+
+	/**
+	 * Remembers whether the client was told to open a world as soon as it has loaded. Then there is no moment to ask in
+	 * the game before the world is loaded and saved -- {@code Minecraft.doWorldLoad} writes level.dat and runs its own
+	 * loop without the tick the prompt hangs on -- so a question no window could ask is not moved there.
+	 */
+	public static void noteGameArguments(String[] args) {
+		String found = null;
+		if (args != null) {
+			for (String arg : args) {
+				if (arg != null && QUICK_PLAY.contains(arg.split("=", 2)[0])) { found = arg.split("=", 2)[0]; break; }
+			}
+		}
+		opensAWorldAtOnce = found;
 	}
 
 	/** Boot integration: false means the caller must stop before entering the game. */
@@ -86,12 +110,19 @@ public final class CompatibilityDecision {
 	 * the old fail-open notice when nothing does; nothing at all under strict or without a display.
 	 */
 	public static boolean decide(List<CompatibilityFinding> findings, boolean isClient) {
-		return decide(findings, policy(), isClient && !java.awt.GraphicsEnvironment.isHeadless(), isClient,
+		// The window is a separate process: what matters is whether THAT process can draw. A macOS client keeps AWT
+		// headless in the game's own JVM on purpose (MacAwtBootstrap) and the forked window still draws; reading the
+		// game's flag here refused every macOS launch with a required loss without ever asking.
+		boolean display = isClient && (!java.awt.GraphicsEnvironment.isHeadless()
+				|| net.forbric.kernel.boot.MacAwtBootstrap.usesHeadlessFonts());
+		return decide(findings, policy(), display, isClient,
 				DependencyDialog.takeHeld(), new Windows() {
 					@Override public Integer confirm(DependencyReport.Confirmation confirmation) {
 						try {
 							return DependencyDialog.confirm(confirmation);
 						} catch (Exception failure) {
+							// What DependencyDialog could not even attempt it reports as UNSHOWN; what is left here
+							// is the confirmation breaking part-way, which approves nothing.
 							if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
 							ForbricLog.warn("[Forbric/Compatibility] confirmation unavailable; continuation was not approved", failure);
 							return DependencyDialogMain.QUIT;
@@ -110,7 +141,10 @@ public final class CompatibilityDecision {
 
 	/** The windows a decision may open. An interface so a test can stand in for the child process. */
 	interface Windows {
-		/** The fail-closed confirmation; only {@link DependencyDialogMain#CONTINUE} approves. */
+		/**
+		 * The fail-closed confirmation; only {@link DependencyDialogMain#CONTINUE} approves, and
+		 * {@link DependencyDialogMain#UNSHOWN} says nobody could be asked in a window.
+		 */
 		Integer confirm(DependencyReport.Confirmation confirmation);
 
 		/** The fail-open dependency notice; false only when the player chose to quit. */
@@ -145,12 +179,20 @@ public final class CompatibilityDecision {
 			return notice.isEmpty() || windows.notice(notice, suspected(notice));
 		}
 		List<CompatibilityFinding> unanswered;
+		boolean allInGame;
 		synchronized (CompatibilityDecision.class) {
 			unanswered = required.stream().filter(f -> !ACCEPTED.contains(f.key())).toList();
+			allInGame = unanswered.stream().allMatch(f -> IN_GAME.contains(f.key()));
 		}
 		if (unanswered.isEmpty()) return notice.isEmpty() || windows.notice(notice, suspected(notice));
+		// Already handed to the game: it asks once it is up, and a later boundary must not stop it first.
+		if (isClient && allInGame) return true;
 		if (!display) {
-			windows.unshown(notice, "no display to ask on");
+			// The switch is an explicit "no window", for runs with nobody to ask: it fails closed here as in the window.
+			if (isClient && !DependencyDialog.switchedOff()) {
+				return askInGame(unanswered, notice, windows, "no window can be drawn beside the game");
+			}
+			windows.unshown(notice, isClient ? "-D" + DependencyDialog.SWITCH + "=off" : "no display to ask on");
 			return false;
 		}
 		List<DependencyReport.Row> open = new ArrayList<>();
@@ -163,9 +205,49 @@ public final class CompatibilityDecision {
 		} catch (RuntimeException failure) {
 			return false;
 		}
+		if (answer != null && answer == DependencyDialogMain.UNSHOWN && isClient) {
+			return askInGame(unanswered, notice, windows, "the confirmation window could not be shown");
+		}
 		if (answer == null || answer != DependencyDialogMain.CONTINUE) return false;
 		accept(unanswered);
 		return true;
+	}
+
+	/**
+	 * Hands {@code unanswered} to the game's own prompt, when a client cannot show the window that asks.
+	 *
+	 * <p>The question still has to be answered; only where it is asked changes. The game draws its windows itself, so
+	 * the prompt reaches a player the forked window cannot: on Android launchers such as FCL the window's process cannot
+	 * even start. Nothing is accepted here. {@code KernelCompatibilityPrompts} asks at the first game tick with no
+	 * loading screen up, which is the title screen, before the player can open a world; Continue there accepts, and
+	 * Quit -- or closing it -- stops the game, as Quit in the window would have. Reading "could not ask" as "the player
+	 * said no" stopped every such launch while showing the player nothing but a line at the end of the log.
+	 *
+	 * <p>Not when the launcher asked for a world straight away ({@link #noteGameArguments}): that world would be loaded
+	 * and saved before the game's first tick could ask, so the launch is not approved, as before, and the log says why.
+	 */
+	private static boolean askInGame(List<CompatibilityFinding> unanswered, DependencyDialog.Notice notice,
+			Windows windows, String why) {
+		windows.unshown(notice, why);
+		String quickPlay = opensAWorldAtOnce;
+		if (quickPlay != null) {
+			ForbricLog.error("[Forbric/Compatibility] %s, and the launcher asked to open a world straight away (%s): the game "
+					+ "would load and save it before its own window could ask, so continuation was not approved. Launch "
+					+ "without %s to be asked on the title screen", why, quickPlay, quickPlay);
+			return false;
+		}
+		synchronized (CompatibilityDecision.class) {
+			for (CompatibilityFinding f : unanswered) IN_GAME.add(f.key());
+		}
+		ForbricLog.warn("[Forbric/Compatibility] %s; %d required feature loss(es) will be asked about in the game's own "
+				+ "window on the title screen, and nothing is approved until the player answers there", why,
+				unanswered.size());
+		return true;
+	}
+
+	/** Whether the launch handed {@code finding} to the game to ask about, so that refusing it stops the game. */
+	public static synchronized boolean askedInGameForTheLaunch(CompatibilityFinding finding) {
+		return IN_GAME.contains(finding.key());
 	}
 
 	/**
@@ -206,7 +288,10 @@ public final class CompatibilityDecision {
 	}
 
 	private static synchronized void accept(List<CompatibilityFinding> findings) {
-		for (CompatibilityFinding f : findings) ACCEPTED.add(f.key());
+		for (CompatibilityFinding f : findings) {
+			ACCEPTED.add(f.key());
+			IN_GAME.remove(f.key());
+		}
 	}
 
 	/** Called only by a real in-game Continue action; never clears evidence or a strict gate's verdict. */
@@ -231,7 +316,10 @@ public final class CompatibilityDecision {
 	public static synchronized void reset() {
 		ACCEPTED.clear();
 		QUEUED.clear();
+		IN_GAME.clear();
+		opensAWorldAtOnce = null;
 		launchStopRequested = false;
 		DependencyDialog.takeHeld();
+		DependencyDialog.forgetUnavailable();
 	}
 }

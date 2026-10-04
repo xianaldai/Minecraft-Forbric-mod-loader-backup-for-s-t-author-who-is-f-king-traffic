@@ -253,6 +253,7 @@ test	net.forbric.kernel.mixin.MixinFitStagedTest	theSnippetWrapReadsPartialOnThe
 test	net.forbric.kernel.mixin.MixinLocalsCaptureTest	actualCreativeCoreConfigurationRedirectIsSoftened()	[fixture:third-party] sweep pack absent
 test	net.forbric.kernel.mixin.MixinLocalsCaptureTest	architecturysServerPlayerGameModeCaptureIsSoftened()	[fixture:third-party] popular inputs absent
 test	net.forbric.kernel.mixin.MixinMergedTwinTest	theMergedBaseReallyCarriesTheTwinThisIsAbout()	[fixture:staged] staged merged base absent
+test	net.forbric.kernel.mixin.MixinOverloadPinTest	theRealMergedServerIsPinnedToVanillasOverload()	[fixture:staged] the merged base: $ROOT/forbric-loader/run/merged-base/patched-mc-merged-26.2.jar
 test	net.forbric.kernel.mixin.MixinRelocatedCallTest	anInjectAtTheCallStaysPut()	[fixture:staged] actual Fabric API fixture required
 test	net.forbric.kernel.mixin.MixinRelocatedCallTest	fabricsUseOnWrapSelectsTheRelayAndItsUseWrapStays()	[fixture:staged] actual Fabric API fixture required
 test	net.forbric.kernel.mixin.MixinRelocatedCallTest	nothingMovesWithoutTheRelay()	[fixture:staged] actual Fabric API fixture required
@@ -269,6 +270,7 @@ test	net.forbric.kernel.mixin.MixinShearsRelayTest	aWrapStillBoundToOtherIsCalls
 test	net.forbric.kernel.mixin.MixinShearsRelayTest	aWrapWhoseCallIsGoneMovesToTheCarrierCall()	[fixture:third-party] sweep pack absent
 test	net.forbric.kernel.mixin.MixinShearsRelayTest	everyRowIsAVanillaShearsCheckTheMergeReplaced()	[fixture:mc-libraries] actual game required
 test	net.forbric.kernel.mixin.MixinShearsRelayTest	onlyAFabricModsReviewedShapeIsRelayed()	[fixture:staged] actual game required
+test	net.forbric.kernel.mixin.MixinStubRebindTest	aBareNameThePinPointsAtAStubThenMovesOntoTheBody()	[fixture:staged] actual game required
 test	net.forbric.kernel.mixin.MixinStubRebindTest	aByTypeLocalIsLeftWhereTheBodyDoesNotDecideIt()	[fixture:staged] actual game required
 test	net.forbric.kernel.mixin.MixinStubRebindTest	aByTypeLocalMixinLosesAtALoopsExitIsLeft()	[fixture:staged] actual game required
 test	net.forbric.kernel.mixin.MixinStubRebindTest	aCaptureTheStubPassesThroughInPlaceStillMoves()	[fixture:staged] actual game required
@@ -293,6 +295,7 @@ test	net.forbric.kernel.mixin.MixinStubRebindTest	fusionsOverlayHookMovesWithThe
 test	net.forbric.kernel.mixin.MixinStubRebindTest	fusionsSpriteCaptureMovesToTheBodyMinecraftForgeRan()	[fixture:third-party] build/compat-inputs/sweep90/mods/fusion-1.3.15a-forge-mc26.2.jar absent
 test	net.forbric.kernel.mixin.MixinStubRebindTest	fusionsVerdictFindsTheAnchorWhereTheRebindPutsIt()	[fixture:staged] fusion and the merged base required
 test	net.forbric.kernel.mixin.MixinStubRebindTest	malilibsFormatRestoreMovesToTheBodyClientLanguageCalls()	[fixture:third-party] malilib absent from the merged pack
+test	net.forbric.kernel.mixin.MixinStubRebindTest	mixinFitJudgesThePinnedThenRebasedInjectorInTheBody()	[fixture:staged] actual game required
 test	net.forbric.kernel.mixin.MixinStubRebindTest	owosLangHooksMoveTogetherToTheBodyClientLanguageCalls()	[fixture:staged] actual game required
 test	net.forbric.kernel.mixin.MixinStubRebindTest	owosVerdictFollowsTheGroup()	[fixture:staged] owo and the merged base required
 test	net.forbric.kernel.mixin.MixinStubRebindTest	theSwitchMovesNothing()	[fixture:third-party] run/client-popular/mods/architectury-fabric-21.1.10.jar absent
@@ -344,9 +347,12 @@ test	net.forbric.kernel.runtime.KernelCompatibilityPromptsTest	aRefusalOutsideAW
 test	net.forbric.kernel.runtime.KernelCompatibilityPromptsTest	aReplacingModCannotDismissTheWarningAndLeaveThePlayerInTheWorld()	[fixture:game-side] compiled game side: $ROOT/forbric-kernel/build/classes/java/runtime/net/forbric/kernel/runtime/KernelCompatibilityPrompts.class
 test	net.forbric.kernel.runtime.KernelCompatibilityPromptsTest	anActiveLoadingOverlayDefersThePromptWithoutLosingIt()	[fixture:game-side] compiled game side: $ROOT/forbric-kernel/build/classes/java/runtime/net/forbric/kernel/runtime/KernelCompatibilityPrompts.class
 test	net.forbric.kernel.runtime.KernelCompatibilityPromptsTest	closingConfirmationSavesBeforeReturningAndAsksAgainInTheNextWorld()	[fixture:game-side] compiled game side: $ROOT/forbric-kernel/build/classes/java/runtime/net/forbric/kernel/runtime/KernelCompatibilityPrompts.class
+test	net.forbric.kernel.runtime.KernelCompatibilityPromptsTest	closingTheLaunchsQuestionIsNotConsent()	[fixture:game-side] compiled game side: $ROOT/forbric-kernel/build/classes/java/runtime/net/forbric/kernel/runtime/KernelCompatibilityPrompts.class
 test	net.forbric.kernel.runtime.KernelCompatibilityPromptsTest	continueRestoresTheScreenAndNeverClearsTheGateFailure()	[fixture:game-side] compiled game side: $ROOT/forbric-kernel/build/classes/java/runtime/net/forbric/kernel/runtime/KernelCompatibilityPrompts.class
+test	net.forbric.kernel.runtime.KernelCompatibilityPromptsTest	continuingAtTheLaunchsQuestionIsTheConsentTheWindowWouldHaveGiven()	[fixture:game-side] compiled game side: $ROOT/forbric-kernel/build/classes/java/runtime/net/forbric/kernel/runtime/KernelCompatibilityPrompts.class
 test	net.forbric.kernel.runtime.KernelCompatibilityPromptsTest	failedScreenPresentationCannotBeMistakenForConsent()	[fixture:game-side] compiled game side: $ROOT/forbric-kernel/build/classes/java/runtime/net/forbric/kernel/runtime/KernelCompatibilityPrompts.class
 test	net.forbric.kernel.runtime.KernelCompatibilityPromptsTest	strictSavesAndStopsThroughMinecraftInsteadOfExitingTheJvm()	[fixture:game-side] compiled game side: $ROOT/forbric-kernel/build/classes/java/runtime/net/forbric/kernel/runtime/KernelCompatibilityPrompts.class
+test	net.forbric.kernel.runtime.KernelCompatibilityPromptsTest	theLaunchsQuestionIsAskedOnTheTitleInItsOwnWordsAndQuitStopsTheGame()	[fixture:game-side] compiled game side: $ROOT/forbric-kernel/build/classes/java/runtime/net/forbric/kernel/runtime/KernelCompatibilityPrompts.class
 test	net.forbric.kernel.runtime.KernelCompatibilityPromptsTest	theSameObservationOnEverySpawnDoesNotRewriteTheReportsEveryTick()	[fixture:game-side] compiled game side: $ROOT/forbric-kernel/build/classes/java/runtime/net/forbric/kernel/runtime/KernelCompatibilityPrompts.class
 test	net.forbric.kernel.runtime.KernelCompostablesTest	neoForgeDecidesWhateverItsDataMapListed()	[fixture:staged] the staged game required
 test	net.forbric.kernel.runtime.KernelCompostablesTest	nothingShowsUntilTheBootstrapWasSeen()	[fixture:staged] the staged game required

@@ -556,8 +556,10 @@ Rather than drop, the kernel moves a guest injector when the merge relocated wha
 narrow and table- or proof-driven:
 
 `MixinRetarget` and `MixinStubRebind` (delegating stubs → the overload carrying the body), `MixinOverloadPin`
-(name-only selector with two same-named merged methods), `MixinMergedTwin` (`$forbricneo` renamed anonymous
-twins), `MixinAnonymousRetarget` + `MergedBaseAnonymousDrift` (renumbered `Outer$N`), `MixinAtWidenedCall` and
+(a name-only `@Inject` that Mixin would bind to the other ecosystem's overload, declared first, is pinned to the one
+overload its handler fits — only when the first cannot take the handler; otherwise it is explained),
+`MixinMergedTwin` (`$forbricneo` renamed anonymous twins), `MixinAnonymousRetarget` + `MergedBaseAnonymousDrift`
+(renumbered `Outer$N`), `MixinAtWidenedCall` and
 `MixinWrapOperationShim` (calls the carrier widened or reordered), `MixinRelocatedCall`, `MixinSubtypeOwnerRetarget`,
 `MixinShearsRelay`, `MixinHandlerShim`, `MixinAtShape` (`at=[…]` vs `at=…` across Mixin forks), `MixinLocalsCapture`
 (`CAPTURE_FAILHARD → CAPTURE_FAILSOFT`), `InsertedLambdaArgumentShim`, `MergedBaseCalleeSwaps`,
@@ -727,7 +729,9 @@ Working directories in the same place: `lib/` (extracted bundled jars), `jij/`, 
 the game runs with `-XstartOnFirstThread` and AWT cannot share thread one with GLFW. Parent and child share only
 the tab-separated file format in `DependencyReport`; strings are in `DialogLang` (system language,
 `-Dforbric.dialogLanguage=<code>` forces one). `-Dforbric.dependencyDialog=on` (default) | `off` | `dryRun` (forks
-the real child with AWT disabled — what gates assert on). The child times out after 10 minutes. The same child
+the real child with AWT disabled — what gates assert on). The child times out after 10 minutes. The confirmation's
+exit code is `0` continue, `4` quit or closed, and anything else (`3` cannot draw, the launcher's own `1`) a window
+nobody could answer. The same child
 has a third window, `--isolation`: the crash-suspects offer of §12.2, whose exit code `2` means start without them;
 anything but its two explicit buttons starts with every mod.
 
@@ -737,7 +741,7 @@ anything but its two explicit buttons starts with every mod.
 
 | Value | A confirmed required loss… |
 | --- | --- |
-| `ask` (default) | asks the player once in the dialog (the dependency notice folded in); only an explicit Continue approves. No display, or no answer → not approved |
+| `ask` (default) | asks the player once in the dialog (the dependency notice folded in); only an explicit Continue approves, and Quit or closing it refuses. On a client whose dialog cannot be shown — no runnable `java.home/bin/java` (Android launchers such as FCL), a child that cannot start or draw, no answer within 10 minutes — the question moves into the game: nothing is approved, and `KernelCompatibilityPrompts` asks on the title screen with the dialog's own buttons, where Quit stops the game. Not approved instead when the launch opens a world straight away (`--quickPlaySingleplayer`/`Multiplayer`/`Realms`: the world would load before the game could ask) or under `-Dforbric.dependencyDialog=off`. A dedicated server has nobody to ask → not approved |
 | `continue` | is accepted and recorded; the notice may still be shown |
 | `strict` | stops the launch; no window is shown |
 | anything else | treated as `strict` (fail closed) |

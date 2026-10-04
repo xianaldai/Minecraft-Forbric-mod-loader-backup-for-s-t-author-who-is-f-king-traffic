@@ -1097,6 +1097,7 @@ public final class KernelBoot {
 		// Evidence, not the end of loading: no mod has initialised yet, so this boundary may name what already
 		// failed but must not be the one that says every mod finished loading.
 		KernelLoadReport.writeEvidence();
+		if (side.api().isClient()) net.forbric.kernel.ui.CompatibilityDecision.noteGameArguments(args);
 		net.forbric.kernel.ui.CompatibilityDecision.requireContinuation(side.api().isClient());
 
 		// Fabric preLaunch entrypoints, after Mixin is up and before any game class loads (their contract).

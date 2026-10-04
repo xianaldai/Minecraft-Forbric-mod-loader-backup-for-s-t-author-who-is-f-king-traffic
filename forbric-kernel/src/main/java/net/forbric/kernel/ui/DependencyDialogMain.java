@@ -72,7 +72,10 @@ import javax.swing.UIManager;
  * <p>Exit code IS the answer: {@code 0} continue, {@code 1} quit. Anything else the parent reads as continue,
  * because a dialog that fails must not be able to stop a launch that would otherwise have worked. The crash-suspects
  * offer ({@code --isolation}) adds {@code 2}, start without the suspects; any other answer there, a closed window
- * included, starts the game with every mod, which is what would have happened without the offer.
+ * included, starts the game with every mod, which is what would have happened without the offer. The confirmation
+ * ({@code --compatibility}) is the fail-closed one: {@code 0} is the only consent, {@code 4} the player's refusal or a
+ * closed window, and anything else -- {@code 3} for a window that could not be shown, or the {@code java} launcher's
+ * own {@code 1} when it could not start the child -- nobody having answered, which the parent hands to the game.
  *
  * <h2>What the player is shown</h2>
  *
@@ -106,6 +109,19 @@ public final class DependencyDialogMain {
 	public static final int QUIT = 1;
 	/** The crash-suspects offer only: start without the mods the last crash pointed at. */
 	public static final int WITHOUT = 2;
+	/**
+	 * The confirmation only: the window could not be shown, so nobody answered. Neither consent nor refusal -- the
+	 * launch asks again in the game's own window ({@link CompatibilityDecision}), because on a phone launcher or any
+	 * other runtime this child cannot draw on, reading "could not ask" as "the player said no" meant that every launch
+	 * with a required loss stopped, and the player was never once shown why.
+	 */
+	public static final int UNSHOWN = 3;
+	/**
+	 * The confirmation's exit code for the player's refusal -- Quit, or closing the window -- which the parent reads
+	 * back as {@link #QUIT}. Not 1: the {@code java} launcher itself exits 1 when it cannot start the child (no main
+	 * class, a JVM that will not initialise), and that is nobody having answered, not the player saying no.
+	 */
+	public static final int REFUSED = 4;
 
 	/**
 	 * How many findings the summary names before it hands the rest to the details.
@@ -196,18 +212,21 @@ public final class DependencyDialogMain {
 	}
 
 	private static void confirmationMain(Path report) {
-		int answer = QUIT;
+		// Until the player answers, nobody has: an unreadable report or a window that cannot be shown approves nothing
+		// and refuses nothing.
+		int answer = UNSHOWN;
 		try {
 			DependencyReport.Confirmation confirmation = DependencyReport.readConfirmation(report);
-			if (confirmation.required().isEmpty()) { System.exit(QUIT); return; }
+			if (confirmation.required().isEmpty()) { System.exit(UNSHOWN); return; }
 			DialogLang lang = DialogLang.ofSystem();
 			try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); }
 			catch (Exception ignored) { }
 			int[] result = { QUIT };
 			SwingUtilities.invokeAndWait(() -> result[0] = showCompatibility(lang, confirmation));
-			answer = result[0];
+			answer = result[0] == CONTINUE ? CONTINUE : REFUSED;
 		} catch (Throwable unavailable) {
-			// Unlike the legacy dependency notice, no answer is never permission to continue.
+			// Unlike the legacy dependency notice, no answer is never permission to continue -- and it is not the
+			// player's refusal either: UNSHOWN.
 		}
 		System.exit(answer);
 	}

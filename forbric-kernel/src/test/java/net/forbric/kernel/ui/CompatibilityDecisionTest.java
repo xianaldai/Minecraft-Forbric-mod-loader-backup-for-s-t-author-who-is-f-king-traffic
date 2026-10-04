@@ -21,6 +21,19 @@ import org.junit.jupiter.api.parallel.ResourceLock;
 @ResourceLock("system-properties")
 class CompatibilityDecisionTest {
 	@TempDir Path tmp;
+	/** build.gradle runs every test with the dialog switched off; the no-window client cases are about it being on. */
+	private String dialogSwitch;
+
+	@BeforeEach
+	void rememberTheDialogSwitch() {
+		dialogSwitch = System.getProperty(DependencyDialog.SWITCH);
+	}
+
+	@AfterEach
+	void restoreTheDialogSwitch() {
+		if (dialogSwitch == null) System.clearProperty(DependencyDialog.SWITCH); else System.setProperty(DependencyDialog.SWITCH, dialogSwitch);
+	}
+
 	@BeforeEach @AfterEach
 	void reset() {
 		CompatibilityDecision.reset();
@@ -158,7 +171,10 @@ class CompatibilityDecisionTest {
 	void theFirstDecisionTakesTheHeldNoticeAndNoLaterOneCanShowItAgain() {
 		DependencyDialog.hold(missingDependency().rows(), List.of());
 		CompatibilityFindings.record(arbitrationOf("forbricdepcanary", "forbricnosuchmod"));
-		assertFalse(CompatibilityDecision.check(true), "no display in the test JVM: not approved");
+		CompatibilityFinding loss = arbitrationOf("forbricdepcanary", "forbricnosuchmod");
+		System.clearProperty(DependencyDialog.SWITCH);
+		assertTrue(CompatibilityDecision.check(true), "no window in the headless test JVM: the game asks instead");
+		assertTrue(CompatibilityDecision.askedInGameForTheLaunch(loss), "and nothing was approved");
 		assertTrue(DependencyDialog.takeHeld().isEmpty());
 	}
 
@@ -230,7 +246,8 @@ class CompatibilityDecisionTest {
 		CompatibilityFinding loss = arbitrationOf("forbricdepcanary", "forbricnosuchmod");
 		Recorded windows = new Recorded();
 		assertFalse(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.STRICT, true, true, missingDependency(), windows));
-		assertFalse(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, false, true, missingDependency(), windows));
+		// A dedicated server has nobody to ask, in a window or in a game: ask fails closed there.
+		assertFalse(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, false, false, missingDependency(), windows));
 		assertEquals(2, windows.unshown.size());
 		assertEquals(List.of(), windows.confirmations);
 		assertEquals(List.of(), windows.notices);
@@ -269,7 +286,106 @@ class CompatibilityDecisionTest {
 	@Test
 	void realChildCannotApproveWhenNoDisplayExists() throws Exception {
 		var row = new DependencyReport.CompatibilityRow("demo", "Demo", "use item", "missing result", "test", "proof");
-		assertEquals(1, DependencyDialog.askCompatibility(List.of(row), List.of("-Djava.awt.headless=true")));
+		// Not a refusal either: nobody was asked, and the launch takes the question to the game.
+		assertEquals(DependencyDialogMain.UNSHOWN, DependencyDialog.askCompatibility(List.of(row), List.of("-Djava.awt.headless=true")));
+	}
+
+	/**
+	 * Issue #57: on FCL the window's process cannot start (error 13 from execve), and that was read as the player
+	 * saying no -- every launch with a required loss stopped, and the player saw nothing. A window that cannot be shown
+	 * now moves the question into the game, which accepts nothing until the player answers there.
+	 */
+	@Test
+	void aClientThatCannotShowTheWindowAsksInTheGameAndApprovesNothing() {
+		CompatibilityFinding loss = arbitrationOf("forbricdepcanary", "forbricnosuchmod");
+		CompatibilityFindings.record(loss);
+		Recorded windows = new Recorded();
+		windows.answer = DependencyDialogMain.UNSHOWN;
+		assertTrue(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, true, true, missingDependency(), windows));
+		assertEquals(1, windows.confirmations.size(), "the window was tried first");
+		assertEquals(List.of("the confirmation window could not be shown"), windows.unshown);
+		assertTrue(CompatibilityDecision.askedInGameForTheLaunch(loss));
+
+		// The next boundary (client setup, inside Minecraft.<init>) neither forks again nor stops the game first.
+		assertTrue(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, true, true, DependencyDialog.Notice.EMPTY, windows));
+		assertEquals(1, windows.confirmations.size());
+
+		// Nothing was accepted: a dedicated-server style check still sees an open question.
+		assertFalse(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, false, false, DependencyDialog.Notice.EMPTY, windows));
+		CompatibilityDecision.queue();
+		assertEquals(List.of(loss.key()), CompatibilityDecision.drain().stream().map(CompatibilityFinding::key).toList(),
+				"the game's prompt picks it up");
+
+		// The player's Continue there is the consent, and the question is no longer the launch's.
+		CompatibilityDecision.acknowledge(List.of(loss));
+		assertFalse(CompatibilityDecision.askedInGameForTheLaunch(loss));
+		assertTrue(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, false, false, DependencyDialog.Notice.EMPTY, windows));
+	}
+
+	/**
+	 * A launcher's "open this world on start" leaves no moment to ask in the game before the world is loaded and saved,
+	 * so a question no window could ask is not moved there: the launch is refused, as before, and says why.
+	 */
+	@Test
+	void aLaunchThatOpensAWorldAtOnceIsNotHandedToTheGame() {
+		CompatibilityFinding loss = arbitrationOf("forbricdepcanary", "forbricnosuchmod");
+		System.clearProperty(DependencyDialog.SWITCH);
+		Recorded windows = new Recorded();
+		windows.answer = DependencyDialogMain.UNSHOWN;
+		CompatibilityDecision.noteGameArguments(new String[] {"--username", "x", "--quickPlaySingleplayer", "New World"});
+		assertFalse(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, true, true, DependencyDialog.Notice.EMPTY, windows));
+		assertFalse(CompatibilityDecision.askedInGameForTheLaunch(loss));
+		assertFalse(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, false, true, DependencyDialog.Notice.EMPTY, windows),
+				"no window at all: the same");
+
+		// --quickPlayPath only names a log file; =value spellings count.
+		CompatibilityDecision.noteGameArguments(new String[] {"--quickPlayPath", "quickPlay/log.json"});
+		assertTrue(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, true, true, DependencyDialog.Notice.EMPTY, windows));
+		CompatibilityDecision.reset();
+		CompatibilityDecision.noteGameArguments(new String[] {"--quickPlayMultiplayer=localhost"});
+		assertFalse(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, true, true, DependencyDialog.Notice.EMPTY, windows));
+	}
+
+	/** {@code -Dforbric.dependencyDialog=off} is "no window, nobody to ask": it fails closed on a headless client too. */
+	@Test
+	void theOffSwitchStillFailsClosedOnAClientWithNoWindow() {
+		CompatibilityFinding loss = arbitrationOf("forbricdepcanary", "forbricnosuchmod");
+		Recorded windows = new Recorded();
+		System.setProperty(DependencyDialog.SWITCH, "off");
+		assertFalse(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, false, true, DependencyDialog.Notice.EMPTY, windows));
+		assertFalse(CompatibilityDecision.askedInGameForTheLaunch(loss));
+		assertEquals(List.of("-Dforbric.dependencyDialog=off"), windows.unshown);
+	}
+
+	@Test
+	void aLossFoundAfterTheQuestionMovedToTheGameIsAskedAboutAsWell() {
+		CompatibilityFinding first = arbitrationOf("forbricdepcanary", "forbricnosuchmod");
+		CompatibilityFinding later = finding("client-entrypoint", CompatibilityFinding.Confidence.CONFIRMED, true);
+		Recorded windows = new Recorded();
+		windows.answer = DependencyDialogMain.UNSHOWN;
+		assertTrue(CompatibilityDecision.decide(List.of(first), CompatibilityDecision.Policy.ASK, true, true, DependencyDialog.Notice.EMPTY, windows));
+		assertTrue(CompatibilityDecision.decide(List.of(first, later), CompatibilityDecision.Policy.ASK, true, true, DependencyDialog.Notice.EMPTY, windows));
+		assertEquals(2, windows.confirmations.size(), "a new loss is a new question");
+		assertEquals(2, windows.confirmations.get(1).required().size());
+		assertTrue(CompatibilityDecision.askedInGameForTheLaunch(later));
+	}
+
+	@Test
+	void aClientWithNoWindowAtAllAsksInTheGameButAnExplicitQuitStillStopsIt() {
+		CompatibilityFinding loss = arbitrationOf("forbricdepcanary", "forbricnosuchmod");
+		System.clearProperty(DependencyDialog.SWITCH);
+		Recorded windows = new Recorded();
+		assertTrue(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, false, true, DependencyDialog.Notice.EMPTY, windows));
+		assertEquals(List.of(), windows.confirmations, "nothing to fork");
+		assertEquals(List.of("no window can be drawn beside the game"), windows.unshown);
+		assertTrue(CompatibilityDecision.askedInGameForTheLaunch(loss));
+
+		CompatibilityDecision.reset();
+		Recorded refused = new Recorded();
+		refused.answer = DependencyDialogMain.QUIT;
+		assertFalse(CompatibilityDecision.decide(List.of(loss), CompatibilityDecision.Policy.ASK, true, true, DependencyDialog.Notice.EMPTY, refused),
+				"the player's own Quit in the window is the answer");
+		assertFalse(CompatibilityDecision.askedInGameForTheLaunch(loss));
 	}
 
 	@Test

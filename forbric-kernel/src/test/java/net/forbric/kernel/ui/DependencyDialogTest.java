@@ -19,6 +19,7 @@ package net.forbric.kernel.ui;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -319,7 +320,8 @@ class DependencyDialogTest {
 	void theFoldedConfirmationForkedWithNoDisplayCannotApprove() throws Exception {
 		var confirmation = new DependencyReport.Confirmation(List.of(requiredLoss()), List.of(suspicion()),
 				List.of(wrongVersion()), List.of(absent()), List.of(mixinBreak()));
-		assertEquals(DependencyDialogMain.QUIT, DependencyDialog.askConfirmation(confirmation, List.of("-Djava.awt.headless=true")));
+		assertEquals(DependencyDialogMain.UNSHOWN, DependencyDialog.askConfirmation(confirmation, List.of("-Djava.awt.headless=true")),
+				"a child that cannot draw approves nothing and refuses nothing: nobody was asked");
 		// The notice alone keeps its old contract through the same child.
 		assertEquals(DependencyDialogMain.CONTINUE, DependencyDialog.ask(List.of(absent()), List.of(mixinBreak()),
 				List.of(suspicion()), List.of("-Djava.awt.headless=true")));
@@ -418,6 +420,86 @@ class DependencyDialogTest {
 			if (before == null) System.clearProperty(DependencyDialog.SWITCH); else System.setProperty(DependencyDialog.SWITCH, before);
 		}
 		assertTrue(log.toString(java.nio.charset.StandardCharsets.UTF_8).contains("continuation was not approved"), log.toString());
+	}
+
+	/**
+	 * Issue #57, with the runtime FCL gives the game: {@code java.home/bin/java} is there, and executing it fails. The
+	 * real fork runs; a directory stands in for the file, because executing one fails with exactly the error the issue
+	 * reported, 13. Nothing about it may read as the player's answer.
+	 */
+	@Test
+	@org.junit.jupiter.api.parallel.ResourceLock("system-properties")
+	void aJavaTheSystemWillNotRunIsNobodyAnsweringNotARefusal() throws Exception {
+		Path home = Files.createTempDirectory("fcl-jre");
+		Files.createDirectories(home.resolve("bin/java"));
+		String log = withJavaHome(home, () -> assertEquals(DependencyDialogMain.UNSHOWN, DependencyDialog.confirm(confirmation())));
+		assertTrue(log.contains("the confirmation window cannot be shown here: its process could not be started"), log);
+		assertTrue(log.contains("13") && log.contains("Permission denied"), "the failure the issue reported: " + log);
+
+		// Remembered for the launch's later boundaries: the real java is back, and still nothing is forked.
+		String again = withJavaHome(Path.of(System.getProperty("java.home")), () ->
+				assertEquals(DependencyDialogMain.UNSHOWN, DependencyDialog.confirm(confirmation())));
+		assertTrue(again.contains("its process could not be started"), again);
+		DependencyDialog.forgetUnavailable();
+	}
+
+	@Test
+	@org.junit.jupiter.api.parallel.ResourceLock("system-properties")
+	void aRuntimeWithNoRunnableJavaIsAnsweredBeforeAnythingIsForked() throws Exception {
+		Path home = Files.createTempDirectory("embedded-jre");
+		Files.createDirectories(home.resolve("bin"));
+		Files.writeString(home.resolve("bin/java"), "not a program");
+		String log = withJavaHome(home, () -> {
+			assertNotNull(DependencyDialog.launcherProblem());
+			assertNotNull(DependencyDialog.noWindow(true), "the notice and the crash-suspects offer skip the fork too");
+			assertEquals(DependencyDialogMain.UNSHOWN, DependencyDialog.confirm(confirmation()));
+		});
+		assertTrue(log.contains("cannot be shown here: there is no runnable java at"), log);
+		assertNull(DependencyDialog.launcherProblem(), "this JVM's own java is runnable");
+		DependencyDialog.forgetUnavailable();
+	}
+
+	/** The child's exit code is the answer, and only consent and refusal are answers; a child that dies answered nothing. */
+	@Test
+	void onlyContinueAndQuitAreAnswersAndADyingChildIsNeither() {
+		assertEquals(DependencyDialogMain.CONTINUE, DependencyDialog.confirmationAnswer(0));
+		assertEquals(DependencyDialogMain.QUIT, DependencyDialog.confirmationAnswer(DependencyDialogMain.REFUSED));
+		// 1 is the java launcher failing to start the child ("Could not find or load main class"), not a Quit.
+		for (int exit : new int[] {1, DependencyDialogMain.WITHOUT, DependencyDialogMain.UNSHOWN, 9, 134, 143, -1}) {
+			assertEquals(DependencyDialogMain.UNSHOWN, DependencyDialog.confirmationAnswer(exit), "child exit " + exit);
+		}
+	}
+
+	@org.junit.jupiter.api.AfterEach
+	void forgetAnUnshownConfirmation() {
+		DependencyDialog.forgetUnavailable();
+	}
+
+	private static DependencyReport.Confirmation confirmation() {
+		return new DependencyReport.Confirmation(List.of(requiredLoss()), List.of(), List.of(), List.of(), List.of());
+	}
+
+	private interface Body {
+		void run() throws Exception;
+	}
+
+	/** Runs {@code body} with {@code java.home} pointing at {@code home}, and returns what it logged. */
+	private static String withJavaHome(Path home, Body body) throws Exception {
+		String before = System.getProperty("java.home");
+		String mode = System.getProperty(DependencyDialog.SWITCH);
+		java.io.PrintStream err = System.err;
+		java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+		try {
+			System.setProperty("java.home", home.toString());
+			System.clearProperty(DependencyDialog.SWITCH);
+			System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+			body.run();
+		} finally {
+			System.setErr(err);
+			System.setProperty("java.home", before);
+			if (mode == null) System.clearProperty(DependencyDialog.SWITCH); else System.setProperty(DependencyDialog.SWITCH, mode);
+		}
+		return log.toString(java.nio.charset.StandardCharsets.UTF_8);
 	}
 
 	@Test

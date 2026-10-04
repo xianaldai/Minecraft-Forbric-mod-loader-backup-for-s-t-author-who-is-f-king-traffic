@@ -69,6 +69,61 @@ class MixinStubRebindTest {
 		assertEquals(0, MixinStubRebind.adapt(mixin, name -> player), "a second pass changes nothing");
 	}
 
+	/**
+	 * MixinOverloadPin and this rebind, composed (issue #56's pin meeting a carrier stub). The merged {@code AxeItem}
+	 * declares the carrier's five-argument {@code evaluateNewBlockState} body FIRST and keeps vanilla's four-argument
+	 * signature after it, as a stub forwarding to it. A Fabric mod's bare-name HEAD hook written for vanilla's four
+	 * arguments binds the body and fails the whole mixin; nothing here moves it, because a bare name lands on the body.
+	 * The pin names vanilla's stub, and the rebind then carries it onto the body that runs, handing over the stub's
+	 * arguments.
+	 */
+	@Test void aBareNameThePinPointsAtAStubThenMovesOntoTheBody() throws Exception {
+		ClassNode axe = merged("net/minecraft/world/item/AxeItem");
+		String args = "Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/entity/player/Player;"
+				+ "Lnet/minecraft/world/level/block/state/BlockState;";
+		String stub = "evaluateNewBlockState(" + args + ")Ljava/util/Optional;";
+		String body = "evaluateNewBlockState(" + args + "Lnet/minecraft/world/item/context/UseOnContext;)Ljava/util/Optional;";
+		String handler = "(" + args + "Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfoReturnable;)V";
+
+		ClassNode alone = synthetic("com/example/AxeStripMixin", "net/minecraft/world/item/AxeItem", "onStrip", handler, false,
+				injector("Lorg/spongepowered/asm/mixin/injection/Inject;", "evaluateNewBlockState", at("HEAD")));
+		MixinStubRebind.noteEcosystem(alone.name, Ecosystem.FABRIC);
+		assertEquals(0, MixinStubRebind.adapt(alone, name -> axe), "a bare name binds the body, so there is no stub to leave");
+
+		ClassNode mixin = synthetic("com/example/AxeStripMixin", "net/minecraft/world/item/AxeItem", "onStrip", handler, false,
+				injector("Lorg/spongepowered/asm/mixin/injection/Inject;", "evaluateNewBlockState", at("HEAD")));
+		assertEquals(1, MixinOverloadPin.pin(mixin, name -> axe));
+		assertEquals(List.of(stub), selectors(mixin, "onStrip"));
+		assertEquals(1, MixinStubRebind.adapt(mixin, name -> axe));
+		assertEquals(List.of(body), selectors(mixin, "onStrip"));
+	}
+
+	/**
+	 * The same composition as MixinFit judges it, before anything is applied: an anchor in the body counts. Asked
+	 * about the bare name, the rebind sees the body Mixin binds first, moves nothing, and the anchor read as missing
+	 * in vanilla's stub -- a one-injector mixin would have been removed as UNFIT before the pin and the rebind could
+	 * repair it.
+	 */
+	@Test void mixinFitJudgesThePinnedThenRebasedInjectorInTheBody() throws Exception {
+		ClassNode axe = merged("net/minecraft/world/item/AxeItem");
+		org.objectweb.asm.ClassWriter axeWriter = new org.objectweb.asm.ClassWriter(0);
+		axe.accept(axeWriter);
+		byte[] axeBytes = axeWriter.toByteArray();
+		String args = "Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/entity/player/Player;"
+				+ "Lnet/minecraft/world/level/block/state/BlockState;";
+		ClassNode mixin = synthetic("com/example/AxeStripSoundMixin", "net/minecraft/world/item/AxeItem", "onStripSound",
+				"(" + args + "Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfoReturnable;)V", false,
+				injector("Lorg/spongepowered/asm/mixin/injection/Inject;", "evaluateNewBlockState", at("INVOKE", "target",
+						"Lnet/minecraft/world/level/Level;playSound(Lnet/minecraft/world/entity/Entity;Lnet/minecraft/core/BlockPos;"
+								+ "Lnet/minecraft/sounds/SoundEvent;Lnet/minecraft/sounds/SoundSource;FF)V")));
+		MixinStubRebind.noteEcosystem(mixin.name, Ecosystem.FABRIC);
+		org.objectweb.asm.ClassWriter writer = new org.objectweb.asm.ClassWriter(0);
+		mixin.accept(writer);
+		MixinFit.Result fit = MixinFit.evaluate(writer.toByteArray(),
+				name -> name.equals("net/minecraft/world/item/AxeItem.class") ? axeBytes : null);
+		assertEquals(MixinFit.Verdict.FIT, fit.verdict(), fit.toString());
+	}
+
 	@Test void fabricApisElytraCheckMovesWhereItsFieldReadIs() throws Exception {
 		ClassNode mixin = StagedFabricMixinFixture.mixin("fabric-entity-events-v1", "net/fabricmc/fabric/mixin/entity/event/elytra/LivingEntityMixin");
 		ClassNode living = merged("net/minecraft/world/entity/LivingEntity");

@@ -436,8 +436,13 @@ public final class MixinFit {
 		List<String> selectors = stringList(value(injector, "method"));
 		List<MethodNode> hits = new ArrayList<>();
 		List<String> misses = new ArrayList<>();
+		String pinnedAs = null;
 		for (String selector : selectors) {
-			List<MethodNode> targetMethods = resolveSelector(target, selector, resolver);
+			// A name-only @Inject that MixinOverloadPin moves off the first overload is judged where it will land:
+			// its anchors are in the overload it was written for, not in the other ecosystem's declared first.
+			MethodNode pinned = selectors.size() == 1 ? MixinOverloadPin.destination(m, selector, target) : null;
+			if (pinned != null) pinnedAs = pinned.name + pinned.desc;
+			List<MethodNode> targetMethods = pinned != null ? List.of(pinned) : resolveSelector(target, selector, resolver);
 			if (!targetMethods.isEmpty()) hits.addAll(targetMethods); else misses.add(selector);
 		}
 		if (selectors.isEmpty()) return;
@@ -471,6 +476,10 @@ public final class MixinFit {
 		// (any Fabric mod's; a Forge-family mod's where the other carrier added the stub), judged here too so the
 		// verdict and the rebind cannot disagree: its anchors are asked of the body it lands on.
 		if (selectors.size() == 1 && hits.size() == 1 && MixinStubRebind.isCarrierStub(target, hits.get(0))) {
+			// The rebind reads the selector off the annotation, and it runs after the pin: asked about the bare name it
+			// would see the body Mixin binds first and move nothing (AxeItem.evaluateNewBlockState, body before stub).
+			// This is MixinFit's own parse of the mixin, never the node Mixin applies.
+			if (pinnedAs != null) setSelectors(injector, List.of(pinnedAs));
 			MethodNode moved = MixinStubRebind.destination(mixin, m, target);
 			// A @Local by name is checked against the body's local variable table, which this read skipped.
 			ClassNode locals = moved == null ? withLocals.get() : null;
@@ -703,6 +712,14 @@ public final class MixinFit {
 	private static MethodNode findMethod(ClassNode node, String name, String desc, Function<String, byte[]> resolver) {
 		List<MethodNode> all = findMethods(node, name, desc, resolver);
 		return all.isEmpty() ? null : all.get(0);
+	}
+
+	/** Replaces an injector's {@code method} list. */
+	private static void setSelectors(AnnotationNode injector, List<String> selectors) {
+		if (injector.values == null) return;
+		for (int i = 0; i + 1 < injector.values.size(); i += 2) {
+			if ("method".equals(injector.values.get(i))) injector.values.set(i + 1, new ArrayList<>(selectors));
+		}
 	}
 
 	/**

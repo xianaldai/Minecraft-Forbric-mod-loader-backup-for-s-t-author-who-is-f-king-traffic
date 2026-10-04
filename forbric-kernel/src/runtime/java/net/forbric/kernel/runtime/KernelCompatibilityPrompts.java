@@ -26,6 +26,8 @@ public final class KernelCompatibilityPrompts {
 	private static Screen prompt;
 	private static Screen previous;
 	private static List<CompatibilityFinding> active = List.of();
+	/** Whether {@link #active} holds a question the launch could not ask in a window, so that refusing it stops the game. */
+	private static boolean activeForLaunch;
 	private static boolean stopping;
 
 	private KernelCompatibilityPrompts() { }
@@ -70,9 +72,15 @@ public final class KernelCompatibilityPrompts {
 		if (shown.size() < pending.size()) CompatibilityDecision.queue();
 		previous = minecraft.gui.screen();
 		active = shown;
+		// The launch's own question, asked here because no window could ask it (a phone launcher's runtime cannot
+		// start one): the same contract as that window, so Quit stops the game rather than returning to the title.
+		activeForLaunch = shown.stream().anyMatch(CompatibilityDecision::askedInGameForTheLaunch);
 		try {
-			prompt = new KernelCompatibilityScreen(shown, pending.size() - shown.size(), continued -> answer(minecraft, continued));
+			prompt = new KernelCompatibilityScreen(shown, pending.size() - shown.size(), activeForLaunch,
+					continued -> answer(minecraft, continued));
 			minecraft.gui.setScreen(prompt);
+			ForbricLog.info("[Forbric/Compatibility] asking in the game about %d required feature loss(es)%s",
+					shown.size(), activeForLaunch ? " the launch could not ask about in a window" : "");
 		} catch (RuntimeException | LinkageError unavailable) {
 			prompt = null;
 			stopNormally(minecraft, "confirmation could not be displayed; continuation was not approved");
@@ -88,6 +96,7 @@ public final class KernelCompatibilityPrompts {
 	private static void displaced() {
 		prompt = null;
 		active = List.of();
+		activeForLaunch = false;
 		previous = null;
 		CompatibilityDecision.queue();
 	}
@@ -95,13 +104,20 @@ public final class KernelCompatibilityPrompts {
 	private static void answer(Minecraft minecraft, boolean continued) {
 		if (prompt == null) return;
 		List<CompatibilityFinding> answered = active;
+		boolean forLaunch = activeForLaunch;
 		Screen restore = previous;
 		prompt = null;
 		active = List.of();
+		activeForLaunch = false;
 		previous = null;
 		if (continued) {
 			CompatibilityDecision.acknowledge(answered);
 			minecraft.gui.setScreen(restore);
+			return;
+		}
+		if (forLaunch) {
+			stopNormally(minecraft, "continuation was not approved for " + answered.size()
+					+ " required feature loss(es) the launch asked about in the game");
 			return;
 		}
 		// A refusal answers for what is still waiting as well: continuing needs every loss accepted, and none was.

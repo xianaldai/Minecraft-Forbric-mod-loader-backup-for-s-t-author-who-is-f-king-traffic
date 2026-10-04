@@ -49,9 +49,11 @@ import net.forbric.kernel.util.ForbricLog;
  * <p>The audit no longer opens its window itself: it {@link #hold holds} the notice, and the launch's compatibility
  * decision shows it. When nothing needs a decision, that is the notice above, unchanged. When a confirmed required
  * loss does, the notice is folded into the {@link #confirm confirmation} -- the same child, the same layout -- whose
- * contract is the opposite one: only an explicit click on continue approves, and a closed window, a timeout, no
- * display or {@code -Dforbric.dependencyDialog=off} is a launch that was not approved. Either way the player is asked
- * once, and suspected findings only ever reach the details.
+ * contract is the opposite one: only an explicit click on continue approves, and a closed window or
+ * {@code -Dforbric.dependencyDialog=off} is a launch that was not approved. A window that cannot be shown at all -- no
+ * runnable {@code java} beside this runtime, a child that cannot start or cannot draw, nobody answering it -- is not
+ * an answer either way: {@link DependencyDialogMain#UNSHOWN}, and the launch asks in the game's own window instead.
+ * Either way the player is asked once, and suspected findings only ever reach the details.
  */
 public final class DependencyDialog {
 	/**
@@ -64,7 +66,7 @@ public final class DependencyDialog {
 	 *       is not approved rather than approved by default.</li>
 	 *   <li>{@code dryRun} — fork the real child, with AWT disabled inside it. Every part of the path runs: the
 	 *       report is written, the child JVM starts, reads it, finds it cannot draw, and exits — CONTINUE for the
-	 *       notice, QUIT for a confirmation, because neither contract may change for want of a display. It
+	 *       notice, UNSHOWN for a confirmation, which approves nothing and moves the question into the game. It
 	 *       exists so a gate can assert on the machinery rather than on a mock of it. Nothing is drawn and
 	 *       nobody has to click, which is the only way a dialog is testable unattended.</li>
 	 *   <li>{@code on} — the real thing.</li>
@@ -85,6 +87,13 @@ public final class DependencyDialog {
 	 * that somehow renders nothing must not hold the launch forever.
 	 */
 	private static final long TIMEOUT_MINUTES = 10;
+
+	/**
+	 * Why the confirmation cannot be shown in this JVM, once that is known, or null. Remembered so that a launch
+	 * asking at three boundaries does not fork three children that cannot start: on FCL, Android's phone launcher,
+	 * every one of them failed the same way, with error 13 from {@code execve}.
+	 */
+	private static volatile String confirmationUnavailable;
 
 	private DependencyDialog() {
 	}
@@ -189,6 +198,11 @@ public final class DependencyDialog {
 			ForbricLog.info("[Forbric/Deps] headless — %d finding(s) reported in the log only", findings);
 			return true;
 		}
+		String launcher = launcherProblem();
+		if (launcher != null) {
+			ForbricLog.info("[Forbric/Deps] %s — %d finding(s) reported in the log only", launcher, findings);
+			return true;
+		}
 
 		int answer;
 		try {
@@ -232,14 +246,54 @@ public final class DependencyDialog {
 					+ "needs an explicit continue, so continuation was not approved", SWITCH, findings);
 			return DependencyDialogMain.QUIT;
 		}
+		String unavailable = confirmationUnavailable != null ? confirmationUnavailable : launcherProblem();
+		if (unavailable != null) return unshown(unavailable);
 		boolean dryRun = DRY_RUN.equalsIgnoreCase(mode);
-		int answer = askConfirmation(confirmation, dryRun ? List.of("-Djava.awt.headless=true") : List.of());
+		int answer;
+		try {
+			answer = askConfirmation(confirmation, dryRun ? List.of("-Djava.awt.headless=true") : List.of());
+		} catch (java.io.IOException cannotStart) {
+			// FCL's java.home holds a bin/java that execve refuses (error 13): the launcher loads the JVM in its own
+			// process and never runs that file. Not the player saying no.
+			return unshown("its process could not be started: " + cannotStart.getMessage());
+		}
 		if (dryRun) {
 			ForbricLog.info("[Forbric/Deps] -D%s=dryRun — forked the dialog for %d finding(s) with no display; it "
 					+ "answered %d (%s) without drawing anything", SWITCH, findings, answer,
-					answer == DependencyDialogMain.CONTINUE ? "continue" : "not approved");
+					answer == DependencyDialogMain.CONTINUE ? "continue"
+							: answer == DependencyDialogMain.UNSHOWN ? "could not show it" : "not approved");
 		}
+		if (answer == DependencyDialogMain.UNSHOWN) confirmationUnavailable = "nobody could answer it in its window";
 		return answer;
+	}
+
+	/** Whether {@code -Dforbric.dependencyDialog=off} asks for no window at all. */
+	static boolean switchedOff() {
+		return "off".equalsIgnoreCase(System.getProperty(SWITCH, "on"));
+	}
+
+	private static int unshown(String why) {
+		confirmationUnavailable = why;
+		ForbricLog.warn("[Forbric/Deps] the confirmation window cannot be shown here: %s", why);
+		return DependencyDialogMain.UNSHOWN;
+	}
+
+	/** Test seam: forget that this JVM could not show the confirmation. */
+	static void forgetUnavailable() {
+		confirmationUnavailable = null;
+	}
+
+	/**
+	 * Why this runtime has no {@code java} to start the window's process with, or null when it has one.
+	 *
+	 * <p>The child is {@code java.home/bin/java}. A launcher that embeds its JRE and loads the JVM in its own process
+	 * has no need for that file to run, and on Android it does not: FCL's is there and {@code execve} refuses it.
+	 * Asking the file system first turns a failed fork into a known answer before anything is attempted.
+	 */
+	static String launcherProblem() {
+		Path bin = Path.of(System.getProperty("java.home", ""), "bin");
+		if (Files.isExecutable(bin.resolve("java")) || Files.isExecutable(bin.resolve("java.exe"))) return null;
+		return "there is no runnable java at " + bin.resolve("java");
 	}
 
 	/**
@@ -252,7 +306,7 @@ public final class DependencyDialog {
 		if (java.awt.GraphicsEnvironment.isHeadless() && !net.forbric.kernel.boot.MacAwtBootstrap.usesHeadlessFonts()) {
 			return "headless";
 		}
-		return null;
+		return launcherProblem();
 	}
 
 	/**
@@ -395,19 +449,30 @@ public final class DependencyDialog {
 			child.destroy();
 			ForbricLog.warn("[Forbric/Deps] the dialog did not answer within %d minutes — %s", TIMEOUT_MINUTES,
 					switch (kind) {
-						case CONFIRMATION -> "continuation was not approved";
+						case CONFIRMATION -> "nobody answered it, so nothing is approved and the game asks instead";
 						case ISOLATION -> "starting with every mod";
 						case NOTICE -> "launching anyway";
 					});
-			return kind == Kind.CONFIRMATION ? DependencyDialogMain.QUIT : DependencyDialogMain.CONTINUE;
+			return kind == Kind.CONFIRMATION ? DependencyDialogMain.UNSHOWN : DependencyDialogMain.CONTINUE;
 		}
 		int exit = child.exitValue();
 		return switch (kind) {
-			case CONFIRMATION -> exit != DependencyDialogMain.CONTINUE ? DependencyDialogMain.QUIT : exit;
+			case CONFIRMATION -> confirmationAnswer(exit);
 			case ISOLATION -> exit == DependencyDialogMain.WITHOUT || exit == DependencyDialogMain.QUIT
 					? exit : DependencyDialogMain.CONTINUE;
 			case NOTICE -> exit;
 		};
+	}
+
+	/**
+	 * What the confirmation child's exit code means. 0 is the one consent and {@link DependencyDialogMain#REFUSED} the
+	 * player's refusal or a closed window, read back as {@link DependencyDialogMain#QUIT}. Anything else -- the
+	 * child's own "could not draw", the {@code java} launcher's 1 when it could not start the child, a child that died
+	 * -- is nobody having answered, and approves nothing.
+	 */
+	static int confirmationAnswer(int exit) {
+		if (exit == DependencyDialogMain.CONTINUE) return DependencyDialogMain.CONTINUE;
+		return exit == DependencyDialogMain.REFUSED ? DependencyDialogMain.QUIT : DependencyDialogMain.UNSHOWN;
 	}
 
 	/**

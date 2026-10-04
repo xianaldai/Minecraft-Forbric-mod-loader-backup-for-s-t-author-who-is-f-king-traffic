@@ -17,6 +17,7 @@
 package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -308,7 +309,9 @@ class KernelMixinErrorHandlerTest {
 		target.methods = new java.util.ArrayList<>(List.of(new org.objectweb.asm.tree.MethodNode(
 				org.objectweb.asm.Opcodes.ASM9, org.objectweb.asm.Opcodes.ACC_PRIVATE, "lambda$doThing$0",
 				"(Ljava/lang/String;)V", null, null)));
-		assertEquals(1, MixinOverloadPin.pin(mixin, name -> target.name.equals(name) ? target : null));
+		// A lambda is never pinned; what the pass leaves behind is the reason, for the row below.
+		assertEquals(0, MixinOverloadPin.pin(mixin, name -> target.name.equals(name) ? target : null));
+		assertNotNull(MixinOverloadPin.reasonFor("a.b.ThingMixin"));
 
 		MixinConfigOwners.publish(List.of(new MixinConfigOwners.Owned("t.mixins.json", "xmod", Ecosystem.FABRIC)));
 		new KernelMixinErrorHandler().onApplyError("net.example.Target", new RuntimeException(),

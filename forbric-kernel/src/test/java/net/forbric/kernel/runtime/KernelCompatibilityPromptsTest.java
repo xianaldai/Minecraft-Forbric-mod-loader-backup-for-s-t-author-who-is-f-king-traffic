@@ -200,6 +200,71 @@ class KernelCompatibilityPromptsTest {
 		}
 	}
 
+	/**
+	 * The launch's decision on a client whose confirmation window could not be shown (issue #57: FCL cannot start its
+	 * process): the open losses are handed to this prompt, not accepted.
+	 */
+	private static void launchCouldNotAsk() throws Exception {
+		Class<?> windows = Class.forName("net.forbric.kernel.ui.CompatibilityDecision$Windows");
+		Object unshown = java.lang.reflect.Proxy.newProxyInstance(windows.getClassLoader(), new Class<?>[] {windows},
+				(proxy, method, args) -> switch (method.getName()) {
+					case "confirm" -> net.forbric.kernel.ui.DependencyDialogMain.UNSHOWN;
+					case "notice" -> true;
+					default -> null;
+				});
+		var decide = CompatibilityDecision.class.getDeclaredMethod("decide", List.class, CompatibilityDecision.Policy.class,
+				boolean.class, boolean.class, net.forbric.kernel.ui.DependencyDialog.Notice.class, windows);
+		decide.setAccessible(true);
+		assertEquals(true, decide.invoke(null, CompatibilityFindings.confirmedRequired(), CompatibilityDecision.Policy.ASK,
+				true, true, net.forbric.kernel.ui.DependencyDialog.Notice.EMPTY, unshown), "the launch carries on to ask here");
+	}
+
+	@Test void theLaunchsQuestionIsAskedOnTheTitleInItsOwnWordsAndQuitStopsTheGame() throws Exception {
+		try (Fixture fixture = fixture()) {
+			fixture.setScreen("TitleScreen");
+			loseFeature(); launchCouldNotAsk(); fixture.tick();
+			assertEquals("KernelCompatibilityScreen", fixture.screen().getClass().getSimpleName());
+			var lang = net.forbric.kernel.ui.DialogLang.ofSystem();
+			assertEquals(List.of(lang.get("button.continue"), lang.get("button.quit")), fixture.buttons(),
+					"the window's own choice: launch anyway, or quit");
+			assertTrue(fixture.message().contains(lang.get("compat.note")), fixture.message());
+			fixture.answer(false);
+			assertEquals(List.of("screen:KernelCompatibilityScreen", "stop"), fixture.events(),
+					"Quit in the window stopped the launch; here it stops the game, and there is no world to save");
+			assertTrue(CompatibilityDecision.launchStopRequested(), "reported at the launcher boundary as the policy stop");
+		}
+	}
+
+	@Test void closingTheLaunchsQuestionIsNotConsent() throws Exception {
+		try (Fixture fixture = fixture()) {
+			loseFeature(); launchCouldNotAsk(); fixture.tick();
+			fixture.loader.loadClass("net.minecraft.client.gui.screens.Screen").getMethod("onClose").invoke(fixture.screen());
+			assertTrue(fixture.events().contains("stop"), fixture.events().toString());
+			assertFalse(CompatibilityDecision.check(false));
+		}
+	}
+
+	@Test void continuingAtTheLaunchsQuestionIsTheConsentTheWindowWouldHaveGiven() throws Exception {
+		try (Fixture fixture = fixture()) {
+			fixture.setScreen("TitleScreen");
+			loseFeature(); launchCouldNotAsk(); fixture.tick();
+			fixture.answer(true); fixture.tick();
+			assertEquals("TitleScreen", fixture.screen().getClass().getSimpleName());
+			assertFalse(fixture.events().contains("stop"));
+			assertTrue(CompatibilityDecision.check(false), "accepted");
+			// A loss found later in play is the ordinary late question again: refusing it returns to the title.
+			fixture.enterWorld();
+			CompatibilityFindings.record(new CompatibilityFinding("later", "demo", "Trading", "test",
+					CompatibilityFinding.Confidence.CONFIRMED, true, "not delivered", List.of("observed")));
+			fixture.tick();
+			var lang = net.forbric.kernel.ui.DialogLang.ofSystem();
+			assertEquals(List.of(lang.get("compat.continuePlaying"), lang.get("compat.returnTitle")), fixture.buttons());
+			fixture.answer(false);
+			assertFalse(fixture.events().contains("stop"), fixture.events().toString());
+			assertTrue(fixture.events().contains("save"));
+		}
+	}
+
 	private Fixture fixture() throws Exception {
 		Map<String, String> sources = Map.ofEntries(
 				Map.entry("net/minecraft/client/Minecraft.java", """
@@ -241,8 +306,8 @@ class KernelCompatibilityPromptsTest {
 					public class ConfirmScreen extends Screen {
 					 protected net.minecraft.client.gui.components.Button noButton;
 					 private final BooleanConsumer answer;
-					 public final Component message;
-					 public ConfirmScreen(BooleanConsumer a, Component title, Component message, Component yes, Component no) { answer=a; this.message=message; }
+					 public final Component message, yes, no;
+					 public ConfirmScreen(BooleanConsumer a, Component title, Component message, Component yes, Component no) { answer=a; this.message=message; this.yes=yes; this.no=no; }
 					 public void respond(boolean yes) { answer.accept(yes); }
 					}
 					"""),
@@ -281,8 +346,15 @@ class KernelCompatibilityPromptsTest {
 			gui.getClass().getField("current").set(gui, loader.loadClass("net.minecraft.client.gui.screens." + simpleName).getConstructor().newInstance());
 		}
 		String message() throws Exception {
-			Object message = loader.loadClass("net.minecraft.client.gui.screens.ConfirmScreen").getField("message").get(screen());
-			return (String) message.getClass().getField("text").get(message);
+			return text("message");
+		}
+		/** The two buttons' labels, yes then no. */
+		List<String> buttons() throws Exception {
+			return List.of(text("yes"), text("no"));
+		}
+		private String text(String field) throws Exception {
+			Object component = loader.loadClass("net.minecraft.client.gui.screens.ConfirmScreen").getField(field).get(screen());
+			return (String) component.getClass().getField("text").get(component);
 		}
 		void enterWorld() throws Exception { type.getField("level").set(minecraft, loader.loadClass("net.minecraft.client.multiplayer.ClientLevel").getConstructor().newInstance()); }
 		@SuppressWarnings("unchecked") List<String> events() throws Exception { return (List<String>) type.getField("events").get(null); }
