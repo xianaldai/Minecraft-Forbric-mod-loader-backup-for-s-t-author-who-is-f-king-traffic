@@ -1181,11 +1181,26 @@
   },
   "54": {
    "body": "95dc2f352487",
-   "comments": {},
-   "comments_through": "",
+   "comments": {
+    "5978405396": {
+     "a": "yurnu",
+     "d": "8aee2a420c4c",
+     "m": null,
+     "t": "2026-10-04T09:11:38Z",
+     "u": "2026-10-04T09:11:38Z"
+    },
+    "5978411117": {
+     "a": "wanghao2026",
+     "d": "685ead0a257f",
+     "m": null,
+     "t": "2026-10-04T09:12:30Z",
+     "u": "2026-10-04T09:12:30Z"
+    }
+   },
+   "comments_through": "2026-10-04T09:12:30Z",
    "state": "open",
    "title": "[26.2] Humanoid mobs render the wrong ArmPose (SPREAD showing as SWING)",
-   "updated_at": "2026-10-04T09:10:16Z"
+   "updated_at": "2026-10-04T09:12:30Z"
   },
   "6": {
    "body": "5787b95dba3d",
