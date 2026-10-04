@@ -352,12 +352,19 @@
      "m": null,
      "t": "2026-10-04T06:42:50Z",
      "u": "2026-10-04T06:42:50Z"
+    },
+    "5980788830": {
+     "a": "Zakoneko114",
+     "d": "7c13f0e61444",
+     "m": null,
+     "t": "2026-10-04T13:58:44Z",
+     "u": "2026-10-04T13:58:55Z"
     }
    },
-   "comments_through": "2026-10-04T06:42:50Z",
+   "comments_through": "2026-10-04T13:58:44Z",
    "state": "open",
    "title": "\u62ffai\u9010\u884creview\u4e86\u4e00\u4e0b",
-   "updated_at": "2026-10-04T06:42:50Z"
+   "updated_at": "2026-10-04T13:58:55Z"
   },
   "25": {
    "body": "5b43242653dd",
@@ -996,12 +1003,19 @@
      "m": null,
      "t": "2026-10-04T10:06:53Z",
      "u": "2026-10-04T10:06:53Z"
+    },
+    "5980321168": {
+     "a": "awefdfs",
+     "d": "3deabb5bedda",
+     "m": null,
+     "t": "2026-10-04T13:12:51Z",
+     "u": "2026-10-04T13:12:51Z"
     }
    },
-   "comments_through": "2026-10-04T10:06:53Z",
+   "comments_through": "2026-10-04T13:12:51Z",
    "state": "open",
    "title": "\u5bf9\u4e8e\u672c\u9879\u76ee\u7684\u4e2a\u4eba\u89c2\u70b9",
-   "updated_at": "2026-10-04T10:06:53Z"
+   "updated_at": "2026-10-04T13:12:51Z"
   },
   "4": {
    "body": "600345487502",
@@ -1205,17 +1219,49 @@
     }
    },
    "comments_through": "2026-10-04T09:12:30Z",
-   "state": "open",
+   "state": "closed",
    "title": "[26.2] Humanoid mobs render the wrong ArmPose (SPREAD showing as SWING)",
-   "updated_at": "2026-10-04T09:12:30Z"
+   "updated_at": "2026-10-04T11:14:55Z"
   },
   "55": {
    "body": "57895eecbde5",
+   "comments": {
+    "5979103599": {
+     "a": "Mrkinggggg",
+     "d": "54dbfbd8a350",
+     "m": null,
+     "t": "2026-10-04T10:39:45Z",
+     "u": "2026-10-04T10:39:45Z"
+    }
+   },
+   "comments_through": "2026-10-04T10:39:45Z",
+   "state": "closed",
+   "title": "\u4fee\u590d\uff1a\u5e76\u53d1\u95e8\u7981\u8c03\u5ea6\u5668\u6f0f\u914d M32_PORT\uff0cgate-m16 \u4e0e gate-m32 \u649e\u7aef\u53e3\u65f6\u4e24\u4e2a\u95e8\u7981\u90fd\u62a5 GREEN",
+   "updated_at": "2026-10-04T11:38:38Z"
+  },
+  "56": {
+   "body": "5e4cf8de1754",
+   "comments": {
+    "5979300154": {
+     "a": "adeahejshshsh",
+     "d": "ba3cdc400a4a",
+     "m": null,
+     "t": "2026-10-04T11:06:25Z",
+     "u": "2026-10-04T11:06:25Z"
+    }
+   },
+   "comments_through": "2026-10-04T11:06:25Z",
+   "state": "open",
+   "title": "[bug] \u540c\u540d\u91cd\u8f7d\uff1a\u540d\u5b57\u552f\u4e00\u7684 @Inject \u88ab Mixin \u89e3\u6790\u5230 NeoForge \u90a3\u4e2a\u91cd\u8f7d\uff0c\u6574\u6761 mixin \u7c7b\u4f5c\u5e9f\uff08carpet-org-addition / MinecraftServer.handleCustomClickAction\uff09",
+   "updated_at": "2026-10-04T11:06:25Z"
+  },
+  "57": {
+   "body": "271a001f0012",
    "comments": {},
    "comments_through": "",
    "state": "open",
-   "title": "\u4fee\u590d\uff1a\u5e76\u53d1\u95e8\u7981\u8c03\u5ea6\u5668\u6f0f\u914d M32_PORT\uff0cgate-m16 \u4e0e gate-m32 \u649e\u7aef\u53e3\u65f6\u4e24\u4e2a\u95e8\u7981\u90fd\u62a5 GREEN",
-   "updated_at": "2026-10-04T10:09:47Z"
+   "title": "[bug] Android/FCL\uff1aASK \u95f8\u95e8 fork java.home/bin/java \u629b EACCES(13) \u88ab\u5f53\u6210\u73a9\u5bb6\u62d2\u7edd\uff0c\u4efb\u4f55 required finding \u90fd\u6c38\u4e45\u65e0\u6cd5\u542f\u52a8",
+   "updated_at": "2026-10-04T11:06:24Z"
   },
   "6": {
    "body": "5787b95dba3d",
