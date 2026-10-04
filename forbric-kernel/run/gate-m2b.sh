@@ -77,6 +77,10 @@ check "canary main entrypoint"                 "\[ForbricFabricLive\] onInitiali
 check "canary server entrypoint + content kept" "onInitializeServer .*registered content survives=true" "$LOG"
 check "JiJ nested mod initialized"             "\[ForbricFabricLib\] JiJ nested mod initialized" "$LOG"
 check "Jade (real third-party mod) loaded"     "invoked main entrypoint of jade" "$LOG"
+# Issue #52: fabric-item-api's and fabric-object-builder's HEAD injectors on BuiltInRegistries.freeze() run after the
+# mains, at the point fabric-registry-sync puts Fabric's freeze, not in Bootstrap before any of them.
+# RED with FORBRIC_JVM=-Dforbric.fabricFreezePoint=off (no freeze-point line).
+check "Fabric's registry freeze point ran"     "Forbric/RegistrySync\] Fabric's registry freeze point \(HEAD\): ran [1-9]" "$LOG"
 
 step "the server actually works (must PASS)"
 # F3: fabric-loot-api-v3's LootTableEvents fire from NeoForge's LootTableLoadEvent seam (the mixin is pinned).
@@ -112,6 +116,7 @@ check "shutdown began"                         "Stopping server" "$LOG"
 step "nothing was quietly broken (must be ABSENT)"
 check_absent "no empty dynamic registries"     "Registry must be non-empty" "$LOG"
 check_absent "no Fabric entrypoint failed"     "entrypoint of .* failed" "$LOG"
+check_absent "no moved freeze injector failed"  "failed at Fabric's registry freeze point" "$LOG"
 check_absent "no fatal mixin error"            "MixinTransformerError|InjectionError" "$LOG"
 check_absent "MixinExtras EXPRESSION supported" 'MIXINEXTRAS:EXPRESSION is not a valid injection point specifier' "$LOG"
 check_absent "no invalid partially applied handler" 'VerifyError' "$LOG"

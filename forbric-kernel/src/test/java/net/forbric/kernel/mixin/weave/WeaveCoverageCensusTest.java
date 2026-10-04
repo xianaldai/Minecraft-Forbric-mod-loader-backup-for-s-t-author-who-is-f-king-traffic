@@ -81,6 +81,8 @@ class WeaveCoverageCensusTest {
 			// An audit with no switch: ForgeTransferShapeAuditWeaveTest's control is an unreviewed twin in the same run.
 			Map.entry("ForgeTransferShapeAudit", Switch.own()),
 			Map.entry("FabricRegistryInitializationMixinAdapter", Switch.own("forbric.fabricRegistryInitialization")),
+			// FabricFreezeHookMixinAdapter stands down with FabricFreezePointInjector, whose hooks its test puts on the pre-Mixin chain.
+			Map.entry("FabricFreezeHookMixinAdapter", new Switch(List.of("forbric.fabricFreezePoint"), "net.forbric.kernel.transform.FabricFreezePointInjector")),
 			Map.entry("FabricCreativePagerMixinAdapter", Switch.own("forbric.fabricCreativeKeyboard")),
 			Map.entry("FabricServerLanguageMixinAdapter", Switch.own("forbric.fabricServerLanguage")),
 			Map.entry("FabricSoundMixinAdapter", new Switch(List.of("forbric.fabricSoundContracts"), "net.forbric.kernel.transform.FabricSoundContractTransformer")),

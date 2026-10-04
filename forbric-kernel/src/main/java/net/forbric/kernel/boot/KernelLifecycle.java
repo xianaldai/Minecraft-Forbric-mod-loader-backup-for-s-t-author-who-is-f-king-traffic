@@ -34,6 +34,7 @@ import net.forbric.api.ForeignType;
 import net.forbric.kernel.util.ForbricLog;
 import net.forbric.kernel.util.Reflect;
 import net.forbric.kernel.fabric.KernelFabricLoader;
+import net.forbric.kernel.transform.FabricFreezePointInjector;
 import net.forbric.api.ModCatalog;
 
 /**
@@ -796,12 +797,20 @@ public final class KernelLifecycle {
 			// registry goes through FabricRegistryBuilder, which is a plain Registry.register into that root.
 			rootRegistry(cl, true);
 			try {
-				// On a client these now run from onClientEntrypoints, inside Minecraft.<init>, where Fabric runs
-				// them and where Minecraft.getInstance() is live. Here they would see a null instance, and a mod
-				// that caches it caches null for the whole process. The dedicated server keeps this window: it has
-				// no Minecraft to wait for, and Fabric's own startServer runs main just as early there.
-				if (!side.isClient() || !KernelFabricEcosystem.mainsRunInConstructor()) {
-					KernelFabricEcosystem.runMainEntrypoints();
+				try {
+					// On a client these now run from onClientEntrypoints, inside Minecraft.<init>, where Fabric runs
+					// them and where Minecraft.getInstance() is live. Here they would see a null instance, and a mod
+					// that caches it caches null for the whole process. The dedicated server keeps this window: it has
+					// no Minecraft to wait for, and Fabric's own startServer runs main just as early there.
+					if (!side.isClient() || !KernelFabricEcosystem.mainsRunInConstructor()) {
+						KernelFabricEcosystem.runMainEntrypoints();
+					}
+				} finally {
+					// Fabric's registry freeze, as a server with fabric-api has it: after every main, the root still
+					// open. Only the Fabric injectors on BuiltInRegistries.freeze() that FabricFreezeHookMixinAdapter
+					// moved run here; the HEAD half now, the TAIL half once the window below is frozen. A client
+					// does both in onClientEntrypoints, after its client entrypoints, as Fabric does.
+					if (!side.isClient()) fabricFreezePoint(cl, FabricFreezePointInjector.HEAD_HOOK);
 				}
 			} finally {
 				rootRegistry(cl, false);
@@ -882,6 +891,7 @@ public final class KernelLifecycle {
 			// Only when the window was actually opened: before unfreeze there is nothing to put back, and freezing
 			// a registry the kernel never opened would close one the caller still owns.
 			if (closeWindow) closeRegistrationWindow(cl);
+			if (!side.isClient()) fabricFreezePoint(cl, FabricFreezePointInjector.TAIL_HOOK);
 		}
 	}
 
@@ -2539,24 +2549,6 @@ public final class KernelLifecycle {
 	}
 
 	/**
-	 * Runs the Fabric client entrypoints with the registries REOPENED, because registering content from
-	 * {@code onInitializeClient} is ordinary Fabric practice and it has to keep working here.
-	 *
-	 * <p>On Fabric both entrypoint phases run at the head of {@code Minecraft.<init>}, and the freeze does not
-	 * happen until after that: {@code fabric-registry-sync-v0}'s {@code BuiltInRegistriesMixin} CANCELS the
-	 * {@code BuiltInRegistries.bootStrap()} vanilla performs during {@code Bootstrap}, and its {@code MainMixin}
-	 * re-runs it later in {@code Main.main}. The kernel owns registration instead and suppresses both of those
-	 * mixins, so by the time this hook fires its own window has already closed and every registry is frozen —
-	 * a mod registering here died, and if it swallowed the failure the damage surfaced far away. Xaero's World Map
-	 * registers its status effects from {@code loadCommon()} and catches Throwable into a field, so the only symptom
-	 * was {@code WorldMap.events} still being null a hundred ticks later, inside {@code Minecraft.runTick}.
-	 *
-	 * <p>Reopening is the smaller half of the job: the ids assigned here have to be rebuilt into NeoForge's
-	 * blockstate map and any late {@code BlockItem} linked back to its block, exactly as at the end of the main
-	 * window — otherwise the first block update fails to encode. Both run in a {@code finally} so a mod throwing
-	 * cannot leave the registries open.
-	 */
-	/**
 	 * The key both ecosystems spell the same, in different files: a Fabric entrypoint in {@code fabric.mod.json},
 	 * a {@code [modproperties.<id>]} entry in {@code neoforge.mods.toml}. Not a {@link ForeignType} — it is one
 	 * literal owned by Sodium, not a concept with a twin under each Forge family.
@@ -2710,6 +2702,29 @@ public final class KernelLifecycle {
 		}
 	}
 
+	/**
+	 * Runs the Fabric client entrypoints with the registries REOPENED, because registering content from
+	 * {@code onInitializeClient} is ordinary Fabric practice and it has to keep working here.
+	 *
+	 * <p>On Fabric both entrypoint phases run at the head of {@code Minecraft.<init>}, and the freeze does not
+	 * happen until after that: {@code fabric-registry-sync-v0}'s {@code BootstrapMixin} redirects the
+	 * {@code BuiltInRegistries.bootStrap()} call in {@code Bootstrap} to {@code createContents()} alone, and its client
+	 * {@code MinecraftMixin} runs {@code bootStrap()} after the entrypoints. The kernel owns registration instead and
+	 * keeps those mixins without their freeze ({@code FabricRegistryInitializationMixinAdapter}), so by the time this
+	 * hook fires its own window has already closed and every registry is frozen — a mod registering here died, and if
+	 * it swallowed the failure the damage surfaced far away. Xaero's World Map
+	 * registers its status effects from {@code loadCommon()} and catches Throwable into a field, so the only symptom
+	 * was {@code WorldMap.events} still being null a hundred ticks later, inside {@code Minecraft.runTick}.
+	 *
+	 * <p>Reopening is the smaller half of the job: the ids assigned here have to be rebuilt into NeoForge's
+	 * blockstate map and any late {@code BlockItem} linked back to its block, exactly as at the end of the main
+	 * window — otherwise the first block update fails to encode. Both run in a {@code finally} so a mod throwing
+	 * cannot leave the registries open.
+	 *
+	 * <p>Closing this window is also Fabric's registry freeze point: the Fabric injectors on
+	 * {@code BuiltInRegistries.freeze()} that {@code FabricFreezeHookMixinAdapter} moved run here, the HEAD half while
+	 * the registries are still open and the TAIL half once they are frozen (issue #52).
+	 */
 	public static void onClientEntrypoints() {
 		ClassLoader cl = gameLoader;
 		ReopenedRegistries opened = ReopenedRegistries.NONE;
@@ -2750,7 +2765,12 @@ public final class KernelLifecycle {
 		} catch (Throwable t) {
 			ForbricLog.warn("[Forbric/Lifecycle] client entrypoints failed", unwrap(t));
 		} finally {
+			// Fabric freezes here, after the main and client entrypoints: the Fabric injectors on
+			// BuiltInRegistries.freeze() that FabricFreezeHookMixinAdapter moved run around the freeze that closes
+			// this window — the HEAD half while it is still open, the TAIL half once it is frozen.
+			fabricFreezePoint(cl, FabricFreezePointInjector.HEAD_HOOK);
 			if (reopened) closeClientEntrypointWindow(cl, opened);
+			fabricFreezePoint(cl, FabricFreezePointInjector.TAIL_HOOK);
 			// A CLIENT config registered from a Fabric client entrypoint missed the early pass entirely, and
 			// nothing else opens one. Reading it then throws rather than returning a default.
 			openLateConfigs(cl, Side.CLIENT, "the Fabric client entrypoints");
@@ -2874,6 +2894,52 @@ public final class KernelLifecycle {
 		} catch (Throwable t) {
 			ForbricLog.warn("[Forbric/ClientResources] client resource preload did not run", unwrap(t));
 		}
+	}
+
+	/** Hooks of {@link #fabricFreezePoint} already called; each runs once per process. */
+	private static final java.util.Set<String> FABRIC_FREEZE_HOOKS_RUN = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+	/**
+	 * Calls one of the hooks {@link FabricFreezePointInjector} added to {@code BuiltInRegistries}, once: Fabric's
+	 * registry freeze point, where the Fabric mods' own injectors on {@code BuiltInRegistries.freeze()} run with
+	 * fabric-api installed.
+	 *
+	 * <p>On Fabric that is after every main (a server) or main and client (a client) entrypoint, because
+	 * fabric-registry-sync moves the freeze there; the kernel freezes in {@code Bootstrap} and opens its own windows,
+	 * so the freeze's observers are moved instead (issue #52: Create Fly's TAIL injector creating its registries
+	 * against the frozen bootstrap root). A handler that throws is reported, not rethrown — the same as a failing
+	 * entrypoint here — and the hook it shares runs no further handlers, as on Fabric. The TAIL half runs only after
+	 * the HEAD half: a server whose window failed before its mains never reaches HEAD, and Create's TAIL injector would
+	 * then add a second, misleading failure to the first.
+	 */
+	static void fabricFreezePoint(ClassLoader cl, String hook) {
+		if (!FabricFreezePointInjector.enabled()) return;
+		if (FabricFreezePointInjector.TAIL_HOOK.equals(hook) && !FABRIC_FREEZE_HOOKS_RUN.contains(FabricFreezePointInjector.HEAD_HOOK)) {
+			ForbricLog.debug("[Forbric/RegistrySync] Fabric's registry freeze point never reached its HEAD half — TAIL skipped");
+			return;
+		}
+		if (!FABRIC_FREEZE_HOOKS_RUN.add(hook)) return;
+		List<String> moved = net.forbric.kernel.mixin.FabricFreezeHookMixinAdapter.moved().stream()
+				.filter(row -> row.endsWith("-> " + hook)).toList();
+		try {
+			Class.forName(FabricFreezePointInjector.TARGET, true, cl).getMethod(hook).invoke(null);
+			if (!moved.isEmpty()) {
+				ForbricLog.info("[Forbric/RegistrySync] Fabric's registry freeze point (%s): ran %d moved injector(s) "
+						+ "after the Fabric entrypoints — %s", hook.endsWith("Head") ? "HEAD" : "TAIL", moved.size(),
+						String.join(", ", moved.stream().map(row -> row.substring(0, row.indexOf(" -> "))).toList()));
+			}
+		} catch (NoSuchMethodException | ClassNotFoundException absent) {
+			ForbricLog.debug("[Forbric/RegistrySync] no %s on BuiltInRegistries — nothing waits for Fabric's freeze point", hook);
+		} catch (Throwable t) {
+			ForbricLog.warn("[Forbric/RegistrySync] a Fabric mod's injector on BuiltInRegistries.freeze() failed at Fabric's "
+					+ "registry freeze point (" + hook + "); every later one on that hook was skipped. Moved here: "
+					+ moved, unwrap(t));
+		}
+	}
+
+	/** Test seam. */
+	static void forgetFabricFreezePoint() {
+		FABRIC_FREEZE_HOOKS_RUN.clear();
 	}
 
 	/** Re-closes after the client entrypoints and redoes the id bookkeeping their registrations invalidated. */

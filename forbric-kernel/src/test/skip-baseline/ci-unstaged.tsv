@@ -199,6 +199,7 @@ test	net.forbric.kernel.mixin.FabricEntityMixinAnchorsTest	tickSwitchLeavesOnlyT
 test	net.forbric.kernel.mixin.FabricEntityMixinAnchorsTest	unknownOccupationHandlerBodyIsNotReimplemented()	[fixture:staged] actual Fabric API fixture required
 test	net.forbric.kernel.mixin.FabricFluidFlowMixinAdapterTest	bothLiveCarrierPathsCallTheOriginalFabricVetoAndKeepTheirNativeOperations()	[fixture:third-party] actual current Fabric Block API fixture required
 test	net.forbric.kernel.mixin.FabricFluidFlowMixinAdapterTest	changedOrVanillaCarrierIsNotRewritten()	[fixture:third-party] actual current Fabric Block API fixture required
+test	net.forbric.kernel.mixin.FabricFreezeHookMixinAdapterTest	releasedCreateFlyMovesOnInitializeToTheHeadHookAndAfterFreezeToTheTailHook()	[fixture:third-party] real fixture required: $ROOT/forbric-kernel/build/compat-inputs/create-fly/create-fly.jar
 test	net.forbric.kernel.mixin.FabricMiningDecisionTest	nativeContinueNativeResetFabricOverrideAndDifferentItemsPreserveTheirDecisions()	[fixture:staged] actual Fabric API fixture required
 test	net.forbric.kernel.mixin.FabricRegistryInitializationMixinAdapterTest	bootstrapKeepsEveryNativeTrackerButDoesNotRedirectTheFreeze()	[fixture:third-party] build/compat-inputs/player-loading/api/fabric-registry-sync-v0-7.1.1+c7bd5b8e9e.jar absent
 test	net.forbric.kernel.mixin.FabricRegistryInitializationMixinAdapterTest	clientAndServerRetainPostFreezeWorkAndClientUnmap()	[fixture:third-party] build/compat-inputs/player-loading/api/fabric-registry-sync-v0-7.1.1+c7bd5b8e9e.jar absent

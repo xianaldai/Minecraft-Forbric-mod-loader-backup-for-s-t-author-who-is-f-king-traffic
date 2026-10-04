@@ -291,6 +291,7 @@ public final class ForbricMixinService
 		CreateHudMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		FabricRegistryLoaderMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		FabricRegistryInitializationMixinAdapter.adapt(node);
+		FabricFreezeHookMixinAdapter.adapt(node, this::mergedBaseNode);
 		FabricCreativePagerMixinAdapter.adapt(node);
 		KernelClientHookMixinAnchors.adapt(node, this::mergedBaseNodeWithCode);
 		GuiItemCaptureMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);

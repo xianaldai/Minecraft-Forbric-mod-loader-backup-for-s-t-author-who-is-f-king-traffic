@@ -624,6 +624,17 @@ public final class KernelBoot {
 		// key-mapping registry read that instance to reject registration that is too LATE. Flashback died there.
 		chain.register(TransformPhase.COREMOD,
 				new net.forbric.kernel.transform.EarlyKeyMappingRegistrationInjector());
+		// The same freeze, seen by a Fabric mod's own injectors on BuiltInRegistries.freeze(): with fabric-api they run
+		// after every Fabric main on Fabric, and here they ran in Bootstrap. Create Fly's TAIL injector then created
+		// its registries in a frozen root and the game could not start (issue #52). The hooks this adds are where
+		// FabricFreezeHookMixinAdapter moves those injectors and where KernelLifecycle calls them.
+		if (net.forbric.kernel.transform.FabricFreezePointInjector.enabled()) {
+			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.FabricFreezePointInjector());
+		} else {
+			ForbricLog.warn("[Forbric/RegistrySync] -D%s=off — a Fabric mod's injectors on BuiltInRegistries.freeze() run in "
+					+ "Bootstrap, before every Fabric main, even with fabric-api installed (Create Fly cannot start)",
+					net.forbric.kernel.transform.FabricFreezePointInjector.PROPERTY);
+		}
 
 		// A multiloader mod ships one pack.mcmeta carrying a section per loader, and on Forbric all three parsers are
 		// live — so a Fabric-only build gets its neoforge:overlays section read by NeoForge's parser and throws on a
