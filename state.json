@@ -1010,12 +1010,26 @@
      "m": null,
      "t": "2026-10-04T13:12:51Z",
      "u": "2026-10-04T13:12:51Z"
+    },
+    "5982849055": {
+     "a": "GongSunFangYun",
+     "d": "994b155bc9c3",
+     "m": null,
+     "t": "2026-10-04T18:02:26Z",
+     "u": "2026-10-04T18:02:26Z"
+    },
+    "5982942227": {
+     "a": "tomysh1337",
+     "d": "f50e7df1995d",
+     "m": null,
+     "t": "2026-10-04T18:13:39Z",
+     "u": "2026-10-04T18:13:39Z"
     }
    },
-   "comments_through": "2026-10-04T13:12:51Z",
+   "comments_through": "2026-10-04T18:13:39Z",
    "state": "open",
    "title": "\u5bf9\u4e8e\u672c\u9879\u76ee\u7684\u4e2a\u4eba\u89c2\u70b9",
-   "updated_at": "2026-10-04T13:12:51Z"
+   "updated_at": "2026-10-04T18:13:39Z"
   },
   "4": {
    "body": "600345487502",
@@ -1251,17 +1265,112 @@
     }
    },
    "comments_through": "2026-10-04T11:06:25Z",
-   "state": "open",
+   "state": "closed",
    "title": "[bug] \u540c\u540d\u91cd\u8f7d\uff1a\u540d\u5b57\u552f\u4e00\u7684 @Inject \u88ab Mixin \u89e3\u6790\u5230 NeoForge \u90a3\u4e2a\u91cd\u8f7d\uff0c\u6574\u6761 mixin \u7c7b\u4f5c\u5e9f\uff08carpet-org-addition / MinecraftServer.handleCustomClickAction\uff09",
-   "updated_at": "2026-10-04T11:06:25Z"
+   "updated_at": "2026-10-04T15:20:26Z"
   },
   "57": {
    "body": "271a001f0012",
    "comments": {},
    "comments_through": "",
-   "state": "open",
+   "state": "closed",
    "title": "[bug] Android/FCL\uff1aASK \u95f8\u95e8 fork java.home/bin/java \u629b EACCES(13) \u88ab\u5f53\u6210\u73a9\u5bb6\u62d2\u7edd\uff0c\u4efb\u4f55 required finding \u90fd\u6c38\u4e45\u65e0\u6cd5\u542f\u52a8",
-   "updated_at": "2026-10-04T11:06:24Z"
+   "updated_at": "2026-10-04T15:20:18Z"
+  },
+  "58": {
+   "body": "8d80187d24bc",
+   "comments": {
+    "5982749773": {
+     "a": "Lorypage",
+     "d": "7f3e61abcb9e",
+     "m": null,
+     "t": "2026-10-04T17:50:05Z",
+     "u": "2026-10-04T17:50:05Z"
+    }
+   },
+   "comments_through": "2026-10-04T17:50:05Z",
+   "state": "open",
+   "title": "Invitation to share minecraft-forbric-mod-loader on GithubStarMate and help more people discover your work",
+   "updated_at": "2026-10-04T17:50:05Z"
+  },
+  "59": {
+   "body": "f94849de7a84",
+   "comments": {
+    "5982723846": {
+     "a": "t0n6-n",
+     "d": "4731da9fb341",
+     "m": null,
+     "t": "2026-10-04T17:46:47Z",
+     "u": "2026-10-04T17:50:54Z"
+    },
+    "5982731934": {
+     "a": "BLxcwg666",
+     "d": "fbf1114dcce4",
+     "m": null,
+     "t": "2026-10-04T17:47:49Z",
+     "u": "2026-10-04T17:47:49Z"
+    },
+    "5982737984": {
+     "a": "BerryAura1337",
+     "d": "b8a55ebba573",
+     "m": null,
+     "t": "2026-10-04T17:48:35Z",
+     "u": "2026-10-04T17:48:35Z"
+    },
+    "5982741239": {
+     "a": "suq-weer",
+     "d": "5c59d6839ba1",
+     "m": null,
+     "t": "2026-10-04T17:49:01Z",
+     "u": "2026-10-04T17:49:01Z"
+    },
+    "5982859377": {
+     "a": "GongSunFangYun",
+     "d": "be6a2403dba6",
+     "m": null,
+     "t": "2026-10-04T18:03:42Z",
+     "u": "2026-10-04T18:03:42Z"
+    },
+    "5982870503": {
+     "a": "EscapistKid",
+     "d": "fba793ee120f",
+     "m": null,
+     "t": "2026-10-04T18:05:00Z",
+     "u": "2026-10-04T18:05:00Z"
+    },
+    "5982893974": {
+     "a": "awefdfs",
+     "d": "fc73fcf1a337",
+     "m": null,
+     "t": "2026-10-04T18:07:48Z",
+     "u": "2026-10-04T18:07:48Z"
+    },
+    "5982919124": {
+     "a": "tomysh1337",
+     "d": "41c906e6e8eb",
+     "m": null,
+     "t": "2026-10-04T18:10:53Z",
+     "u": "2026-10-04T18:10:53Z"
+    },
+    "5982958122": {
+     "a": "awefdfs",
+     "d": "41276e1e2fc3",
+     "m": null,
+     "t": "2026-10-04T18:15:36Z",
+     "u": "2026-10-04T18:15:36Z"
+    },
+    "5982971563": {
+     "a": "BerryAura1337",
+     "d": "cde0b195ae73",
+     "m": null,
+     "t": "2026-10-04T18:17:16Z",
+     "u": "2026-10-04T18:17:25Z"
+    }
+   },
+   "comments_through": "2026-10-04T18:17:16Z",
+   "state": "open",
+   "title": "\u6d4b\u8bc4\u548c\u53cd\u9988",
+   "updated_at": "2026-10-04T18:17:25Z"
   },
   "6": {
    "body": "5787b95dba3d",
