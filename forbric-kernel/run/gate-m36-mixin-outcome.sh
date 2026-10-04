@@ -4,14 +4,14 @@
 set -euo pipefail
 GATE_PORT="${GATE_PORT:-25596}"
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
-export KERNEL BUILD OLD
+export KERNEL BUILD OLD GATE_PORT
 kernel_jar
 bash "$KERNEL/run/build-mixin-outcome-canary.sh"
 python3 - <<'PY'
 import json, os, pathlib, shutil, subprocess, time, uuid, signal
 kernel=pathlib.Path(os.environ['KERNEL']);root=kernel.parent
 run=kernel/'run/server-mixin-outcome-m36';results=kernel/'build/verification/m36-outcome';results.mkdir(parents=True,exist_ok=True)
-inputs=json.loads((kernel/'run/canary/m36-build-inputs.json').read_text())
+inputs=json.loads((kernel/'run/canary/m36-build-inputs.json').read_text());port=os.environ['GATE_PORT']
 for phase,mode,policy,required in [('required-strict','required','strict',True),('required-continue','required','continue',True),('optional','optional','strict',False),('declined','declined','strict',False),('widened','widened','strict',False),('widened-off','widened','strict',True)]:
  if run.exists():
   if not (run/'.m36-owned').is_file():raise RuntimeError('refusing to delete unowned M36 instance')
@@ -19,12 +19,13 @@ for phase,mode,policy,required in [('required-strict','required','strict',True),
  (run/'mods').mkdir(parents=True);(run/'.m36-owned').write_text(str(uuid.uuid4()))
  shutil.copy2(kernel/'run/canary/forbricoutcome.jar',run/'mods/forbricoutcome.jar')
  (run/'eula.txt').write_text('eula=true\n')
- (run/'server.properties').write_text('server-ip=127.0.0.1\nserver-port=25596\nonline-mode=false\nlevel-name=world\nmax-tick-time=-1\npause-when-empty-seconds=0\nview-distance=2\nsimulation-distance=2\n')
+ (run/'server.properties').write_text(f'server-ip=127.0.0.1\nserver-port={port}\nonline-mode=false\nlevel-name=world\nmax-tick-time=-1\npause-when-empty-seconds=0\nview-distance=2\nsimulation-distance=2\n')
  env=os.environ.copy();env.update(RUNDIR=str(run),FORBRIC_COMPAT_POLICY=policy,FORBRIC_JVM=f'-Dforbric.outcomeMode={mode} -Dforbric.mixinAtWiden=' + ('off' if phase=='widened-off' else 'on'))
  for key,role in [('MERGED','merged'),('FORGE_RT','forge'),('NEO_RT','neo')]:env[key]=inputs[role]['path']
  command=['python3',str(kernel/'run/compat/evidence.py'),'run','--source',str(root),'--mods',str(run/'mods'),'--output',str(results/(phase+'.json'))]
  for role,path in [('merged',env['MERGED']),('forge-interop',env['FORGE_RT']),('neo-runtime',env['NEO_RT']),('kernel',str(kernel/'build/libs/forbric-kernel-0.1.0-SNAPSHOT.jar')),('kernel-runtime',str(kernel/'build/libs/forbric-kernel-runtime-0.1.0-SNAPSHOT.jar'))]:command+=['--artifact',role+'='+path]
  command+=['--','bash',str(kernel/'run/launch-kernel-server.sh')]
+ (results/(phase+'.log')).unlink(missing_ok=True)  # the lost-port check below must not read an earlier run's log
  with (results/(phase+'-driver.log')).open('w') as output:
   process=subprocess.Popen(command,cwd=root,env=env,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT,start_new_session=True)
   try:code=process.wait(timeout=180)
@@ -33,6 +34,9 @@ for phase,mode,policy,required in [('required-strict','required','strict',True),
    try:process.wait(timeout=15)
    except subprocess.TimeoutExpired:os.killpg(process.pid,signal.SIGKILL);process.wait()
    raise RuntimeError('M36 owned process group timed out')
+ log=results/(phase+'.log')
+ # A lost port fails everything below for a reason that is not the kernel's (see port_was_free in lib.sh).
+ assert not (log.is_file() and 'FAILED TO BIND TO PORT' in log.read_text(errors='replace')),(phase,f'the server never got port {port}: another process holds it')
  assert code==0,(phase,'server/evidence failed; inspect driver log')
  text=(results/(phase+'.log')).read_text();report=json.loads((run/'.forbric-kernel/compatibility-report.json').read_text())
  shutil.copy2(run/'.forbric-kernel/compatibility-report.json',results/(phase+'-compatibility.json'))

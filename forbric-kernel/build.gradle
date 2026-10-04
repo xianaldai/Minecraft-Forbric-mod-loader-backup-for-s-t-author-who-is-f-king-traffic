@@ -108,9 +108,19 @@ def defaultMinecraft = osName.contains('windows')
 		? new File(System.getenv('APPDATA') ?: System.getProperty('user.home') + '/AppData/Roaming', '.minecraft')
 		: new File(System.getProperty('user.home'), osName.contains('mac') ? 'Library/Application Support/minecraft' : '.minecraft')
 def devMinecraft = file('.dev/minecraft')
+// .dev/minecraft is preferred only while it has its version JSON, because the transfer suite's library list below is
+// read from that JSON. A tree without it is a tree with no libraries as far as that list goes. One here had all 73
+// jars it needs and no 26.2.json (removed after prepare had finished; what removed it is unknown), and preferring
+// it because the directory existed sent the transfer suite into ClassNotFoundException for netty and Commons Lang
+// with nothing saying why. The JSON is NOT proof that prepare finished -- it is the first file prepare writes -- so
+// the transferTest guard below also names any library the JSON lists that is not on disk.
+def devMinecraftPrepared = new File(devMinecraft, 'versions/26.2/26.2.json').isFile()
+if (devMinecraft.isDirectory() && !devMinecraftPrepared && !project.hasProperty('forbric.mcLibraries') && !System.getenv('MC_DIR'))
+	logger.lifecycle("[forbric] ${devMinecraft} has no versions/26.2/26.2.json, so Minecraft's libraries come from " +
+			"${defaultMinecraft}; run `python tools/dev.py prepare` to restore it")
 def mcLibraries = file(project.findProperty('forbric.mcLibraries')
 		?: (System.getenv('MC_DIR') ? System.getenv('MC_DIR') + '/libraries'
-				: new File(devMinecraft.isDirectory() ? devMinecraft : defaultMinecraft, 'libraries')))
+				: new File(devMinecraftPrepared ? devMinecraft : defaultMinecraft, 'libraries')))
 // One jar PER PATTERN, never one across all of them: a single fileTree over several includes and a global
 // takeRight(1) keeps whichever name sorts last and silently drops the rest — with brigadier and datafixerupper
 // in the same tree, 'd' > 'b' and brigadier disappears. Last-by-NAME within a pattern is not version-aware
@@ -141,6 +151,9 @@ def stagedMcLibraries = lastByNameUnder('com/mojang/brigadier/**/*.jar') +
 // puts on the game's classpath), rather than a stub or whichever cached jar happens to sort last. This is test
 // runtime linkage only and is never bundled.
 def stagedTransferTestLibraries = []
+// Libraries the JSON lists for every platform (no OS rules) that are not on disk. Those with rules are natives for one
+// OS, so the other platforms' copies being absent is normal.
+def missingTransferTestLibraries = []
 def stagedMcVersionJson = new File(mcLibraries.parentFile, 'versions/26.2/26.2.json')
 if (stagedMcVersionJson.isFile()) {
 	def versionMetadata = new groovy.json.JsonSlurper().parse(stagedMcVersionJson)
@@ -149,6 +162,7 @@ if (stagedMcVersionJson.isFile()) {
 		if (relativePath) {
 			def artifact = new File(mcLibraries, relativePath)
 			if (artifact.isFile()) stagedTransferTestLibraries.add(artifact)
+			else if (!library.rules) missingTransferTestLibraries.add(relativePath)
 		}
 	}
 }
@@ -402,6 +416,23 @@ tasks.register('transferTest', Test) {
 	// configuration time on a clean build directory that glob is still empty: every scenario then failed with
 	// NoClassDefFoundError on the first run after `clean` and passed on the second.
 	doFirst { systemProperty 'forbric.transferTestClasspath', classpath.asPath }
+	// Without Minecraft's own library set every scenario fails on a ClassNotFoundException for a netty or Commons
+	// Lang class, which reads as a transfer bug. Say what is missing instead. A run narrowed with --tests may be
+	// after a scenario that needs none of it, so that one only warns.
+	doFirst {
+		def problem = !stagedMcVersionJson.isFile()
+				? "${stagedMcVersionJson} is absent, so Minecraft 26.2's library list is unknown"
+				: !missingTransferTestLibraries.isEmpty()
+						? "${missingTransferTestLibraries.size()} of the libraries ${stagedMcVersionJson} lists are not under " +
+								"${mcLibraries}: ${missingTransferTestLibraries.take(5).join(', ')}"
+						: null
+		if (problem == null) return
+		def advice = "Point -Pforbric.mcLibraries or MC_DIR at a Minecraft install that has run 26.2, or run " +
+				"`python tools/dev.py prepare`"
+		if (filter.commandLineIncludePatterns.isEmpty()) throw new GradleException("The transfer suite needs Minecraft's " +
+				"own libraries: ${problem}. ${advice}")
+		logger.warn("[forbric] transferTest: ${problem}; a scenario that loads Minecraft classes will fail. ${advice}")
+	}
 }
 tasks.named('check') { dependsOn tasks.named('transferTest') }
 

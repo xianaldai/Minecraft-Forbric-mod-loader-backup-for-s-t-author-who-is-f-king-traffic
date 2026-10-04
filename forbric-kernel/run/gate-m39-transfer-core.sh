@@ -61,13 +61,16 @@ shutil.copy2(kernel/'run/client-merged-pack/mods/fabric-api-0.155.2+26.2.jar',ru
 PY
 seed_server_properties "$RUNDIR"
 printf '\nlevel-type=minecraft:flat\ngenerate-structures=false\n' >> "$RUNDIR/server.properties"
+LOG="$RUNDIR/inputs.log"
+# set -e ends the gate on this line when the server run fails -- and a server that lost its port fails it, because
+# the feeder's "stop" then lands on a closed pipe -- so name a lost port here, before anything else is read.
 python3 "$KERNEL/run/compat/evidence.py" run --source "$KERNEL/.." \
   --artifact "merged=$MERGED" --artifact "forge-interop=$FORGE_RT" --artifact "neo-runtime=$NEO_RT" \
   --artifact "kernel=$BUILD/libs/forbric-kernel-0.1.0-SNAPSHOT.jar" \
   --artifact "kernel-runtime=$BUILD/libs/forbric-kernel-runtime-0.1.0-SNAPSHOT.jar" \
   --mods "$RUNDIR/mods" --output "$RUNDIR/inputs.json" \
-  -- bash "$KERNEL/run/gate-m39-transfer-core.sh" --execute "$RUNDIR"
-LOG="$RUNDIR/inputs.log"
+  -- bash "$KERNEL/run/gate-m39-transfer-core.sh" --execute "$RUNDIR" \
+  || { port_was_free "$LOG"; echo "[kernel] FAIL the server run failed — see $LOG"; exit 1; }
 check "all fourteen storage scenarios and the native diagnostic proof ran" 'TransferCanary\] 15/15 passed' "$LOG"
 check_absent "no real carrier scenario failed" 'TransferCanary\] FAIL' "$LOG"
 check "the actual server ticked and accepted stop" 'Stopping the server|commands\.stop\.stopping' "$LOG"

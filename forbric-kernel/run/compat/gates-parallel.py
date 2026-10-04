@@ -2,13 +2,14 @@
 """Scheduler behind gates-all.sh: run the checked-in gates with as much overlap as the machine allows.
 
 WHY A SCHEDULER AND NOT `xargs -P`. The gates are not independent processes that happen to be slow. Each one
-boots a real Minecraft server or client, and three things make a naive fan-out produce GREEN runs that prove
+boots a real Minecraft server or client, and three things make a naive fan-out produce verdicts that prove
 nothing:
 
-  * THE PORT. Eighteen gates call seed_server_properties, which writes GATE_PORT into server.properties. Two of
-    them at once and the loser prints "FAILED TO BIND TO PORT" and then still prints "Stopping server" -- so the
-    clean-shutdown assertion passes and the gate reads green while its server never existed. lib.sh documents
-    this exact failure. Every concurrent gate therefore gets its own port block, not a shared default.
+  * THE PORT. Every gate that starts a server writes a port into server.properties, most of them GATE_PORT via
+    seed_server_properties. Two of them on one port and the loser prints "FAILED TO BIND TO PORT", writes a crash
+    report, and then still prints "Stopping server" -- so the clean-shutdown assertions pass, and the gate fails
+    on whatever needed a running server, which reads as a kernel regression. lib.sh's port_was_free now names the
+    port instead. Every concurrent gate therefore gets its own port block, not a shared default.
   * THE RUNDIR. gate-m1, gate-m2 and gate-m3 all use run/server-kernel. Two gates in one rundir stage each
     other's mods, truncate each other's server.properties and read each other's logs. Gates that share a
     rundir are never run together.
@@ -56,9 +57,13 @@ from pathlib import Path
 PORT_BASE = 25700
 PORT_STRIDE = 10
 
-# The per-gate knobs that select a port. A gate uses at most one of these; handing it the whole block costs
-# nothing and means a gate that grows a second server does not need the scheduler changed.
-PORT_VARS = ("GATE_PORT", "M12_PORT", "M13_PORT", "M14_PORT", "M15_PORT", "M16_PORT", "M28_PORT")
+# The per-gate knobs that select a port, drawn from the slot's block in this order. A gate uses at most one of
+# these; handing it the whole block costs nothing and means a gate that grows a second server does not need the
+# scheduler changed. A gate reading a knob that is NOT here gets nothing and keeps its own literal, and the slot
+# where that literal meets an exported one is two servers on one port -- the race this module exists to prevent.
+# test_gate_ports.py holds every gate to this tuple, so a gate that adds an M<n>_PORT fails there instead of in a
+# run whose two occupants nobody can reproduce.
+PORT_VARS = ("GATE_PORT", "M12_PORT", "M13_PORT", "M14_PORT", "M15_PORT", "M16_PORT", "M28_PORT", "M32_PORT")
 
 DECL = re.compile(r"^#\s*GATE-PARALLEL:\s*(.*)$", re.M)
 

@@ -26,7 +26,8 @@ def main():
     dev = kernel / '.dev'
     staged = os.environ.get('FORBRIC_OLD') or (dev / 'staged' if (dev / 'staged/run/merged-base').is_dir() else kernel.parent / 'forbric-loader')
     stage = (args.staged_root or Path(staged) / 'run').resolve()
-    mc = Path(os.environ.get('MC_DIR') or (dev / 'minecraft' if (dev / 'minecraft').is_dir()
+    # Like the build: .dev/minecraft only while it has the version JSON this script reads below.
+    mc = Path(os.environ.get('MC_DIR') or (dev / 'minecraft' if (dev / 'minecraft/versions/26.2/26.2.json').is_file()
                                          else Path.home() / 'Library/Application Support/minecraft')).resolve()
     delight = args.farmers_delight.resolve()
     api = args.fabric_api or next((path for path in (dev / 'api/fabric-api-0.155.2+26.2.jar',

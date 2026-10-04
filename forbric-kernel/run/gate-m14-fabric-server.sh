@@ -88,6 +88,7 @@ done
 if [ "$READY" -ne 1 ]; then
   echo "[kernel] FAIL the Fabric server never reached Done"; FAIL=1
   exec 9>&-; kill_tree "$SRVPID"; rm -f "$FIFO" "$(_pidfile "$SRV")"
+  port_was_free "$SLOG"   # a server that lost its port never reaches Done either
   step "M14 result"; echo "[kernel] ❌ M14 GATE RED — see $SLOG"; exit 1
 fi
 # Spawn at the origin; the probe blocks go a few blocks up and along +Z, where the player cannot stand on them.

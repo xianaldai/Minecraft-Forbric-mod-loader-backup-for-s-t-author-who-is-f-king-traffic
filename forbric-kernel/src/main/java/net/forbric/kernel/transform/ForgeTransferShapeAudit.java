@@ -71,6 +71,24 @@ public final class ForgeTransferShapeAudit {
 			Map.entry("net.neoforged.neoforge.common.MutableDataComponentHolder", "beaa9c59bd4505bad17e5da5e51bcdb8571cef110c0825d8178bf9d42fb14d52"),
 			Map.entry("net.neoforged.neoforge.transfer.resource.DataComponentHolderResource", "a86fd4ab64d88829d617c1a77658e0cc82c31582356f5032d7e4c97c567aeb6e"),
 			Map.entry("net.neoforged.neoforge.common.extensions.IItemExtension", "7040f6660c671ecf6a8dadf0911a83dfef146128c20bf61a5cbb1c21efc00654"));
+	/**
+	 * The audited classes {@link VanillaEarlyReturns} edits, as they are after it gives merged methods vanilla's early
+	 * returns back. In all 23 audited methods it changes, the only edit is that a path which reached the shared
+	 * trailing return (by a jump, or by falling into it) now reaches a return of its own, with the same opcode and
+	 * the same value on the stack: ItemStack.isSameItemSameComponents; CompoundTag's equals, get*Or, get*Array,
+	 * getCompound, getList, read and writeNamedTag; DataComponentPatch's equals, forget and getFromPatchAndPrototype;
+	 * PatchedDataComponentMap's equals, set, remove and toImmutableMap. Checked against the merged shape above, which
+	 * stays accepted for -Dforbric.vanillaEarlyReturns=off.
+	 *
+	 * <p>Without these, every ItemStackHandler and FluidTank was refused as not rollback-safe from the day that
+	 * transform landed, and only gate-m33 and gate-m39 said so. ForgeTransferShapeAuditStagedTest runs every audited
+	 * class through the transform, so an early-returns table that changes one of them again fails a unit test.
+	 */
+	private static final Map<String, String> RESTORED = Map.of(
+			"net.minecraft.world.item.ItemStack", "7691152cbf8ceef53ef202305334c0f6d4686f604a76afd9226886c251e6576c",
+			"net.minecraft.nbt.CompoundTag", "200c28e227152d6567380e20fe8bf495a759e44f731e3af6379db7b434456ab6",
+			"net.minecraft.core.component.DataComponentPatch", "bbec2f432717e44284906718cd4cbaaaef31f7fe822d9084ce90cd7e06126042",
+			"net.minecraft.core.component.PatchedDataComponentMap", "f9504eccc8157e81a162d48500554303bd306db7b5efde16f5664d1491124b0d");
 	public static final List<String> ITEM_HELPERS = List.of("net.minecraftforge.items.ItemHandlerHelper", "net.minecraft.world.item.ItemStack", "net.minecraft.world.item.Item", "net.minecraft.core.NonNullList", "net.minecraft.core.component.PatchedDataComponentMap", "net.minecraft.core.component.DataComponentPatch", "net.minecraft.core.component.DataComponentHolder", "net.minecraft.core.component.DataComponentGetter", "net.minecraftforge.common.capabilities.CapabilityProvider", "net.minecraftforge.common.capabilities.CapabilityProvider$ItemStacks", "net.neoforged.neoforge.transfer.item.ItemResource", "net.neoforged.neoforge.transfer.resource.DataComponentHolderResource", "net.neoforged.neoforge.common.MutableDataComponentHolder", "net.neoforged.neoforge.common.extensions.IItemExtension");
 	public static final List<String> FLUID_HELPERS = List.of("net.minecraftforge.fluids.FluidStack", "net.minecraft.nbt.CompoundTag", "net.minecraft.core.component.DataComponentPatch", "net.minecraft.core.component.DataComponentHolder", "net.minecraft.core.component.DataComponentGetter", "net.neoforged.neoforge.transfer.fluid.FluidResource", "net.neoforged.neoforge.transfer.resource.DataComponentHolderResource");
 	/** ForgeEnergyAdapters writes only through this class's own code and restores only its energy field. */
@@ -78,10 +96,17 @@ public final class ForgeTransferShapeAudit {
 	private static final Map<String, String> DECLINED = new ConcurrentHashMap<>();
 	public static String declined(String name) { return DECLINED.getOrDefault(name, "the final definition did not receive a transfer-shape certificate"); }
 
+	/** Whether {@code fingerprint} is a reviewed shape of the audited class {@code name}. */
+	static boolean reviewed(String name, String fingerprint) {
+		return fingerprint.equals(AUDITED.get(name)) || fingerprint.equals(RESTORED.get(name));
+	}
+	static Set<String> auditedClasses() { return AUDITED.keySet(); }
+	static Set<String> restoredClasses() { return RESTORED.keySet(); }
+
 	public static byte[] certify(String name, byte[] bytes) {
 		String expected = AUDITED.get(name); if (expected == null || bytes == null) return bytes;
-		String actual = fingerprint(bytes); boolean approved = expected.equals(actual);
-		dump(name, bytes, expected, actual);
+		String actual = fingerprint(bytes); boolean approved = reviewed(name, actual);
+		dump(name, bytes, actual.equals(RESTORED.get(name)) ? actual : expected, actual, approved);
 		if (approved) DECLINED.remove(name); else DECLINED.put(name, "transfer-critical bytecode differs from the reviewed 26.2 shape (" + actual + ")");
 		ClassNode node = new ClassNode(); new ClassReader(bytes).accept(node, 0);
 		boolean hadMarker = node.methods.removeIf(method -> method.name.equals(MARKER));
@@ -93,14 +118,15 @@ public final class ForgeTransferShapeAudit {
 		ClassWriter writer = new ClassWriter(0); node.accept(writer); return writer.toByteArray();
 	}
 	/** Explicit local verification artifact only; disabled by default and never included in a kernel jar. */
-	private static void dump(String name, byte[] bytes, String expected, String actual) {
+	private static void dump(String name, byte[] bytes, String expected, String actual, boolean approved) {
 		String directory = System.getProperty("forbric.transferShapeDump");
 		if (directory == null || directory.isBlank()) return;
 		try {
 			Path output = Path.of(directory).resolve(name.replace('.', '/') + ".class");
 			Files.createDirectories(output.getParent()); Files.write(output, bytes);
+			// reviewed= is the shape that matched, or the merged one when none did; observed= stays the second line.
 			Files.writeString(output.resolveSibling(output.getFileName() + ".audit.txt"),
-					"reviewed=" + expected + "\nobserved=" + actual + "\n");
+					"reviewed=" + expected + "\nobserved=" + actual + "\ncertified=" + approved + "\n");
 		} catch (IOException | RuntimeException failure) {
 			net.forbric.kernel.util.ForbricLog.warn("[Forbric/TransferAudit] could not dump %s: %s", name, failure.toString());
 		}

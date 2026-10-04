@@ -271,12 +271,32 @@ are starved enough that time-based assertions fail — `gate-m19` went red on `a
 thread and is not to be relaxed to suit a scheduler. `-j 4` and `-j 5` are green.
 
 Ports are per concurrent SLOT, not per gate: slot *i* gets `25700 + 10i`, and `GATE_PORT`,
-`M12_PORT`…`M16_PORT` and `M28_PORT` are exported to the gate from that block. A `GATE_PORT`
-already in the environment becomes the base instead. This is not tidiness: eighteen gates
-write `GATE_PORT` into `server.properties`, and the loser of a port race prints `FAILED TO
-BIND TO PORT` and then still prints `Stopping server` — so the clean-shutdown assertion
-passes and the gate reads green over a server that never started. The old default, 25599,
-is also `gate-m12`'s own `M12_PORT` default, which is exactly that collision.
+`M12_PORT`…`M16_PORT`, `M28_PORT` and `M32_PORT` are exported to the gate from that block. A
+`GATE_PORT` already in the environment becomes the base instead. This is not tidiness: every
+gate that starts a server writes a port into `server.properties`, and the loser of a port race
+prints `FAILED TO BIND TO PORT`, writes a crash report, and then still prints `Stopping server`
+and `All dimensions are saved`. Measured on `gate-m1` with its port held by another process: both
+shutdown checks passed, and the gate went red on "server reached Done" without a word about a
+port, which reads as the kernel failing to boot. The old default, 25599, is also `gate-m12`'s
+own `M12_PORT` default, which is exactly that collision.
+
+So a lost port is now named. `lib.sh`'s `port_was_free` fails with the port when a server log
+says it lost it. `await_server` runs it on every server it waits for; `gate-m12`…`m16`, which
+give up on a server that never reaches Done before they ever wait for it, run it on that exit;
+and the gates that start their server through `evidence.py` call it, or its Python equivalent,
+on that server's log — `gate-m39` before `set -e` ends it on the failed run.
+
+The knob list is hand-kept, and a gate reading a name it does not contain gets nothing: it keeps
+its own literal, and the slot where that literal meets an exported one is the race above.
+`M32_PORT` was missing, and `gate-m32-savedrop.sh`'s fallback was slot 10's `M16_PORT`. Slot 10
+exists only from `-j 11` up — at least 22 cores and about 30 GB under `-j auto` — and then
+`gate-m16` and `gate-m32` could take one port, and whichever lost it went red. `gate-m36`,
+`gate-m37` and `gate-m38` wrote their port into `server.properties` as a literal, so a second
+sweep started with its own `GATE_PORT` still met them there; they read `GATE_PORT` now.
+`python3 run/compat/test_gate_ports.py` holds every gate to these rules: a `*_PORT` it reads from
+the environment is one the scheduler exports; no gate writes a literal port; a gate that starts a
+server calls the lost-port check; and a "never reached Done" exit calls it before it leaves. It
+reads text, so it holds the call and that one shared exit, not every path through a gate.
 
 The script's output is exactly the RESULT lines, byte for byte the same as `summary.txt`.
 The running commentary — what started when, on which slot and port, what each gate cost, and

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run every checked-in gate. Overlaps the ones that can safely overlap; the scheduling lives in
-# gates-parallel.py next door, which explains why a naive fan-out produces green runs that prove nothing.
+# gates-parallel.py next door, which explains why a naive fan-out produces verdicts that prove nothing.
 #
 # The glob is still authoritative: gates-parallel.py discovers gate-m*.sh the same way this script used to, so
 # there is no parallel gate list to forget to update. What a gate DOES have to say for itself is one line:
@@ -50,8 +50,8 @@ gate-m0 asserts on, so nothing else may be printed to either stream. The running
 when, on which slot and port, what each gate cost) goes to build/gates/progress.log instead; `tail -f` it.
 
 The scheduler owns the ports: each concurrent slot gets its own block from 25700 up, and GATE_PORT / M1x_PORT /
-M28_PORT are exported per gate from it. A GATE_PORT set in the environment is NOT honoured here — run the gate
-directly if you need to choose its port.
+M28_PORT / M32_PORT are exported per gate from it. A GATE_PORT set in the environment moves where the blocks start
+instead, so two sweeps at once (two working trees) need two different GATE_PORTs.
 USAGE
       exit 0;;
     *) echo "Unknown argument: $1" >&2; exit 2;;

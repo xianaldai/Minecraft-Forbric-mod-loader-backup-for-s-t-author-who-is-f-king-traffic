@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -85,9 +86,11 @@ import net.forbric.kernel.util.ForbricLog;
  * jumps, but it does not change what a block computes, so the same key finds the same path in both bodies. The census
  * ({@code VanillaEarlyReturnsCensusTest}) keys vanilla's edges and writes, per affected method, the vanilla return
  * each key went to; {@code vanilla-early-returns.txt} ships that. At run time this class keys the merged body the same
- * way and gives an edge its own return only when its key occurs as many times in both bodies — pairing in order —
- * and vanilla sent that occurrence to an early return. Anything it cannot pair keeps going to the tail: a missed
- * split leaves today's behaviour, a wrong one would hide a path from a handler, so ambiguity always loses.
+ * way and gives an edge its own return only when its key occurs as many times in both bodies and vanilla sent that
+ * occurrence to an early return. Several occurrences of one key that vanilla sent to different returns — a block that
+ * is only {@code iconst_0} — are told apart by what leads into them, not by the order the recompiler happened to emit
+ * them in. Anything it cannot pair keeps going to the tail: a missed split leaves today's behaviour, a wrong one would
+ * hide a path from a handler, so ambiguity always loses.
  *
  * <p><b>What changes.</b> Never what the method computes: a retargeted edge reaches a return of the same opcode with
  * the same stack, one block earlier. Each vanilla early return that was folded becomes one block
@@ -108,10 +111,19 @@ import net.forbric.kernel.util.ForbricLog;
 public final class VanillaEarlyReturns implements ClassTransformer {
 	public static final String PROPERTY = "forbric.vanillaEarlyReturns";
 	static final String TABLE = "/net/forbric/kernel/transform/vanilla-early-returns.txt";
-	/** How many normalised instructions of the leaving block go into a key: 8 moves at least one edge in 3282 of 3633. */
+	/** How many normalised instructions of the leaving block go into a key: 8 moves at least one edge in 3245 of 3633. */
 	static final int CONTEXT = 8;
+	/**
+	 * The fewest normalised instructions of each block leading INTO an edge's block that tell two occurrences of one
+	 * key apart; the census takes more, up to {@link #CONTEXT}, only where vanilla needs more to tell its own apart.
+	 * Short on purpose: the recompiler moves block boundaries (a pattern binding gains a {@code goto}), and the last few
+	 * instructions before a branch are what survives that.
+	 */
+	static final int LEAD = 3;
 	/** The label of an edge vanilla sends to its last return. */
 	static final String TAIL = "T";
+	/** Joins a label to its occurrence's lead in the table: {@code 1@3:0a1b2c3d}, the lead's length, then its hash. */
+	static final char LEAD_MARK = '@';
 
 	private static final String CAMERA = "net/minecraft/client/Camera";
 
@@ -183,7 +195,7 @@ public final class VanillaEarlyReturns implements ClassTransformer {
 			AbstractInsnNode tail = lastReturn(method);
 			if (tail == null) continue;
 			List<Edge> edges = edges(method);
-			Map<Edge, Integer> decisions = decide(edges, tail, vanilla);
+			Map<Edge, Integer> decisions = decide(method, edges, tail, vanilla);
 			if (decisions.isEmpty()) continue;
 			int inline = returns(method).size() - 1;
 			int blocks = split(node.name, method, tail, edges, decisions);
@@ -273,8 +285,7 @@ public final class VanillaEarlyReturns implements ClassTransformer {
 	/** Every edge into every return of {@code method}, in instruction order. */
 	static List<Edge> edges(MethodNode method) {
 		Set<LabelNode> entries = entries(method);
-		int fixed = Type.getArgumentsAndReturnSizes(method.desc) >> 2;
-		if ((method.access & Opcodes.ACC_STATIC) != 0) fixed--;
+		int fixed = fixedSlots(method);
 		List<Edge> out = new ArrayList<>();
 		for (AbstractInsnNode insn = method.instructions.getFirst(); insn != null; insn = insn.getNext()) {
 			if (insn instanceof JumpInsnNode jump && jump.getOpcode() != Opcodes.JSR) {
@@ -317,6 +328,13 @@ public final class VanillaEarlyReturns implements ClassTransformer {
 		if (isReturn(target)) out.add(new Edge(Kind.SWITCH, table, entry, hash(sense + "|" + context(table, entries, fixed)), target));
 	}
 
+	/** The local slots of {@code this} and the parameters: the ones the recompiler cannot renumber. */
+	private static int fixedSlots(MethodNode method) {
+		int fixed = Type.getArgumentsAndReturnSizes(method.desc) >> 2;
+		if ((method.access & Opcodes.ACC_STATIC) != 0) fixed--;
+		return fixed;
+	}
+
 	/** Labels control can arrive at other than by falling through: jump and switch targets, handler starts. */
 	private static Set<LabelNode> entries(MethodNode method) {
 		Set<LabelNode> out = new HashSet<>();
@@ -334,9 +352,13 @@ public final class VanillaEarlyReturns implements ClassTransformer {
 	 * at anything control can enter by (a target label) or leave by (a jump, switch, return or throw).
 	 */
 	private static String context(AbstractInsnNode end, Set<LabelNode> entries, int fixed) {
+		return context(end, entries, fixed, CONTEXT);
+	}
+
+	private static String context(AbstractInsnNode end, Set<LabelNode> entries, int fixed, int limit) {
 		StringJoiner out = new StringJoiner("|");
 		int taken = 0;
-		for (AbstractInsnNode insn = end.getPrevious(); insn != null && taken < CONTEXT; insn = insn.getPrevious()) {
+		for (AbstractInsnNode insn = end.getPrevious(); insn != null && taken < limit; insn = insn.getPrevious()) {
 			if (insn instanceof LabelNode label) {
 				if (entries.contains(label)) break;
 				continue;
@@ -388,31 +410,171 @@ public final class VanillaEarlyReturns implements ClassTransformer {
 	/**
 	 * Which merged edges into {@code tail} vanilla sent to an early return, and to which one (its index among
 	 * vanilla's returns). A key is paired only when it occurs as often here as in {@code vanilla}.
+	 *
+	 * <p>When one key's occurrences went to different returns in vanilla, order alone does not say which is which: the
+	 * recompiler may emit the blocks the other way round ({@code Identifier.equals}: vanilla's "not an Identifier"
+	 * {@code false} comes last, the merged one first, and pairing by order moved the path vanilla sends to the tail).
+	 * Those occurrences carry a lead ({@link #lead}) in the table, and pair by it; occurrences a lead cannot tell apart
+	 * stay on the tail. And a split that would leave the tail with no edge at all is not made: some edge vanilla sends
+	 * to the tail was taken for an early one.
 	 */
-	static Map<Edge, Integer> decide(List<Edge> merged, AbstractInsnNode tail, Map<String, List<String>> vanilla) {
+	static Map<Edge, Integer> decide(MethodNode method, List<Edge> merged, AbstractInsnNode tail, Map<String, List<String>> vanilla) {
 		Map<String, List<Edge>> byKey = new LinkedHashMap<>();
 		for (Edge edge : merged) byKey.computeIfAbsent(edge.key(), k -> new ArrayList<>()).add(edge);
 		Map<Edge, Integer> out = new IdentityHashMap<>();
+		Set<LabelNode> entries = entries(method);
+		int fixed = fixedSlots(method);
 		byKey.forEach((key, here) -> {
 			List<String> there = vanilla.get(key);
-			if (there == null || there.size() != here.size()) return;
-			for (int k = 0; k < here.size(); k++) {
-				if (here.get(k).target() == tail && !TAIL.equals(there.get(k))) out.put(here.get(k), Integer.parseInt(there.get(k)));
+			if (there == null) return;
+			if (there.stream().noneMatch(label -> label.indexOf(LEAD_MARK) >= 0)) {
+				// Every occurrence went to the same return: any pairing is the same pairing, once the counts agree.
+				if (there.size() != here.size()) return;
+				for (int k = 0; k < here.size(); k++) pair(out, here.get(k), there.get(k), tail);
+				return;
 			}
+			Map<String, List<String>> thereByLead = new LinkedHashMap<>();
+			int length = LEAD;
+			for (String label : there) {
+				int mark = label.indexOf(LEAD_MARK), colon = label.indexOf(':', mark + 1);
+				if (mark < 0 || colon < 0) return;
+				length = Integer.parseInt(label.substring(mark + 1, colon));
+				thereByLead.computeIfAbsent(label.substring(colon + 1), l -> new ArrayList<>()).add(label.substring(0, mark));
+			}
+			Map<String, List<Edge>> hereByLead = new LinkedHashMap<>();
+			for (Edge edge : here) hereByLead.computeIfAbsent(lead(method, edge, entries, fixed, length), l -> new ArrayList<>()).add(edge);
+			// Lead by lead: an occurrence whose lead vanilla does not have — an early return a kernel hook put in front
+			// (Player.hurtServer's attack seam) — is nobody's pair and stays where it is, and does not unpair the rest.
+			thereByLead.forEach((lead, labels) -> {
+				List<Edge> edges = hereByLead.get(lead);
+				if (edges == null || edges.size() != labels.size()) return;
+				// What the lead cannot tell apart pairs in order only while none of it is vanilla's tail path: the tail
+				// stays right whichever way round, at worst two early returns swap ordinals.
+				if (labels.stream().distinct().count() > 1 && labels.contains(TAIL)) return;
+				for (int k = 0; k < edges.size(); k++) pair(out, edges.get(k), labels.get(k), tail);
+			});
+		});
+		if (out.isEmpty()) return out;
+		for (Edge edge : merged) {
+			if (edge.target() == tail && !out.containsKey(edge)) return out;
+		}
+		return new IdentityHashMap<>();
+	}
+
+	private static void pair(Map<Edge, Integer> out, Edge edge, String label, AbstractInsnNode tail) {
+		if (edge.target() == tail && !TAIL.equals(label)) out.put(edge, Integer.parseInt(label));
+	}
+
+	/**
+	 * {@code key → label of each occurrence} for vanilla's {@code method}, the shape the table ships. Where one key's
+	 * occurrences went to different returns, each label carries its occurrence's {@link #lead}.
+	 */
+	static Map<String, List<String>> labels(MethodNode method) {
+		List<AbstractInsnNode> returns = returns(method);
+		AbstractInsnNode tail = returns.isEmpty() ? null : returns.get(returns.size() - 1);
+		Map<String, List<Edge>> byKey = new LinkedHashMap<>();
+		for (Edge edge : edges(method)) byKey.computeIfAbsent(edge.key(), k -> new ArrayList<>()).add(edge);
+		Set<LabelNode> entries = entries(method);
+		int fixed = fixedSlots(method);
+		Map<String, List<String>> out = new LinkedHashMap<>();
+		byKey.forEach((key, edges) -> {
+			List<String> labels = new ArrayList<>();
+			for (Edge edge : edges) labels.add(edge.target() == tail ? TAIL : Integer.toString(returns.indexOf(edge.target())));
+			if (labels.stream().distinct().count() > 1) {
+				int length = LEAD;
+				List<String> leads = leads(method, edges, entries, fixed, length);
+				while (length < CONTEXT && !separates(leads, labels)) leads = leads(method, edges, entries, fixed, ++length);
+				for (int k = 0; k < edges.size(); k++) labels.set(k, labels.get(k) + LEAD_MARK + length + ":" + leads.get(k));
+			}
+			out.put(key, labels);
 		});
 		return out;
 	}
 
-	/** {@code key → label of each occurrence} for vanilla's {@code method}, the shape the table ships. */
-	static Map<String, List<String>> labels(MethodNode method) {
-		List<AbstractInsnNode> returns = returns(method);
-		AbstractInsnNode tail = returns.isEmpty() ? null : returns.get(returns.size() - 1);
-		Map<String, List<String>> out = new LinkedHashMap<>();
-		for (Edge edge : edges(method)) {
-			out.computeIfAbsent(edge.key(), k -> new ArrayList<>())
-					.add(edge.target() == tail ? TAIL : Integer.toString(returns.indexOf(edge.target())));
-		}
+	/**
+	 * What leads into the basic block {@code edge} leaves: for each way control enters it — a jump or switch case
+	 * (followed through {@code goto}s), or falling in from the instruction before — the condition under which it enters
+	 * (a jump's own opcode when the block is its target, the inverse when the block is what it falls past) and the last
+	 * {@code length} normalised instructions before that branch. The recompiler inverts a condition only by swapping
+	 * which block is the target, so the condition a block is entered under survives it; sorted, so the order it emits
+	 * predecessors in does not count.
+	 */
+	static String lead(MethodNode method, Edge edge, Set<LabelNode> entries, int fixed, int length) {
+		return hash(leadText(method, edge, entries, fixed, length));
+	}
+
+	private static List<String> leads(MethodNode method, List<Edge> edges, Set<LabelNode> entries, int fixed, int length) {
+		List<String> out = new ArrayList<>();
+		for (Edge edge : edges) out.add(lead(method, edge, entries, fixed, length));
 		return out;
+	}
+
+	/** Whether no two occurrences that went to different returns share a lead. */
+	private static boolean separates(List<String> leads, List<String> labels) {
+		for (int i = 0; i < leads.size(); i++) {
+			for (int j = i + 1; j < leads.size(); j++) {
+				if (leads.get(i).equals(leads.get(j)) && !labels.get(i).equals(labels.get(j))) return false;
+			}
+		}
+		return true;
+	}
+
+	static String leadText(MethodNode method, Edge edge, Set<LabelNode> entries, int fixed, int length) {
+		AbstractInsnNode end = edge.source();
+		if (edge.kind() == Kind.FALL) {
+			// The block that falls in, not the return: a label other edges reach may sit between the two.
+			AbstractInsnNode before = previousReal(edge.source());
+			end = before instanceof JumpInsnNode ? before : before.getNext();
+		}
+		AbstractInsnNode boundary = end.getPrevious();
+		while (boundary != null) {
+			if (boundary instanceof LabelNode label && entries.contains(label)) break;
+			if (boundary.getOpcode() >= 0 && (endsFlow(boundary) || boundary instanceof JumpInsnNode)) break;
+			boundary = boundary.getPrevious();
+		}
+		List<String> leads = new ArrayList<>();
+		if (boundary == null) {
+			leads.add("ENTRY");
+		} else if (boundary instanceof JumpInsnNode jump && jump.getOpcode() != Opcodes.GOTO && jump.getOpcode() != Opcodes.JSR) {
+			leads.add(inverse(jump.getOpcode()) + "|" + context(jump, entries, fixed, length));
+		} else if (boundary instanceof LabelNode) {
+			AbstractInsnNode first = real(boundary);
+			for (AbstractInsnNode insn = method.instructions.getFirst(); insn != null; insn = insn.getNext()) {
+				if (insn instanceof JumpInsnNode jump && jump.getOpcode() != Opcodes.JSR) {
+					if (jump.getOpcode() == Opcodes.GOTO) {
+						// A goto only other branches reach is a link in their chain; they are counted at their sources.
+						AbstractInsnNode before = previousReal(jump);
+						if (before == null || endsFlow(before)) continue;
+					}
+					if (resolve(jump.label) == first) {
+						leads.add((jump.getOpcode() == Opcodes.GOTO ? "U" : jump.getOpcode()) + "|" + context(jump, entries, fixed, length));
+					}
+				} else if (insn instanceof TableSwitchInsnNode table) {
+					for (int k = 0; k < table.labels.size(); k++) {
+						if (resolve(table.labels.get(k)) == first) leads.add("S" + (table.min + k) + "|" + context(table, entries, fixed, length));
+					}
+					if (resolve(table.dflt) == first) leads.add("SD|" + context(table, entries, fixed, length));
+				} else if (insn instanceof LookupSwitchInsnNode lookup) {
+					for (int k = 0; k < lookup.labels.size(); k++) {
+						if (resolve(lookup.labels.get(k)) == first) leads.add("S" + lookup.keys.get(k) + "|" + context(lookup, entries, fixed, length));
+					}
+					if (resolve(lookup.dflt) == first) leads.add("SD|" + context(lookup, entries, fixed, length));
+				}
+			}
+			AbstractInsnNode before = previousReal(boundary);
+			if (before != null && !endsFlow(before)) {
+				leads.add(before instanceof JumpInsnNode jump
+						? inverse(jump.getOpcode()) + "|" + context(jump, entries, fixed, length)
+						: "U|" + context(boundary, entries, fixed, length));
+			}
+			if (method.tryCatchBlocks != null) {
+				for (TryCatchBlockNode handler : method.tryCatchBlocks) {
+					if (real(handler.handler) == first) leads.add("H" + handler.type);
+				}
+			}
+		}
+		Collections.sort(leads);
+		return String.join("/", leads);
 	}
 
 	// --- the split ---
@@ -459,17 +621,18 @@ public final class VanillaEarlyReturns implements ClassTransformer {
 			if (decision.getKey().kind() != Kind.FALL) retarget(decision.getKey(), blocks.get(decision.getValue()));
 		}
 
+		// The blocks go in vanilla's return order, so RETURN ordinals count as vanilla's do; what fell into the tail
+		// falls into its own block when that block comes first, and jumps to it when it does not.
 		LabelNode gate = new LabelNode();
 		InsnList code = new InsnList();
 		code.add(gate);
 		AbstractInsnNode before = previousReal(runStart);
-		if (fallGroup == null && before != null && !endsFlow(before)) code.add(new JumpInsnNode(Opcodes.GOTO, tailLabel));
-		List<Integer> order = new ArrayList<>(blocks.keySet());
 		if (fallGroup != null) {
-			order.remove(fallGroup);
-			order.add(0, fallGroup);
+			if (!fallGroup.equals(blocks.firstKey())) code.add(new JumpInsnNode(Opcodes.GOTO, blocks.get(fallGroup)));
+		} else if (before != null && !endsFlow(before)) {
+			code.add(new JumpInsnNode(Opcodes.GOTO, tailLabel));
 		}
-		for (int group : order) {
+		for (int group : blocks.keySet()) {
 			code.add(blocks.get(group));
 			code.add(fullFrame(state));
 			code.add(new InsnNode(tail.getOpcode()));

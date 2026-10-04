@@ -41,7 +41,9 @@ import net.forbric.kernel.util.ForbricLog;
  * ordinal. Fabric mods keep TAIL as it is: vanilla's meaning is the one they were compiled against.
  *
  * <p>Stands down — leaving the vanilla meaning, and saying so — when the injector's {@code at} is a single
- * annotation that cannot carry several ordinals, or when the methods one injector selects were split differently.
+ * annotation that cannot carry several ordinals, when the methods one injector selects were split differently (or one
+ * of them not at all: the rewrite would land on its returns too), or when ordinals counted on a method named by name
+ * alone could land on another method of that name, should another mixin's {@code @Overwrite} reorder them.
  */
 public final class MixinNativeTail {
 	private static final String AT_DESC = "Lorg/spongepowered/asm/mixin/injection/At;";
@@ -65,22 +67,34 @@ public final class MixinNativeTail {
 			if (ats.stream().noneMatch(MixinNativeTail::mayNameTheOldTail)) continue;
 
 			VanillaEarlyReturns.Split split = null;
-			boolean agreed = true;
+			boolean agreed = true, unsplit = false, sibling = false;
 			for (String owner : owners) {
 				ClassNode target = targets.apply(owner);   // runs the chain, so a split it makes is recorded
 				if (target == null) continue;
 				for (String selector : MixinFit.stringList(MixinFit.value(injector, "method"))) {
-					VanillaEarlyReturns.Split found = splitOf(owner, target, selector);
-					if (found == null) continue;
-					if (split != null && !split.equals(found)) agreed = false;
-					split = found;
+					Bound bound = bind(owner, target, selector);
+					if (bound == null) continue;
+					if (bound.split() == null) {
+						unsplit = true;
+						continue;
+					}
+					if (split != null && !split.equals(bound.split())) agreed = false;
+					split = bound.split();
+					sibling |= bound.siblings();
 				}
 			}
 			if (split == null) continue;
 			String where = mixin.name.replace('/', '.') + "#" + handler.name;
-			if (!agreed) {
+			if (!agreed || unsplit) {
 				ForbricLog.warn("[Forbric/EarlyReturns] %s selects methods whose early returns were restored differently; its "
 						+ "TAIL keeps vanilla's meaning there", where);
+				continue;
+			}
+			if (sibling && split.inlineReturns() > 0) {
+				// Return ordinals counted on the method Mixin binds now would name nothing in its namesake, and an
+				// @Overwrite elsewhere can make Mixin bind the namesake instead. A plain RETURN is safe on either.
+				ForbricLog.warn("[Forbric/EarlyReturns] %s names its method by name alone, and the class has another of that "
+						+ "name; its TAIL keeps vanilla's meaning rather than ordinals that could land on the other", where);
 				continue;
 			}
 			if (rewrite(injector, ats, split, where)) rewritten++;
@@ -144,25 +158,29 @@ public final class MixinNativeTail {
 		return copy;
 	}
 
+	/** What one selector binds on one target: Mixin's method's split (null when it was never split), and whether it has namesakes. */
+	private record Bound(VanillaEarlyReturns.Split split, boolean siblings) {
+	}
+
 	/**
-	 * The split of the method {@code selector} names on {@code owner}, or null. A name-only selector counts only when
-	 * the target declares exactly one method of that name — otherwise which one Mixin binds is not this class's call.
+	 * What {@code selector} binds on {@code owner}, parsed the way Mixin parses it (whitespace dropped, an owner in
+	 * either {@code Lowner;} or dotted form), or null when it binds nothing this class can name. A name-only selector
+	 * binds what Mixin binds: without a quantifier it matches one method, the first of that name in declaration order —
+	 * the real method, when javac put a bridge of the same name after it ({@code AbstractZombieRenderer.getArmPose}).
+	 * A quantified or wildcard selector is not this class's call.
 	 */
-	private static VanillaEarlyReturns.Split splitOf(String owner, ClassNode target, String selector) {
-		String s = selector.trim();
-		if (s.startsWith("L") && s.indexOf(';') > 0 && s.indexOf(';') < (s.indexOf('(') < 0 ? s.length() : s.indexOf('('))) {
-			s = s.substring(s.indexOf(';') + 1);
-		}
-		int paren = s.indexOf('(');
-		String name = paren < 0 ? s : s.substring(0, paren);
-		if (name.isEmpty() || name.indexOf('*') >= 0) return null;
-		if (paren >= 0) return VanillaEarlyReturns.splitOf(owner, name, s.substring(paren));
-		MethodNode only = null;
+	private static Bound bind(String owner, ClassNode target, String selector) {
+		MixinFit.Member member = MixinFit.parseMember(selector);
+		if (member == null || member.name().isEmpty() || !member.name().matches("[^*+{}]+")) return null;
+		if (member.owner() != null && !member.owner().equals(owner)) return null;
+		MethodNode first = null;
+		int named = 0;
 		for (MethodNode method : target.methods) {
-			if (!method.name.equals(name)) continue;
-			if (only != null) return null;
-			only = method;
+			if (!method.name.equals(member.name())) continue;
+			named++;
+			if (first == null && (member.desc() == null || member.desc().equals(method.desc))) first = method;
 		}
-		return only == null ? null : VanillaEarlyReturns.splitOf(owner, name, only.desc);
+		if (first == null) return null;
+		return new Bound(VanillaEarlyReturns.splitOf(owner, first.name, first.desc), member.desc() == null && named > 1);
 	}
 }

@@ -68,6 +68,7 @@ done
 if [ "$READY" -ne 1 ]; then
   echo "[kernel] FAIL server never reached Done"; FAIL=1
   exec 9>&-; kill_tree "$SRVPID"; rm -f "$FIFO" "$(_pidfile "$SRV")"
+  port_was_free "$SLOG"   # a server that lost its port never reaches Done either
   step "M15 result"; echo "[kernel] ❌ M15 GATE RED — see $SLOG"; exit 1
 fi
 

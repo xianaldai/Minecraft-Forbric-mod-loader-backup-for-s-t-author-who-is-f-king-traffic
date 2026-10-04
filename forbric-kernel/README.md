@@ -116,10 +116,11 @@ Overlapping them is not free, and each gate says what it needs in one line near 
 
 `rundirs` names what it owns while it runs — two gates naming the same thing never run together — and `mem` is
 what it costs. `clone=<dir>:<VAR>` asks for a private copy of a shared fixture instead: the four gates that want
-`run/client-merged-pack` each get one, which on APFS clones that 434 MB install in 0.17s and costs no disk. Three collisions are why the line exists rather than an `xargs -P`: eighteen gates write
-`GATE_PORT` into `server.properties`, and the loser of a port race prints `FAILED TO BIND TO PORT` and then
-still prints `Stopping server`, so the clean-shutdown assertion passes and the gate reads green over a server
-that never existed; `gate-m1`/`m2`/`m3` share `run/server-kernel` and `gate-m9`/`m17`/`m22`/`m23`/`m27` share
+`run/client-merged-pack` each get one, which on APFS clones that 434 MB install in 0.17s and costs no disk. Three collisions are why the line exists rather than an `xargs -P`: every gate that starts
+a server writes its port into `server.properties`, and the loser of a port race prints `FAILED TO BIND TO PORT`,
+writes a crash report and then still prints `Stopping server`, so the clean-shutdown assertions pass and the gate
+goes red on "Done" instead — which reads as the kernel failing to boot, not as a port (`lib.sh`'s `port_was_free`
+now names the port); `gate-m1`/`m2`/`m3` share `run/server-kernel` and `gate-m9`/`m17`/`m22`/`m23`/`m27` share
 `run/client-merged-pack`; and every kernel JVM is launched without `-Xmx`, so each one inherits an ergonomic
 quarter-of-RAM ceiling. The scheduler hands every concurrent slot its own port block, never co-schedules gates
 that name the same rundir, and keeps the running set inside a memory budget. **A gate with no

@@ -82,6 +82,59 @@ class MixinNativeTailTest {
 	}
 
 	@Test
+	void aNameOnlySelectorFollowsTheMethodMixinBindsPastABridgeOfTheSameName() {
+		// AbstractZombieRenderer.getArmPose: javac adds a bridge of the same name AFTER the real method, and Mixin binds
+		// the first. This used to stand down silently, so a NeoForge TAIL there lost the folded meaning it had.
+		ClassNode folded = repairedTargets().apply(FOLDED);
+		folded.methods.add(new MethodNode(Opcodes.ACC_PUBLIC | Opcodes.ACC_SYNTHETIC | Opcodes.ACC_BRIDGE, "guard", "(Ljava/lang/Object;)V", null, null));
+		ClassNode mixin = mixin("test/NeoBridged", Ecosystem.NEOFORGE, "guard", List.of(at("TAIL", null)));
+		assertEquals(1, MixinNativeTail.adapt(mixin, name -> FOLDED.equals(name) ? folded : null));
+		assertEquals("RETURN", MixinFit.value(MixinFit.atNodes(MixinFit.injectorOf(mixin.methods.get(0))).get(0), "value"));
+	}
+
+	@Test
+	void ordinalsAreNotWrittenForAMethodNamedByNameAloneThatHasANamesake() {
+		// mixed keeps one inline return, so its TAIL would become RETURN ordinals 1 and 2 — counted on mixed. Should
+		// an @Overwrite elsewhere make Mixin bind the namesake instead, they would name nothing there.
+		ClassNode folded = repairedTargets().apply(FOLDED);
+		folded.methods.add(new MethodNode(Opcodes.ACC_PUBLIC | Opcodes.ACC_SYNTHETIC | Opcodes.ACC_BRIDGE, "mixed", "(Ljava/lang/Object;)V", null, null));
+		ClassNode mixin = mixin("test/NeoMixedNamesake", Ecosystem.NEOFORGE, "mixed", List.of(at("TAIL", null)));
+		assertEquals(0, MixinNativeTail.adapt(mixin, name -> FOLDED.equals(name) ? folded : null));
+	}
+
+	@Test
+	void anInjectorThatAlsoSelectsAnUnsplitMethodIsNotRewritten() {
+		// Mixin applies the one rewritten @At to every method the injector binds: a RETURN meant for guard would put the
+		// handler on every return of the constructor, which was never split.
+		ClassNode mixin = mixin("test/NeoTwoMethods", Ecosystem.NEOFORGE, "guard", List.of(at("TAIL", null)));
+		AnnotationNode inject = MixinFit.injectorOf(mixin.methods.get(0));
+		CarpetMixinAdapter.set(inject, "method", List.of("guard", "<init>()V"));
+		assertEquals(0, MixinNativeTail.adapt(mixin, repairedTargets()));
+	}
+
+	@Test
+	void aSelectorIsReadTheWayMixinReadsIt() {
+		for (String selector : List.of(
+				"net.forbric.kernel.transform.VanillaEarlyReturnsTest$Folded.guard",
+				"Lnet/forbric/kernel/transform/VanillaEarlyReturnsTest$Folded;guard",
+				"guard (Ljava/lang/Object;Ljava/lang/Object;Ljava/util/List;)V")) {
+			ClassNode mixin = mixin("test/NeoSpelled", Ecosystem.NEOFORGE, selector, List.of(at("TAIL", null)));
+			assertEquals(1, MixinNativeTail.adapt(mixin, repairedTargets()), selector);
+			MixinStubRebind.forget();
+		}
+		ClassNode quantified = mixin("test/NeoQuantified", Ecosystem.NEOFORGE, "guard*", List.of(at("TAIL", null)));
+		assertEquals(0, MixinNativeTail.adapt(quantified, repairedTargets()), "a wildcard is not this class's call");
+	}
+
+	@Test
+	void aNameOnlySelectorWhoseFirstMatchWasNotSplitIsNotTouched() {
+		ClassNode folded = repairedTargets().apply(FOLDED);
+		folded.methods.add(0, new MethodNode(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "guard", "()V", null, null));
+		ClassNode mixin = mixin("test/NeoOverload", Ecosystem.NEOFORGE, "guard", List.of(at("TAIL", null)));
+		assertEquals(0, MixinNativeTail.adapt(mixin, name -> FOLDED.equals(name) ? folded : null), "Mixin binds guard()V, which was never split");
+	}
+
+	@Test
 	void aMethodThatWasNotSplitIsNotTouched() {
 		ClassNode mixin = mixin("test/NeoUnsplit", Ecosystem.NEOFORGE, "<init>()V", List.of(at("TAIL", null)));
 		assertEquals(0, MixinNativeTail.adapt(mixin, repairedTargets()));

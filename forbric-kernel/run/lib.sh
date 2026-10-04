@@ -30,7 +30,7 @@ FAIL=0
 # truncated file makes the server regenerate every default it no longer finds -- including server-port. So the
 # port was never chosen, it was whatever vanilla's default happened to be, and two runs collided silently: the
 # loser prints "FAILED TO BIND TO PORT" and then still prints "Stopping server", so the clean-shutdown check
-# passes and the gate reads like a kernel regression.
+# passes and the gate reads like a kernel regression. port_was_free below now says which port it was instead.
 GATE_PORT="${GATE_PORT:-25565}"
 
 # Writes the server.properties the single-server gates all wrote by hand, with the port made explicit.
@@ -226,7 +226,7 @@ record_server_pid() { echo "$2" > "$(_pidfile "$1")"; }
 await_server() {
   local pid="$1" log="$2" limit="${3:-90}" grace="${4:-20}" i
   for i in $(seq 1 "$limit"); do
-    kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return 0; }
+    kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; port_was_free "$log"; return 0; }
     grep -qE 'Stopping server|Failed to start the minecraft server' "$log" 2>/dev/null && break
     sleep 1
   done
@@ -246,6 +246,25 @@ await_server() {
   fi
   kill_tree "$pid"
   wait "$pid" 2>/dev/null
+  port_was_free "$log"
+}
+
+# port_was_free <server-log> — fail, naming the port, when the server never got it.
+#
+# A server that loses its port prints "FAILED TO BIND TO PORT", writes a crash report, and then still prints
+# "Stopping server" and "All dimensions are saved". Measured on gate-m1 with its port held by another process:
+# both shutdown checks passed, and the gate went red on "server reached Done" and on a missing post-Done log --
+# which reads as the kernel failing to boot, with nothing in the gate's output about a port. The run says nothing
+# about the kernel at all, so say what it does say. Silent when the port was free, like the leaked-thread check
+# above; await_server runs it, and a gate that starts its server some other way calls it on that server's log.
+port_was_free() {
+  local file="$1" bound
+  grep -aq 'FAILED TO BIND TO PORT' "$file" 2>/dev/null || return 0
+  bound=$(grep -aoE 'Starting Minecraft server on [^[:space:]]+' "$file" 2>/dev/null | tail -1) || true
+  bound="${bound#Starting Minecraft server on }"
+  printf '[kernel] FAIL the server never got its port (%s): another process holds it, so this run says nothing about the kernel\n' \
+    "${bound:-the log does not say which}"
+  FAIL=1
 }
 
 # --- canary builds ------------------------------------------------------------------------------------------

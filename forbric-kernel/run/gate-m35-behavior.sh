@@ -80,6 +80,7 @@ fresh_world() {
 run_phase() {
   local phase="$1" token pid i
   fresh_world; token="$(cat "$RUNDIR/.m35-owned")"
+  rm -f "$RESULTS/$phase-inputs.log"   # port_was_free below must not read an earlier run's log
   python3 "$KERNEL/run/compat/evidence.py" run --source "$KERNEL/.." \
     --artifact "merged=$MERGED" --artifact "forge-interop=$FORGE_RT" --artifact "neo-runtime=$NEO_RT" \
     --artifact "kernel=$BUILD/libs/forbric-kernel-0.1.0-SNAPSHOT.jar" \
@@ -95,6 +96,7 @@ run_phase() {
     kill -9 "$pid" 2>/dev/null || true
   fi
   wait "$pid" 2>/dev/null || true; rm -f "$RUNDIR/.forbric-gate.pid"
+  port_was_free "$RESULTS/$phase-inputs.log"
   if python3 - "$RESULTS" "$phase" "$token" <<'PY'
 import hashlib, json, pathlib, sys
 root, phase, token = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]

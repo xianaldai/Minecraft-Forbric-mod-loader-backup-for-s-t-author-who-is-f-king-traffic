@@ -81,6 +81,7 @@ run_phase() {
   local phase="$1" bridge="$2" token pid i
   python3 -c 'import uuid; print(uuid.uuid4())' > "$RUNDIR/.m33-owned"
   token="$(cat "$RUNDIR/.m33-owned")"
+  rm -f "$RESULTS/$phase-inputs.log"   # port_was_free below must not read an earlier run's log
   python3 "$KERNEL/run/compat/evidence.py" run --source "$KERNEL/.." \
     --artifact "merged=$MERGED" --artifact "forge-interop=$FORGE_RT" --artifact "neo-runtime=$NEO_RT" \
     --artifact "kernel=$BUILD/libs/forbric-kernel-0.1.0-SNAPSHOT.jar" \
@@ -102,6 +103,7 @@ run_phase() {
   fi
   wait "$pid" 2>/dev/null || true
   rm -f "$RUNDIR/.forbric-gate.pid"
+  port_was_free "$RESULTS/$phase-inputs.log"
 }
 assert_phase() {
   local phase="$1" expected="$2"
