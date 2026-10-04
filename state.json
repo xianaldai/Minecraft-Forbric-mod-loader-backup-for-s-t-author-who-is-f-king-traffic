@@ -1166,9 +1166,9 @@
    "body": "b080dda543bb",
    "comments": {},
    "comments_through": "",
-   "state": "open",
+   "state": "closed",
    "title": "[crash] create-fly + fabric-api \u2192 `Registry is already frozen (minecraft:root / create:arm_interaction_point_type)` during `Bootstrap.bootStrap`",
-   "updated_at": "2026-10-04T00:40:36Z"
+   "updated_at": "2026-10-04T08:59:10Z"
   },
   "53": {
    "body": "b791dc6b3d18",
