@@ -212,6 +212,122 @@ class MergedBaseCalleeSwapTest {
 	}
 
 	/**
+	 * Every {@link MergedBaseCalleeSwaps#REPLACED} row, proven against stock 26.2 and the merged base: vanilla declares the
+	 * method privately and the merged base does not; the replacement is private there; the caller is the only method of
+	 * the class calling either, and calls each exactly once (the merged one never vanilla's); and each vanilla argument,
+	 * read off vanilla's call site, is the row's reading of the merged call's — the same caller local, or a no-argument
+	 * {@code invokevirtual} on it (made at the call, or stored once into a local the call then loads, as vanilla's
+	 * {@code boundingBox}). R7 hands a moved HEAD handler exactly these values; anything else turns the row red.
+	 */
+	@Test
+	void everyReplacementIsOneCallWhoseVanillaArgumentsAreReadOffTheReplacements() throws Exception {
+		Path vanilla = vanillaJar();
+		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), MERGED + " absent");
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(vanilla), vanilla + " absent");
+		assertTrue(!MergedBaseCalleeSwaps.REPLACED.isEmpty());
+		for (MergedBaseCalleeSwaps.Replaced row : MergedBaseCalleeSwaps.REPLACED) {
+			String where = row.owner() + "." + row.vanilla();
+			ClassNode before = debugClass(vanilla, row.owner()), after = debugClass(MERGED, row.owner());
+			MethodNode original = declared(before, row.vanilla());
+			assertTrue(original != null && (original.access & Opcodes.ACC_PRIVATE) != 0, where + ": vanilla no longer declares it privately");
+			assertTrue(declared(after, row.vanilla()) == null, where + ": the merged base declares it again; delete the row");
+			MethodNode replacement = declared(after, row.replacement());
+			assertTrue(replacement != null && (replacement.access & Opcodes.ACC_PRIVATE) != 0, where + ": the replacement is not private there");
+			assertEquals(List.of(row.caller()), callers(before, row.vanillaMember()), where + ": vanilla's callers");
+			assertEquals(List.of(row.caller()), callers(after, row.replacementMember()), where + ": the replacement's callers");
+			MethodNode vanillaCaller = declared(before, row.caller()), mergedCaller = declared(after, row.caller());
+			assertEquals(1, occurrences(vanillaCaller, row.vanillaMember()), where);
+			assertEquals(1, occurrences(mergedCaller, row.replacementMember()), where);
+			assertEquals(0, occurrences(mergedCaller, row.vanillaMember()), where);
+
+			List<String> passed = arguments(after.name, mergedCaller, row.replacementMember());
+			List<String> expected = new ArrayList<>();
+			for (String argument : row.arguments()) {
+				int dot = argument.indexOf('.');
+				String base = passed.get(Integer.parseInt(argument.substring(1, dot < 0 ? argument.length() : dot)));
+				expected.add(dot < 0 ? base : base + argument.substring(dot));
+			}
+			assertEquals(expected, arguments(before.name, vanillaCaller, row.vanillaMember()), where + ": vanilla's call no longer "
+					+ "takes what the row reads off the replacement's arguments (merged call: " + passed + ")");
+		}
+	}
+
+	/** The methods of {@code owner} calling {@code member}, as {@code name + descriptor}. */
+	private static List<String> callers(ClassNode owner, String member) {
+		List<String> out = new ArrayList<>();
+		for (MethodNode m : owner.methods) if (occurrences(m, member) > 0) out.add(m.name + m.desc);
+		return out;
+	}
+
+	private static MethodNode declared(ClassNode owner, String nameAndDesc) {
+		for (MethodNode m : owner.methods) if ((m.name + m.desc).equals(nameAndDesc)) return m;
+		return null;
+	}
+
+	/**
+	 * What each argument of the one {@code member} call in {@code caller} is, by the caller's local variable names: a local
+	 * ({@code settings}), a no-argument {@code invokevirtual} on one ({@code settings.getMirror()L…;}), or that same reading
+	 * stored once into a local the call loads; {@code ?} for anything else.
+	 */
+	private static List<String> arguments(String owner, MethodNode caller, String member) throws Exception {
+		org.objectweb.asm.tree.analysis.Frame<org.objectweb.asm.tree.analysis.SourceValue>[] frames =
+				new org.objectweb.asm.tree.analysis.Analyzer<>(new org.objectweb.asm.tree.analysis.SourceInterpreter()).analyze(owner, caller);
+		for (AbstractInsnNode insn : real(caller)) {
+			if (!(insn instanceof MethodInsnNode call) || !member.equals("L" + call.owner + ";" + call.name + call.desc)) continue;
+			var frame = frames[caller.instructions.indexOf(call)];
+			int count = Type.getArgumentTypes(call.desc).length;
+			List<String> out = new ArrayList<>();
+			for (int i = 0; i < count; i++) out.add(reading(caller, frames, frame.getStack(frame.getStackSize() - count + i), true));
+			return out;
+		}
+		throw new AssertionError(member + " is not called in " + caller.name);
+	}
+
+	private static String reading(MethodNode caller, org.objectweb.asm.tree.analysis.Frame<org.objectweb.asm.tree.analysis.SourceValue>[] frames,
+			org.objectweb.asm.tree.analysis.SourceValue value, boolean throughStore) {
+		if (value.insns.size() != 1) return "?";
+		AbstractInsnNode producer = value.insns.iterator().next();
+		var frame = frames[caller.instructions.indexOf(producer)];
+		if (producer instanceof VarInsnNode load && load.getOpcode() >= Opcodes.ILOAD && load.getOpcode() <= Opcodes.ALOAD) {
+			String name = localName(caller, load.var, producer);
+			var stores = frame.getLocal(load.var);
+			// A parameter, never stored to: the local itself. A local stored once with a reading: that reading.
+			if (stores.insns.isEmpty()) return name;
+			if (throughStore && stores.insns.size() == 1 && stores.insns.iterator().next() instanceof VarInsnNode store) {
+				var at = frames[caller.instructions.indexOf(store)];
+				String stored = reading(caller, frames, at.getStack(at.getStackSize() - 1), false);
+				return stored.contains(".") ? stored : "?";
+			}
+			return "?";
+		}
+		if (producer instanceof MethodInsnNode get && get.getOpcode() == Opcodes.INVOKEVIRTUAL && get.desc.startsWith("()")) {
+			String receiver = reading(caller, frames, frame.getStack(frame.getStackSize() - 1), false);
+			return receiver.equals("?") || receiver.contains(".") ? "?" : receiver + "." + get.name + get.desc;
+		}
+		return "?";
+	}
+
+	private static String localName(MethodNode caller, int slot, AbstractInsnNode at) {
+		int index = caller.instructions.indexOf(at);
+		if (caller.localVariables != null) {
+			for (LocalVariableNode v : caller.localVariables) {
+				if (v.index == slot && caller.instructions.indexOf(v.start) <= index && index < caller.instructions.indexOf(v.end)) return v.name;
+			}
+		}
+		return "slot" + slot;
+	}
+
+	private static ClassNode debugClass(Path jar, String owner) throws IOException {
+		try (ZipFile zip = new ZipFile(jar.toFile())) {
+			ClassNode node = new ClassNode();
+			try (InputStream in = zip.getInputStream(zip.getEntry(owner + ".class"))) {
+				new ClassReader(in.readAllBytes()).accept(node, ClassReader.SKIP_FRAMES);
+			}
+			return node;
+		}
+	}
+
+	/**
 	 * GuestInjectorPruner removes fabric-model-loading's @Redirect/@ModifyArg pair from this lambda on the premise that
 	 * NeoForge replaced fromStream with parse there; that premise is the substitution row R6 follows for @Injects, so
 	 * the two stand or fall together.

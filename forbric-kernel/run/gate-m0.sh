@@ -182,8 +182,14 @@ else
 fi
 # And the installer build bundles the tracked baseline, not the one it bundled last (in a throwaway copy).
 BUNDLELOG="$BUILD/gate-m0-bundled-baseline.log"
-if bash "$KERNEL/../forbric-kernel-installer/run/test-bundled-baseline.sh" >"$BUNDLELOG" 2>&1; then
+bash "$KERNEL/../forbric-kernel-installer/run/test-bundled-baseline.sh" >"$BUNDLELOG" 2>&1
+BUNDLE_RC=$?
+if [ "$BUNDLE_RC" -eq 0 ]; then
   check "the installer bundles the tracked link baseline" "ALL GREEN" "$BUNDLELOG"
+elif [ "$BUNDLE_RC" -eq 3 ]; then
+  # Exit 3 is the script saying it could not run (no ../fabric-loader substrate, or no copy of the sources) — not a
+  # verdict on the baseline. The first nightly reported a worktree without the substrate as "a stale link baseline".
+  echo "[kernel] FAIL could not check the installer's bundled link baseline: $(tail -1 "$BUNDLELOG")"; FAIL=1
 else
   echo "[kernel] FAIL the installer bundles a stale link baseline — see $BUNDLELOG"; FAIL=1
 fi

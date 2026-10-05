@@ -29,9 +29,14 @@ import net.forbric.api.Ecosystem;
  * <ul>
  *   <li>pinned -- the selector is pinned to the two-argument overload, Mixin binds it, and the click runs the mod's
  *       hook inside vanilla's body, after the carrier's event; the mixin's other injection runs too;</li>
- *   <li>pin-off ({@code -Dforbric.mixinOverloadPin=off}) -- Mixin binds the bare name to the FIRST overload, rejects
- *       the descriptor ("Expected" names the four arguments), and fails the whole class: the tick hook, which has
- *       nothing to do with overloads, is gone as well, and the mod has a confirmed, required finding.</li>
+ *   <li>pin-off ({@code -Dforbric.mixinOverloadPin=off}, {@code -Dforbric.guestInjectorPruner.refused=off}) -- Mixin
+ *       binds the bare name to the FIRST overload, rejects the descriptor ("Expected" names the four arguments), and
+ *       fails the whole class: the tick hook, which has nothing to do with overloads, is gone as well, and the mod has a
+ *       confirmed, required finding;</li>
+ *   <li>pin-off-pruned ({@code -Dforbric.mixinOverloadPin=off} alone) -- what the kernel does with the binding the pin
+ *       left: MixinFit reads it as one Mixin rejects outright, and as the fixture's class is not the game's, the miss is
+ *       one on "another mod's class" -- the adapter answers the rejection there too, the pruner takes {@code onClick} out
+ *       before Mixin reads the mixin, and the tick hook lives.</li>
  * </ul>
  */
 class MixinOverloadOrderWeaveTest {
@@ -46,6 +51,7 @@ class MixinOverloadOrderWeaveTest {
 	private static final String WOVEN = WeaveHarnessMain.DONE
 			+ " [mod tick] ticked | [carrier event] [mod saw dialog] vanilla handled dialog=ok";
 	private static final String UNWOVEN = WeaveHarnessMain.DONE + " ticked | [carrier event] vanilla handled dialog=ok";
+	private static final String TICK_ONLY = WeaveHarnessMain.DONE + " [mod tick] ticked | [carrier event] vanilla handled dialog=ok";
 	private static final String PIN_WARNING = "ClickServerMixin.onClick selects handleCustomClickAction by name";
 	private static final String MIXIN_REJECTS = "Invalid descriptor on " + CONFIG + ":ClickServerMixin";
 
@@ -53,6 +59,7 @@ class MixinOverloadOrderWeaveTest {
 	private static Path fixture;
 	private static WeaveHarness.Result pinned;
 	private static WeaveHarness.Result off;
+	private static WeaveHarness.Result offPruned;
 
 	@BeforeAll static void weaveBothWays() throws Exception {
 		fixture = WeaveHarness.fixture(work, "overloadorder", List.of(
@@ -60,8 +67,9 @@ class MixinOverloadOrderWeaveTest {
 				SOURCES.resolve("fixture/overloadorder/ClickProbe.java"),
 				SOURCES.resolve("fixture/overloadorder/mixin/ClickServerMixin.java")),
 				Map.of(CONFIG, SOURCES.resolve(CONFIG)));
-		pinned = run("pinned", "on");
-		off = run("overload-pin-off", "off");
+		pinned = run("pinned", Map.of("forbric.mixinOverloadPin", "on"));
+		off = run("overload-pin-off", Map.of("forbric.mixinOverloadPin", "off", "forbric.guestInjectorPruner.refused", "off"));
+		offPruned = run("overload-pin-off-pruned", Map.of("forbric.mixinOverloadPin", "off"));
 	}
 
 	@Test void theFixtureKeepsTheCarriersOverloadFirst() throws Exception {
@@ -93,10 +101,18 @@ class MixinOverloadOrderWeaveTest {
 		assertTrue(losses.get(0).confirmedRequired(), losses.toString());
 	}
 
-	/** The run and its control must be told apart by the very predicates the test uses on them. */
+	/** With the pin off and the pruner on, the binding Mixin would reject is taken out and the rest of the mixin lives. */
+	@Test void withThePinOffThePrunerTakesTheRejectedHookOutAndTheTickHookLives() {
+		assertTrue(prunedHolds(offPruned), offPruned.describe() + "\nfindings: " + offPruned.findings());
+	}
+
+	/** The run and its controls must be told apart by the very predicates the test uses on them. */
 	@Test void theOffControlFlipsEveryAssertion() {
-		assertTrue(wovenHolds(pinned) && !wovenHolds(off), "woven predicate does not separate the runs");
-		assertTrue(unwovenHolds(off) && !unwovenHolds(pinned), "unwoven predicate does not separate the runs");
+		for (WeaveHarness.Result run : List.of(pinned, off, offPruned)) {
+			assertEquals(run == pinned, wovenHolds(run), "woven predicate does not separate the runs: " + run.label());
+			assertEquals(run == off, unwovenHolds(run), "unwoven predicate does not separate the runs: " + run.label());
+			assertEquals(run == offPruned, prunedHolds(run), "pruned predicate does not separate the runs: " + run.label());
+		}
 	}
 
 	private static boolean wovenHolds(WeaveHarness.Result run) {
@@ -105,6 +121,13 @@ class MixinOverloadOrderWeaveTest {
 
 	private static boolean unwovenHolds(WeaveHarness.Result run) {
 		return run.printed(UNWOVEN) && run.printed(MIXIN_REJECTS) && !run.printed(PIN_WARNING);
+	}
+
+	private static boolean prunedHolds(WeaveHarness.Result run) {
+		return run.printed(TICK_ONLY) && !run.printed(MIXIN_REJECTS) && !run.printed(PIN_WARNING)
+				&& run.printed("[Forbric/GuestInjectorPruner] pruned " + MIXIN + ".onClick")
+				&& mixinLosses(run).isEmpty() && run.findings().stream().anyMatch(f -> f.modId().equals(MOD)
+						&& f.confirmedRequired() && f.id().startsWith("mixin-injector:" + CONFIG + ":" + MIXIN + "#onClick"));
 	}
 
 	private static List<WeaveHarness.Finding> mixinLosses(WeaveHarness.Result run) {
@@ -128,8 +151,8 @@ class MixinOverloadOrderWeaveTest {
 				.anyMatch(insn -> insn instanceof MethodInsnNode call && call.name.endsWith(handler));
 	}
 
-	private static WeaveHarness.Result run(String label, String pin) throws Exception {
+	private static WeaveHarness.Result run(String label, Map<String, String> properties) throws Exception {
 		return WeaveHarness.run(work, label, fixture, CONFIG, MOD, Ecosystem.FABRIC, EnvType.SERVER,
-				"fixture.overloadorder.ClickProbe", "click", Map.of("forbric.mixinOverloadPin", pin));
+				"fixture.overloadorder.ClickProbe", "click", properties);
 	}
 }

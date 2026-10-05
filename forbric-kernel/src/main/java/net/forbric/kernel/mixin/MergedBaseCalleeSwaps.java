@@ -28,6 +28,9 @@ import net.forbric.api.Ecosystem;
  * <p>A second, narrower table, {@link #SUBSTITUTED}, holds the swaps that change the callee's owner, name or return
  * type as well: see {@link Substitution}. Only an {@code @Inject} may follow one of those.
  *
+ * <p>A third, {@link #REPLACED}, holds a private vanilla method the carrier replaced outright — renamed and reshaped, at
+ * its one call site — with one taking what vanilla's arguments are read from: see {@link Replaced}.
+ *
  * <p>Where NeoForge's patch of a vanilla method replaces one call with another of the same descriptor on the
  * same owner — {@code BlockState.isAir()Z} → {@code isEmpty()Z} in {@code LevelChunkSection.setBlockState} —
  * a mixin anchored on the vanilla callee misses. The census in {@code MergedBaseCalleeSwapTest} finds every such
@@ -112,7 +115,82 @@ public final class MergedBaseCalleeSwaps {
 							+ "stores the model's id there, and its hook in that deserializer reads it back to name every "
 							+ "connected-texture model it builds"));
 
+	/**
+	 * A private vanilla method the surviving carrier REPLACED at its one call site with a method of its own that takes,
+	 * instead of vanilla's arguments, what they are read from. The method a mod names is gone from the merged base; the
+	 * caller makes the replacement's call where vanilla made its own, and nothing else calls either. So BEFORE and AFTER
+	 * that call, and HEAD, RETURN and TAIL of the one and of the other, are the same program points; and each vanilla
+	 * argument is {@code arguments}' reading of the replacement's: {@code $n} is its n-th parameter, {@code $n.g()D} a
+	 * no-argument {@code invokevirtual} on it — exactly what vanilla's caller computed at its call.
+	 * {@code MergedBaseCalleeSwapTest} proves every row against the vanilla and merged callers, argument by argument,
+	 * so a rebuild that changes the call, its arguments or the methods' callers turns the row red. MixinRetarget's R7
+	 * moves an {@code @Inject} along a row.
+	 *
+	 * @param owner       the class (internal name)
+	 * @param caller      the one method calling either, {@code name + descriptor}, the same in vanilla and the merged base
+	 * @param vanilla     the method the listed ecosystems' mods name, {@code name + descriptor}
+	 * @param replacement the carrier's method the merged caller calls in its place, {@code name + descriptor}
+	 * @param arguments   for each vanilla parameter, how it is read off the replacement's
+	 * @param ecosystems  the mods compiled against {@code vanilla}
+	 * @param because     why the replacement's points are the vanilla method's for those mods
+	 */
+	public record Replaced(String owner, String caller, String vanilla, String replacement, List<String> arguments,
+			Set<Ecosystem> ecosystems, String because) {
+		public String vanillaMember() {
+			return "L" + owner + ";" + vanilla;
+		}
+
+		public String replacementMember() {
+			return "L" + owner + ";" + replacement;
+		}
+	}
+
+	private static final String SETTINGS = "$2";
+	public static final List<Replaced> REPLACED = List.of(
+			new Replaced("net/minecraft/world/level/levelgen/structure/templatesystem/StructureTemplate",
+					"placeInWorld(Lnet/minecraft/world/level/ServerLevelAccessor;Lnet/minecraft/core/BlockPos;"
+							+ "Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/levelgen/structure/templatesystem/"
+							+ "StructurePlaceSettings;Lnet/minecraft/util/RandomSource;I)Z",
+					"placeEntities(Lnet/minecraft/world/level/ServerLevelAccessor;Lnet/minecraft/core/BlockPos;"
+							+ "Lnet/minecraft/world/level/block/Mirror;Lnet/minecraft/world/level/block/Rotation;"
+							+ "Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/levelgen/structure/BoundingBox;Z"
+							+ "Lnet/minecraft/util/ProblemReporter;)V",
+					"addEntitiesToWorld(Lnet/minecraft/world/level/ServerLevelAccessor;Lnet/minecraft/core/BlockPos;"
+							+ "Lnet/minecraft/world/level/levelgen/structure/templatesystem/StructurePlaceSettings;"
+							+ "Lnet/minecraft/util/ProblemReporter;)V",
+					List.of("$0", "$1", SETTINGS + ".getMirror()Lnet/minecraft/world/level/block/Mirror;",
+							SETTINGS + ".getRotation()Lnet/minecraft/world/level/block/Rotation;",
+							SETTINGS + ".getRotationPivot()Lnet/minecraft/core/BlockPos;",
+							SETTINGS + ".getBoundingBox()Lnet/minecraft/world/level/levelgen/structure/BoundingBox;",
+							SETTINGS + ".shouldFinalizeEntities()Z", "$3"),
+					Set.of(Ecosystem.FABRIC),
+					"NeoForge's placeInWorld hands the placement settings to addEntitiesToWorld where vanilla's read the "
+							+ "mirror, rotation, pivot, bounding box and finalize flag off them and called placeEntities, "
+							+ "under the same isIgnoreEntities check; both are private and that call is each one's only "
+							+ "caller. addEntitiesToWorld places the template's entities as placeEntities did, after "
+							+ "NeoForge's processEntityInfos has run the settings' processors over them: a HEAD injection "
+							+ "that cancels (MoogsStructureLib places processed entities itself and cancels) skips that "
+							+ "pass too, as it skipped vanilla's placement; one that does not leaves it running. "
+							+ "MinecraftForge's own shape (placeEntities taking the settings last) is a different "
+							+ "descriptor and stays where it is"));
+
 	private MergedBaseCalleeSwaps() {
+	}
+
+	/**
+	 * The {@link #REPLACED} row whose {@code vanilla} method {@code owner.name desc} is, for a mod of {@code ecosystem};
+	 * {@code desc} null matches by name. Null when none.
+	 */
+	public static Replaced replaced(String owner, String name, String desc, Ecosystem ecosystem) {
+		if (ecosystem == null) return null;
+		for (Replaced row : REPLACED) {
+			if (!row.owner().equals(owner) || !row.ecosystems().contains(ecosystem)) continue;
+			int paren = row.vanilla().indexOf('(');
+			if (row.vanilla().substring(0, paren).equals(name) && (desc == null || row.vanilla().substring(paren).equals(desc))) {
+				return row;
+			}
+		}
+		return null;
 	}
 
 	/**

@@ -56,7 +56,7 @@ public final class EntityCallbacks {
   EntitySleepEvents.SET_BED_OCCUPATION_STATE.register((entity,pos,state,occupied)->{if(entity!=player)return false;occupation++;if(mode.equals("bed-nonbed"))originalStone=state.is(Blocks.STONE);return mode.equals("bed-handled")||mode.equals("bed-custom-handled");});
   EntitySleepEvents.ALLOW_BED.register((entity,pos,state,vanilla)->entity==player&&(mode.equals("bed-nonbed")||mode.equals("direction-nonbed"))?EventResult.ALLOW:EventResult.PASS);
   EntitySleepEvents.MODIFY_SLEEPING_DIRECTION.register((entity,pos,direction)->{if(entity!=player||!mode.startsWith("direction-"))return direction;
-   directions++;nativeDirection=direction;return direction==null?Direction.EAST:direction.getOpposite();});
+   directions++;nativeDirection=direction;if(mode.equals("direction-veto"))return null;return direction==null?Direction.EAST:direction.getOpposite();});
   EntitySleepEvents.ALLOW_NEARBY_MONSTERS.register((p,pos,vanilla)->{if(p!=player||!mode.equals("nearby-monsters"))return EventResult.PASS;nearby++;vanillaNearby=vanilla;return EventResult.ALLOW;});
   NeoForge.EVENT_BUS.addListener(ServerStartedEvent.class,e->{try{
    root=Path.of(System.getProperty("forbric.entityRoot")).toAbsolutePath().normalize();nonce=System.getProperty("forbric.entityNonce");phase=System.getProperty("forbric.entityPhase");
@@ -110,6 +110,11 @@ public final class EntityCallbacks {
    Direction faced=player.getBedOrientation();
    require(faced==Direction.EAST&&directions==1&&nativeDirection==null,"a non-bed spot read "+faced+" after "+directions+" call(s), native "+nativeDirection);});
   test("nearby-monsters",()->{bed();player.snapTo(9,80,8);require(!level.getEntitiesOfClass(Monster.class,new AABB(BED).inflate(8,5,8)).isEmpty(),"actual monster was not visible");var result=player.startSleepInBed(BED);require(nearby==1&&!vanillaNearby&&result.right().isPresent()&&player.isSleeping(),"Fabric nearby-monster result not consumed: "+result);player.stopSleepInBed(true,true);});
+  // startSleepInBed asks the direction first among its checks, now NeoForge's lambda: a listener with no direction for
+  // the spot vetoes the sleep there, and startSleepInBed returns the problem without sleeping, as vanilla's does.
+  test("direction-veto",()->{bed();player.snapTo(9,80,8);var result=player.startSleepInBed(BED);
+   require(directions==1&&nativeDirection==Direction.NORTH&&result.left().orElse(null)==net.minecraft.world.entity.player.Player.BedSleepingProblem.OTHER_PROBLEM
+    &&!player.isSleeping(),"Fabric's sleep-direction veto not consumed: "+result+" after "+directions+" call(s), native "+nativeDirection);});
  }
  /** One flight tick on a damage tick: the FakePlayer does not tick itself, so its flight step is driven directly. */
  private static void glideTick()throws Exception{
@@ -133,7 +138,7 @@ public final class EntityCallbacks {
  private static void require(boolean condition,String detail){if(!condition)throw new IllegalStateException(detail);}
  private static void finish(){try{
   if(monster!=null)monster.discard();if(player!=null)level.removePlayerImmediately(player,Entity.RemovalReason.DISCARDED);if(level!=null)level.setChunkForced(0,0,false);
-  Map<String,Object> r=new LinkedHashMap<>();r.put("phase",phase);r.put("nonce",nonce);r.put("pass",cases.size()==16&&cases.stream().allMatch(c->Boolean.TRUE.equals(c.get("pass"))));r.put("cases",cases);r.put("ticks",ticks);
+  Map<String,Object> r=new LinkedHashMap<>();r.put("phase",phase);r.put("nonce",nonce);r.put("pass",cases.size()==17&&cases.stream().allMatch(c->Boolean.TRUE.equals(c.get("pass"))));r.put("cases",cases);r.put("ticks",ticks);
   Files.writeString(root.resolve("probe.json"),new GsonBuilder().setPrettyPrinting().create().toJson(r));
  }catch(Exception failure){failure.printStackTrace();}finally{MinecraftServer stop=server;server=null;if(stop!=null)stop.halt(false);}}
 }

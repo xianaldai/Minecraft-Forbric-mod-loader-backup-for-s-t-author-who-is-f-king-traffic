@@ -56,6 +56,16 @@ import net.forbric.kernel.util.ForbricLog;
  * not ask for. Nothing is invented: the descriptor written in is one the target class declares. A mixin with several
  * targets is pinned only when every target that declares the name lands on the same descriptor.
  *
+ * <p>{@link MixinFit} asks {@link #destination} before it judges a name-only selector, so a pinned injector is judged
+ * on the overload it lands on and never reads as refused. What the pin leaves alone -- two overloads the handler fits,
+ * a {@code @Coerce}, several selectors, a lambda, the pin switched off -- is MixinFit's handler-fit rule's: a binding
+ * the handler was not written for is a miss, and one Mixin would reject outright (its {@code @At} sure to find a point
+ * there) is taken out of its mixin by {@link net.forbric.kernel.transform.GuestInjectorPruner} (or the mixin is left
+ * out) before Mixin reads it. The explanation below is what reaches the log and the report when Mixin does meet such a
+ * binding (with {@code -Dforbric.guestInjectorPruner.refused=off} or {@code -Dforbric.mixinFit.handlerFit=off}). Both
+ * read a {@code @Surrogate} as Mixin looks one up -- the handler's name, exactly the first overload's callback
+ * descriptor, a visible annotation: that overload binds, and nothing is pinned.
+ *
  * <p>Lambdas are left to the pruner and the shims ({@link MixinHandlerShim}, {@link InsertedLambdaArgumentShim}): a
  * lambda's name is a counter, so two bodies sharing {@code lambda$foo$0} are not two overloads of one method. When a
  * lambda selector cannot bind because the shape it was written for was a body the merge dropped, the kernel says so
@@ -129,10 +139,15 @@ public final class MixinOverloadPin {
 	 * anchors in the first overload, which is not where the injection will be.
 	 */
 	public static MethodNode destination(MethodNode handler, String selector, ClassNode target) {
+		return destination(null, handler, selector, target);
+	}
+
+	/** As above, with the mixin that declares {@code handler}, whose {@code @Surrogate}s Mixin may bind instead of it. */
+	public static MethodNode destination(ClassNode mixin, MethodNode handler, String selector, ClassNode target) {
 		if (handler == null || selector == null || target == null || target.methods == null || !bareName(selector)) return null;
 		AnnotationNode inject = annotation(handler, INJECT_DESC);
 		if (inject == null || !pinnable(handler, inject)) return null;
-		String pinned = pinnedSelector(handler, selector.trim(), List.of(target.name), name -> target);
+		String pinned = pinnedSelector(mixin, handler, selector.trim(), List.of(target.name), name -> target);
 		if (pinned == null) return null;
 		String desc = pinned.substring(pinned.indexOf('('));
 		for (MethodNode method : target.methods) {
@@ -180,7 +195,7 @@ public final class MixinOverloadPin {
 			for (int j = 0; j < selectors.size(); j++) {
 				if (!(selectors.get(j) instanceof String selector) || !bareName(selector)) continue;
 				String name = selector.trim();
-				String explicit = pinnable ? pinnedSelector(handler, name, targetNames, targets) : null;
+				String explicit = pinnable ? pinnedSelector(mixin, handler, name, targetNames, targets) : null;
 				if (explicit == null) {
 					explain(mixin, handler, name, targetNames, targets);
 					continue;
@@ -201,8 +216,12 @@ public final class MixinOverloadPin {
 	/**
 	 * {@code name(descriptor)} for the one overload {@code handler} fits, when Mixin would bind the bare {@code name}
 	 * to an overload that cannot take it; null to leave the selector as written.
+	 *
+	 * <p>A {@code @Surrogate} of the handler's name in {@code mixin} that takes the first overload is Mixin's own answer
+	 * there -- it binds the surrogate instead of failing -- so that first overload binds and nothing is pinned, as
+	 * {@link MixinFit}'s handler-fit rule reads the same mixin.
 	 */
-	static String pinnedSelector(MethodNode handler, String name, List<String> targetNames,
+	static String pinnedSelector(ClassNode mixin, MethodNode handler, String name, List<String> targetNames,
 			Function<String, ClassNode> targets) {
 		if (!enabled() || name.startsWith("lambda$")) return null;
 		String chosen = null;
@@ -221,7 +240,7 @@ public final class MixinOverloadPin {
 			// No method of that name: the selector matches nothing there, pinned or not.
 			if (first == null) continue;
 			String here;
-			if (MixinHandlerShim.binds(handler.desc, first.desc)) {
+			if (MixinHandlerShim.binds(handler.desc, first.desc) || surrogateTakes(mixin, handler, first)) {
 				here = first.desc;
 			} else {
 				if (fitting.size() != 1) return null;
@@ -232,6 +251,14 @@ public final class MixinOverloadPin {
 			chosen = here;
 		}
 		return needed ? name + chosen : null;
+	}
+
+	/**
+	 * Whether {@code mixin} declares a {@code @Surrogate} of {@code handler}'s name that Mixin binds to {@code target}:
+	 * exactly the callback descriptor and a visible annotation, as Mixin looks one up ({@link MixinFit#surrogateBinds}).
+	 */
+	private static boolean surrogateTakes(ClassNode mixin, MethodNode handler, MethodNode target) {
+		return MixinFit.surrogateBinds(mixin, handler, target.desc);
 	}
 
 	/**

@@ -25,13 +25,18 @@ public final class CreateStructureMixinAdapter {
 		for (MethodNode method : target.methods) if (method.name.equals("placeInWorld")) callers += CarpetMixinAdapter.count(method, "L" + TARGET + ";" + LIVE);
 		if (callers != 1) return 0;
 		AnnotationNode a = MixinFit.injectorOf(set), b = MixinFit.injectorOf(iterate), c = MixinFit.injectorOf(clear);
-		if (a == null || !CarpetMixinAdapter.selects(b, OLD) || !CarpetMixinAdapter.selects(c, OLD)) return 0;
+		// MixinRetarget's R7 may already have moved the two @Injects along MergedBaseCalleeSwaps' REPLACED row (the pickup's
+		// point, the TAIL's selector, behind a method of its name); the iterator wrap inside the method is this adapter's.
+		boolean cleared = CarpetMixinAdapter.selects(c, LIVE);
+		if (a == null || !CarpetMixinAdapter.selects(b, OLD) || !(cleared || CarpetMixinAdapter.selects(c, OLD))) return 0;
 		List<AnnotationNode> points = MixinFit.atNodes(a);
-		if (points.size() != 1 || !("L" + TARGET + ";" + OLD).equals(MixinFit.value(points.getFirst(), "target"))) return 0;
+		Object point = points.size() == 1 ? MixinFit.value(points.getFirst(), "target") : null;
+		boolean picked = ("L" + TARGET + ";" + LIVE).equals(point);
+		if (!picked && !("L" + TARGET + ";" + OLD).equals(point)) return 0;
 		// Only selectors change: Level remains the first argument, so the iterator's args-only local is unchanged.
-		CarpetMixinAdapter.set(points.getFirst(), "target", "L" + TARGET + ";" + LIVE);
+		if (!picked) CarpetMixinAdapter.set(points.getFirst(), "target", "L" + TARGET + ";" + LIVE);
 		CarpetMixinAdapter.set(b, "method", List.of(LIVE));
-		CarpetMixinAdapter.set(c, "method", List.of(LIVE));
-		return 3;
+		if (!cleared) CarpetMixinAdapter.set(c, "method", List.of(LIVE));
+		return 1 + (picked ? 0 : 1) + (cleared ? 0 : 1);
 	}
 }

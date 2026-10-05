@@ -31,10 +31,14 @@ import net.forbric.api.Ecosystem;
  * <ul>
  *   <li>shimmed — the handler is wrapped, Mixin binds the wrapper, and the woven lambda hands the handler its List and
  *       its CompoundTag in the order it declared them: the probe's trail starts with the handler's line;</li>
- *   <li>shim-off ({@code -Dforbric.mixinHandlerShim=off}) — Mixin's own "Invalid descriptor", the handler is merged but
- *       nothing calls it, and the loss is a confirmed, required finding for the mod;</li>
+ *   <li>shim-off ({@code -Dforbric.mixinHandlerShim=off}) — the name binds the merged lambda, which the handler was not
+ *       written for: the verdict reads its only injector as a miss, the mixin is UNFIT and left out before Mixin reads
+ *       it (no "Invalid descriptor"), nothing calls the handler, and the loss is a confirmed, required finding for the
+ *       mod;</li>
  *   <li>table-off ({@code -Dforbric.lambdaPermutations=off}) — the same as shim-off, which pins the evidence that fired
- *       to the census row and not to anything else.</li>
+ *       to the census row and not to anything else;</li>
+ *   <li>shim-off with {@code -Dforbric.mixinFit.handlerFit=off} — the mixin reaches Mixin, which rejects the descriptor,
+ *       as every control did before the verdict asked.</li>
  * </ul>
  * The shim's other evidence, {@code DuplicateLambdaPruneInjector}'s record, is not reached: the pruner is a COREMOD
  * transformer that KernelBoot registers, and the harness bootstraps Mixin without that chain.
@@ -65,6 +69,8 @@ class MixinHandlerShimWeaveTest {
 	private static WeaveHarness.Result shimmed;
 	private static WeaveHarness.Result off;
 	private static WeaveHarness.Result tableOff;
+	private static WeaveHarness.Result rejected;
+	private static final String LEFT_OUT = "auto-suppressing guest mixin handlershim (handlershim.mixins.json):NbtOpsMixin — UNFIT";
 
 	@BeforeAll static void weave() throws Exception {
 		fixture = WeaveHarness.fixture(work, "handlershim", List.of(
@@ -76,6 +82,7 @@ class MixinHandlerShimWeaveTest {
 		shimmed = run("shimmed", Map.of());
 		off = run("shim-off", Map.of("forbric.mixinHandlerShim", "off"));
 		tableOff = run("table-off", Map.of("forbric.lambdaPermutations", "off"));
+		rejected = run("shim-off-verdict-off", Map.of("forbric.mixinHandlerShim", "off", "forbric.mixinFit.handlerFit", "off"));
 	}
 
 	@Test void theWrappedHandlerReceivesItsVanillaArgumentsFromTheMergedLambda() throws Exception {
@@ -98,31 +105,44 @@ class MixinHandlerShimWeaveTest {
 		WeaveHarness.assertWovenAndVerified(shimmed, TARGET, fixture);
 	}
 
-	@Test void withTheShimOffMixinRejectsTheHandlerAndTheModIsReported() throws Exception {
+	@Test void withTheShimOffTheMixinIsLeftOutAndTheModIsReported() throws Exception {
 		for (WeaveHarness.Result control : List.of(off, tableOff)) {
 			assertFalse(control.printed(SHIM_WARNING), control.describe());
-			assertTrue(control.printed(MIXIN_REJECTS), control.describe());
-			assertTrue(control.printed(UNWOVEN), control.describe());
+			assertTrue(control.printed(LEFT_OUT), control.describe());
+			assertFalse(control.printed(MIXIN_REJECTS), control.describe());
+			assertTrue(control.printedLine(UNWOVEN), control.describe());
 			assertFalse(control.printed("handler saw"), control.describe());
 
 			List<WeaveHarness.Finding> losses = losses(control);
-			assertEquals(2, losses.size(), control.label() + " " + losses + "\n" + control.describe());
-			assertTrue(losses.stream().anyMatch(f -> f.id().startsWith("mixin-injector:")
-					&& f.id().contains("NbtOpsMixin#" + HANDLER + VANILLA_HANDLER)), losses.toString());
-			assertTrue(losses.stream().anyMatch(f -> f.id().startsWith("mixin:")
-					&& f.detail().contains("InvalidInjectionException")), losses.toString());
+			assertEquals(1, losses.size(), control.label() + " " + losses + "\n" + control.describe());
+			assertTrue(losses.get(0).id().startsWith("mixin:") && losses.get(0).detail().contains("was left out"), losses.toString());
 
-			// Mixin merged the handler before it rejected the injection, so the body is in the class — and dead.
 			byte[] defined = control.defined(TARGET);
 			assertEquals(List.of(), handlerCalls(defined, LAMBDA, null), control.label() + "\n" + methods(defined));
 			WeaveHarness.assertWovenAndVerified(control, TARGET, fixture);
 		}
 	}
 
+	/** With the verdict's handler rule off too, the mixin reaches Mixin, which rejects the descriptor. */
+	@Test void withTheVerdictRuleOffMixinRejectsTheHandlerAndTheModIsReported() throws Exception {
+		assertTrue(rejectedHolds(rejected), rejected.describe());
+		List<WeaveHarness.Finding> losses = losses(rejected);
+		assertTrue(losses.stream().anyMatch(f -> f.id().startsWith("mixin-injector:")
+				&& f.id().contains("NbtOpsMixin#" + HANDLER + VANILLA_HANDLER)), losses.toString());
+		assertTrue(losses.stream().anyMatch(f -> f.id().startsWith("mixin:")
+				&& f.detail().contains("InvalidInjectionException")), losses.toString());
+		// Mixin merged the handler before it rejected the injection, so the body is in the class — and dead.
+		WeaveHarness.assertWovenAndVerified(rejected, TARGET, fixture);
+	}
+
 	/** Each run must be told apart from its controls by the very predicates the tests above use on it. */
 	@Test void theControlFlipsEveryShimAssertion() throws Exception {
-		assertTrue(shimHolds(shimmed) && !shimHolds(off) && !shimHolds(tableOff), "shim predicate does not separate the runs");
-		assertTrue(offHolds(off) && offHolds(tableOff) && !offHolds(shimmed), "control predicate does not separate the runs");
+		assertTrue(shimHolds(shimmed) && !shimHolds(off) && !shimHolds(tableOff) && !shimHolds(rejected),
+				"shim predicate does not separate the runs");
+		assertTrue(offHolds(off) && offHolds(tableOff) && !offHolds(shimmed) && !offHolds(rejected),
+				"control predicate does not separate the runs");
+		assertTrue(rejectedHolds(rejected) && !rejectedHolds(off) && !rejectedHolds(shimmed),
+				"verdict-off predicate does not separate the runs");
 	}
 
 	private static boolean shimHolds(WeaveHarness.Result run) throws Exception {
@@ -131,7 +151,12 @@ class MixinHandlerShimWeaveTest {
 	}
 
 	private static boolean offHolds(WeaveHarness.Result run) throws Exception {
-		return run.printed(MIXIN_REJECTS) && run.printed(UNWOVEN) && losses(run).size() == 2
+		return run.printed(LEFT_OUT) && !run.printed(MIXIN_REJECTS) && run.printedLine(UNWOVEN) && losses(run).size() == 1
+				&& handlerCalls(run.defined(TARGET), LAMBDA, null).isEmpty();
+	}
+
+	private static boolean rejectedHolds(WeaveHarness.Result run) throws Exception {
+		return !run.printed(LEFT_OUT) && run.printed(MIXIN_REJECTS) && run.printedLine(UNWOVEN) && losses(run).size() == 2
 				&& handlerCalls(run.defined(TARGET), LAMBDA, null).isEmpty();
 	}
 

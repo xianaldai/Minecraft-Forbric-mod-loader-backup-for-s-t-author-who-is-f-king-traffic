@@ -69,9 +69,18 @@ public final class MixinCompatibility {
 	 */
 	public static void recordRemovedInjector(String config, String mixin, String name, String desc, String detail,
 			List<String> evidence) {
+		recordRemovedInjector(config, mixin, name, desc, detail, false, evidence);
+	}
+
+	/**
+	 * As above, for a removal no kernel repair answers for: an injector Mixin would have rejected outright, whose loss is
+	 * {@code required} when the author's own count for it is at least one.
+	 */
+	public static void recordRemovedInjector(String config, String mixin, String name, String desc, String detail,
+			boolean required, List<String> evidence) {
 		CompatibilityFindings.record(new CompatibilityFinding("mixin-injector:" + config + ":" + mixin + "#" + name + desc,
 				owner(config), "Mixin injection " + name, "mixin:" + config, CompatibilityFinding.Confidence.CONFIRMED,
-				false, detail, evidence));
+				required, detail, evidence));
 	}
 
 	private static String owner(String config) {

@@ -176,6 +176,14 @@ public final class DuplicateModArbiter {
 
 	/** Scans {@code modsDir} once and arbitrates. Repeat calls for the same directory return the same decision. */
 	public static synchronized Decision arbitrate(Path modsDir, EnvType envType) {
+		return arbitrate(modsDir, envType, null);
+	}
+
+	/**
+	 * As {@link #arbitrate(Path, EnvType)}, holding nested Fabric mods' {@code minecraft} requirements against
+	 * {@code minecraftVersion} ({@code null}: not judged). See {@link net.forbric.kernel.fabric.NestedFabricRequirements}.
+	 */
+	public static synchronized Decision arbitrate(Path modsDir, EnvType envType, String minecraftVersion) {
 		if ("off".equalsIgnoreCase(System.getProperty(SWITCH, "on"))) {
 			wholeInstancePlan = null;
 			cached = null; cachedDir = null; cachedSide = null;
@@ -207,7 +215,8 @@ public final class DuplicateModArbiter {
 			decision = new Decision(Set.of(), Map.of(), List.copyOf(universalAliases));
 		} else {
 			NestedCandidateInventory inventory = NestedCandidateInventory.scan(claims,
-					rundir.resolve(".forbric-kernel").resolve("candidates"), envType);
+					rundir.resolve(".forbric-kernel").resolve("candidates"), envType,
+					net.forbric.kernel.fabric.NestedFabricRequirements.Platform.running(minecraftVersion));
 			List<Claim> all = inventory.claims();
 			Map<String, Ecosystem> overrides = new LinkedHashMap<>();
 			for (Claim claim : all) for (String id : claim.modIds()) { Ecosystem forced = overrideFor(id); if (forced != null) overrides.put(id, forced); }

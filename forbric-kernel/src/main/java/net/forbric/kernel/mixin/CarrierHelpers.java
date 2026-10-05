@@ -129,7 +129,8 @@ public final class CarrierHelpers {
 		return found;
 	}
 
-	private static boolean matches(MixinFit.Member want, MixinFit.Member have) {
+	/** Whether an anchor as the mod wrote it (owner and descriptor may be left out) names {@code have}. */
+	static boolean matches(MixinFit.Member want, MixinFit.Member have) {
 		return want.name().equals(have.name()) && (want.owner() == null || want.owner().equals(have.owner()))
 				&& (want.desc() == null || want.desc().equals(have.desc()));
 	}

@@ -62,7 +62,8 @@ class RegistrySyncParityInjectorTest {
 	private static final String WRAPPER_PENDING_TAGS = WRAPPER + "$3";
 	private static final String PENDING_TAGS_INTERFACE = "net/minecraft/core/Registry$PendingTags";
 
-	private final RegistrySyncParityInjector injector = new RegistrySyncParityInjector();
+	/** A game with fabric-api installed: every type fabric-api's {@code remap} names is on the loader. */
+	private final RegistrySyncParityInjector injector = new RegistrySyncParityInjector(type -> true);
 
 	/**
 	 * The ordinal guard. {@code $3} is only correct for as long as javac numbers that anonymous class third; if a
@@ -122,6 +123,39 @@ class RegistrySyncParityInjectorTest {
 		for (String name : new String[] {"clear", "registerIdMapping", "remap"}) {
 			new Analyzer<>(new BasicVerifier()).analyze(out.name, method(out, name, null));
 		}
+	}
+
+	/**
+	 * Without fabric-api, NeoForge's half only. {@code remap} is public and names fabric-api's {@code RemapMode}, and
+	 * {@code Class.getMethod} resolves the types of the public methods of each class it searches — so with it on the
+	 * wrapper, {@code getMethods()} and every lookup that reached {@code NamespacedWrapper} (a mod's
+	 * {@code BuiltInRegistries.BLOCK.getClass().getMethod("getOptional", ...)} among them) threw
+	 * {@code NoClassDefFoundError} in every pack without fabric-api. The loader is asked about exactly the types
+	 * {@code remap} names.
+	 */
+	@Test
+	void withoutFabricApiTheRealWrapperGainsNeoForgesContractAndNoPublicMethodNamingFabricApi() throws Exception {
+		java.util.List<String> asked = new java.util.ArrayList<>();
+		RegistrySyncParityInjector noFabricApi = new RegistrySyncParityInjector(type -> {
+			asked.add(type);
+			return !type.startsWith("net/fabricmc/");
+		});
+
+		ClassNode out = parse(noFabricApi.transform(WRAPPER, realBytes(WRAPPER), ctx()));
+
+		assertNotNull(method(out, "clear", "(Z)V"), "NeoForge's sync needs clear(Z) whatever else is installed");
+		assertNotNull(method(out, "registerIdMapping", "(Lnet/minecraft/resources/ResourceKey;I)V"),
+				"and registerIdMapping, the one that NPE'd");
+		assertNull(method(out, "remap", null), "remap overrides a fabric-api interface; without fabric-api nothing calls it");
+		for (MethodNode m : out.methods) {
+			if ((m.access & Opcodes.ACC_PUBLIC) != 0) {
+				assertTrue(!m.desc.contains("Lnet/fabricmc/"), "a public " + m.name + m.desc + " would make a getMethod that "
+						+ "reaches the wrapper throw NoClassDefFoundError without fabric-api");
+			}
+		}
+		assertEquals(java.util.List.of("it/unimi/dsi/fastutil/objects/Object2IntMap",
+				"net/fabricmc/fabric/impl/registry/sync/RemappableRegistry$RemapMode"), asked,
+				"the loader is asked about remap's own parameter types, once, when the wrapper is transformed");
 	}
 
 	/** Fail-soft, not fail-hard: a carrier that already declares the member keeps its own. */

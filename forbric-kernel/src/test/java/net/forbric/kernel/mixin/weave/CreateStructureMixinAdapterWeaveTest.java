@@ -28,7 +28,9 @@ import net.forbric.kernel.mixin.CreateStructureMixinAdapter;
  * ({@code setProcessors}), applied to them while they are iterated ({@code getIterator}), and dropped afterwards
  * ({@code clearProcessors}) — a second placement that still sees it would mean the cleanup stayed behind. With
  * {@code -Dforbric.createStructureMixin=off} none of the three binds: both placements add plain entities and each
- * hook is the mod's required loss.
+ * hook is the mod's required loss — with MixinRetarget's R7 off too, since R7 now moves the two {@code @Inject}s (the
+ * pickup's point, the cleanup's selector) along MergedBaseCalleeSwaps' REPLACED row for any Fabric mod. With only the
+ * adapter off, R7 binds those two and the iterator wrap inside the method, this adapter's own move, is the one loss.
  */
 class CreateStructureMixinAdapterWeaveTest {
 	private static final Path SOURCES = Path.of("src/test/resources/weave/createstructure");
@@ -45,6 +47,7 @@ class CreateStructureMixinAdapterWeaveTest {
 	private static Path fixture;
 	private static WeaveHarness.Result adapted;
 	private static WeaveHarness.Result off;
+	private static WeaveHarness.Result r7Only;
 
 	@BeforeAll static void weave() throws Exception {
 		String structure = "net/minecraft/world/level/levelgen/structure/templatesystem/";
@@ -62,7 +65,17 @@ class CreateStructureMixinAdapterWeaveTest {
 				SOURCES.resolve("com/zurrtum/create/mixin/StructureTemplateMixin.java")),
 				Map.of(CONFIG, SOURCES.resolve(CONFIG)));
 		adapted = run("adapted", Map.of());
-		off = run("adapter-off", Map.of(CreateStructureMixinAdapter.PROPERTY, "off"));
+		off = run("adapter-off", Map.of(CreateStructureMixinAdapter.PROPERTY, "off", "forbric.mixinRetarget.replacedCall", "off"));
+		r7Only = run("r7-only", Map.of(CreateStructureMixinAdapter.PROPERTY, "off"));
+	}
+
+	/** R7 alone: the pickup and the cleanup follow the replaced call, the iterator wrap is the adapter's and is lost. */
+	@Test void withOnlyTheGeneralRuleTheWrapIsTheOneLoss() throws Exception {
+		assertTrue(returned(r7Only, UNADAPTED), r7Only.describe());
+		assertEquals(List.of("getIterator"), injectorLosses(r7Only).stream().map(f -> hookOf(f.id())).toList(), r7Only.findings().toString());
+		assertEquals(List.of("setProcessors"), hooksCalledFrom(r7Only, "placeInWorld"), r7Only.describe());
+		assertEquals(List.of("clearProcessors"), hooksCalledFrom(r7Only, "addEntitiesToWorld"), r7Only.describe());
+		WeaveHarness.assertWovenAndVerified(r7Only, TARGET, fixture);
 	}
 
 	@Test void setupIterationAndCleanupRunTogetherOnTheLivePlacementCall() throws Exception {

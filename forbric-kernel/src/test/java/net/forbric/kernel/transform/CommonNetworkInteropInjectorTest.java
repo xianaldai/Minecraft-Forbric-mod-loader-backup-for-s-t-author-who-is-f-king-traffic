@@ -148,41 +148,17 @@ class CommonNetworkInteropInjectorTest {
 	}
 
 	/**
-	 * The play-phase server handler must fall through to NeoForge when MinecraftForge does not take the payload.
+	 * The play-phase server handler must reach NeoForge's dispatcher when MinecraftForge does not take the payload.
 	 *
 	 * <p>The merged {@code ServerGamePacketListenerImpl.handleCustomPayload} is MinecraftForge's override and its
 	 * whole body is: ask {@code ForgeHooks.onCustomPayload}, {@code POP} the answer, {@code RETURN}. It never
-	 * calls {@code super}, and NeoForge's dispatch lives on exactly that super. So a NeoForge mod's play-phase
-	 * packet to the server arrived, was offered to MinecraftForge, declined and stopped — no exception, no log,
-	 * the mod's server handler simply never ran. Every GUI button, keybind action and config-sync request a
-	 * NeoForge mod sends upward was dead, singleplayer included.
+	 * reaches NeoForge's dispatch. So a NeoForge mod's play-phase packet to the server arrived, was offered to
+	 * MinecraftForge, declined and stopped — no exception, no log, the mod's server handler simply never ran. Carry
+	 * On's carry key is one such packet: with it dropped, nothing could ever be picked up.
 	 */
 	@Test
-	void thePlayServerHandlerFallsThroughToNeoForge() throws Exception {
+	void thePlayServerHandlerReachesNeoForgesDispatcher() throws Exception {
 		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
-		// The rewrite is behind a switch that defaults OFF — see playFallThroughEnabled for why — so the test
-		// turns it on for itself. What is asserted is the SHAPE of the rewrite when it does run, which is what a
-		// future edit could break without anyone noticing.
-		String previous = System.getProperty("forbric.playPayloadFallThrough");
-		System.setProperty("forbric.playPayloadFallThrough", "on");
-		try {
-			assertFallThroughShape();
-		} finally {
-			if (previous == null) System.clearProperty("forbric.playPayloadFallThrough");
-			else System.setProperty("forbric.playPayloadFallThrough", previous);
-		}
-	}
-
-	/** The default must be the old behaviour: a disconnected player is worse than a dropped packet. */
-	@Test
-	void thePlayFallThroughIsOffByDefault() {
-		assertFalse(CommonNetworkInteropInjector.playFallThroughEnabled(),
-				"the fall-through reaches fabric-api's own server-play handler for the first time on this base, and "
-						+ "that handler throws \"Unknown addon\" and ends the connection — until the Fabric half is "
-						+ "fixed, the default stays at the silent drop");
-	}
-
-	private void assertFallThroughShape() throws Exception {
 		String listener = "net/minecraft/server/network/ServerGamePacketListenerImpl";
 		ClassNode node = transformed(listener);
 		MethodNode handler = method(node, "handleCustomPayload",
@@ -190,41 +166,58 @@ class CommonNetworkInteropInjectorTest {
 
 		boolean popsTheAnswer = false;
 		boolean callsSuper = false;
+		boolean callsNeoForge = false;
 		boolean branches = false;
+		boolean gated = false;
 		for (AbstractInsnNode insn : handler.instructions) {
 			if (insn.getOpcode() == Opcodes.POP) popsTheAnswer = true;
 			if (insn.getOpcode() == Opcodes.IFNE) branches = true;
-			if (insn instanceof MethodInsnNode call && call.getOpcode() == Opcodes.INVOKESPECIAL
-					&& "net/minecraft/server/network/ServerCommonPacketListenerImpl".equals(call.owner)
-					&& "handleCustomPayload".equals(call.name)) {
+			if (!(insn instanceof MethodInsnNode call)) continue;
+			if ("handleCustomPayload".equals(call.name)
+					&& "net/minecraft/server/network/ServerCommonPacketListenerImpl".equals(call.owner)) {
 				callsSuper = true;
 			}
+			if (call.getOpcode() == Opcodes.INVOKESTATIC && "handleModdedPayload".equals(call.name)
+					&& "net/neoforged/neoforge/network/registration/NetworkRegistry".equals(call.owner)) {
+				callsNeoForge = true;
+			}
+			if (INTEROP.equals(call.owner) && "neoForgeWillHandle".equals(call.name)) gated = true;
 		}
 
 		assertFalse(popsTheAnswer,
 				"the hook's answer must be branched on, not discarded — discarding it is the whole defect");
-		assertTrue(branches, "MinecraftForge taking the payload must skip the fall-through");
-		assertTrue(callsSuper,
-				"and not taking it must reach ServerCommonPacketListenerImpl.handleCustomPayload, which is where "
-						+ "NeoForge's dispatcher lives");
-
-		// GATED. Falling through unconditionally was measured to be worse than the bug: NeoForge's dispatcher is
-		// strict about ids it does not know, so a Fabric mod's play payload arriving here ended the connection
-		// with "IllegalStateException: Unknown addon" and a client that used to join could no longer stay in a
-		// world. The fall-through must ask whether NeoForge owns the payload first.
-		boolean gated = false;
-		for (AbstractInsnNode insn : handler.instructions) {
-			if (insn instanceof MethodInsnNode call && INTEROP.equals(call.owner)
-					&& "neoForgeWillHandle".equals(call.name)) {
-				gated = true;
-			}
-		}
+		assertTrue(branches, "MinecraftForge taking the payload must skip the hand-over");
+		assertTrue(callsNeoForge,
+				"and not taking it must reach NeoForge's NetworkRegistry.handleModdedPayload, the call NeoForge's own "
+						+ "super body makes for a mod payload");
+		assertFalse(callsSuper,
+				"NOT through super: fabric-api's handler in ServerCommonPacketListenerImpl.handleCustomPayload serves "
+						+ "only the configuration listener and throws \"Unknown addon\" for this one — measured, it "
+						+ "disconnected the player the moment Carry On sent its key");
+		// GATED: NeoForge's dispatcher disconnects on a channel it never registered, where vanilla's empty play
+		// override drops a payload nobody took.
 		assertTrue(gated,
-				"the fall-through must be gated on NeoForge actually owning the payload — ungated it disconnects "
-						+ "the player on the first Fabric play payload");
+				"the hand-over must be gated on NeoForge actually owning the payload — ungated, NeoForge disconnects "
+						+ "on any payload nobody else took");
 		// The frame authored at the branch target has to be right, or the class fails verification at link time
 		// and every play-phase packet on the server becomes a VerifyError instead.
 		new Analyzer<>(new BasicVerifier()).analyze(node.name, handler);
+	}
+
+	/** On unless switched off: a dropped packet is a mod that silently does not work. */
+	@Test
+	void thePlayHandOverIsOnByDefaultAndHasAnOffSwitch() {
+		String previous = System.getProperty("forbric.playPayloadFallThrough");
+		try {
+			System.clearProperty("forbric.playPayloadFallThrough");
+			assertTrue(CommonNetworkInteropInjector.playFallThroughEnabled(),
+					"on by default — off, every NeoForge mod's play-phase packet to the server is dropped");
+			System.setProperty("forbric.playPayloadFallThrough", "off");
+			assertFalse(CommonNetworkInteropInjector.playFallThroughEnabled(), "-Dforbric.playPayloadFallThrough=off");
+		} finally {
+			if (previous == null) System.clearProperty("forbric.playPayloadFallThrough");
+			else System.setProperty("forbric.playPayloadFallThrough", previous);
+		}
 	}
 
 	@Test

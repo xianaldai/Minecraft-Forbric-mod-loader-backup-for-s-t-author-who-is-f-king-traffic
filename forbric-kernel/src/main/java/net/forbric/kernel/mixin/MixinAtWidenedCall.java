@@ -27,9 +27,11 @@ import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.AnnotationNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
+import org.objectweb.asm.tree.VarInsnNode;
 
 import net.forbric.kernel.util.ForbricLog;
 
@@ -77,12 +79,33 @@ import net.forbric.kernel.util.ForbricLog;
  * <h2>One decision, two readers</h2>
  *
  * <p>{@link MixinFit} judges a mixin at config-read time, before this rewrite runs, and counted an {@code @At(INVOKE)}
- * as resolved whenever a widened call existed — for ANY injector. The rewrite moves only the argument-blind kinds and a
+ * as resolved whenever a widened call existed — for ANY injector. The rewrite moved only the argument-blind kinds and a
  * fixed-index {@code @ModifyArg}, never a handler in a {@code @Group}. So creativecore's {@code require=1}
  * {@code @Redirect} of {@code RegistryFriendlyByteBuf.decorator(RegistryAccess)}, which NeoForge's configuration
  * listener calls with a {@code ConnectionType} appended, read FIT: no "applies only partially" line, no preflight row,
  * and nothing warned before its miss took the class down. {@link #wouldMove} is the rewrite's own decision, and both
- * the rewrite and the verdict ask it.
+ * the rewrite and the verdict ask it — now including the static-call redirects the next section moves.
+ *
+ * <h2>A redirect of a widened static call</h2>
+ *
+ * <p>A {@code @Redirect} mirrors the call and REPLACES it, which is why the rule above leaves it alone: on the merged
+ * base the call it would replace is the carrier's extended one, and what the carrier does with its appended arguments
+ * is then gone at that call. For an instance call that also skips every override of the carrier's method
+ * (fabric-renderer-api's {@code hasMaterialFlag} redirects would have overridden every NeoForge model's context-aware
+ * flag), so an instance call never moves. A static call has no override to skip, but its appended arguments can still be
+ * the carrier's mechanism — NeoForge's four-argument {@code CustomPacketPayload.codec} is where its payload registry
+ * joins the codec, and a Fabric redirect there would take NeoForge's payloads off the wire — so a static call moves only
+ * along a reviewed row of {@link #REDIRECTABLE}, each with why replacing the carrier's call is the replacement vanilla's
+ * was.
+ *
+ * <p>The handler is renamed aside and a method of its name and annotation takes the widened call's arguments and hands
+ * the original the ones it was written for, in place, followed by whatever of the target's own arguments it captured.
+ * creativecore's {@code ServerConfigurationPacketListenerImplMixin} and its client twin redirect
+ * {@code RegistryFriendlyByteBuf.decorator(RegistryAccess)} to build their own {@code CreativeByteBuf} for the play
+ * phase; NeoForge appends the {@code ConnectionType} it records on the buffer, and with the point unmatched the required
+ * redirect stopped a strict launch that native Fabric runs. Only {@code @At(INVOKE)}, only when every widened call in
+ * the selected bodies is an {@code invokestatic} of one widened descriptor, and only for a handler that takes the named
+ * call's arguments first and returns its type. {@code -Dforbric.mixinAtWidenRedirect=off} leaves these where they are.
  *
  * <p>{@code -Dforbric.mixinAtWiden=off} leaves every injection point as compiled.
  */
@@ -113,6 +136,12 @@ public final class MixinAtWidenedCall {
 	 */
 	private static final String GROUP_DESC = "Lorg/spongepowered/asm/mixin/injection/Group;";
 	private static final String MODIFY_ARG = "Lorg/spongepowered/asm/mixin/injection/ModifyArg;";
+	private static final String REDIRECT = "Lorg/spongepowered/asm/mixin/injection/Redirect;";
+	/**
+	 * The suffix a redirect handler moves to, under the wrapper that takes the widened call's arguments, before the mixin's
+	 * mark ({@link MixinHandlerShim#asideName}).
+	 */
+	static final String REDIRECT_SUFFIX = "$forbricwidened";
 
 	private MixinAtWidenedCall() {
 	}
@@ -126,6 +155,43 @@ public final class MixinAtWidenedCall {
 
 	static boolean newEnabled() {
 		return enabled() && !"off".equalsIgnoreCase(System.getProperty(NEW_PROPERTY, "on"));
+	}
+
+	/** {@code -Dforbric.mixinAtWidenRedirect=off} leaves a redirect of a widened static call as compiled. */
+	public static final String REDIRECT_PROPERTY = "forbric.mixinAtWidenRedirect";
+
+	/**
+	 * A widened static call a {@code @Redirect} of its vanilla form may follow.
+	 *
+	 * @param member  the widened call, as an {@code @At} target
+	 * @param because why the mod's replacement of vanilla's call is a sound replacement of the carrier's
+	 */
+	public record Redirectable(String member, String because) {
+	}
+
+	/** Reviewed: replacing the carrier's call here costs exactly what replacing vanilla's does natively. */
+	public static final List<Redirectable> REDIRECTABLE = List.of(
+			new Redirectable("Lnet/minecraft/network/RegistryFriendlyByteBuf;decorator(Lnet/minecraft/core/RegistryAccess;"
+					+ "Lnet/neoforged/neoforge/network/connection/ConnectionType;)Ljava/util/function/Function;",
+					"the appended ConnectionType only becomes the type recorded on each buffer the function builds; the "
+							+ "vanilla-form decorator the merged base keeps builds the same buffer typed OTHER, which is "
+							+ "what a buffer a mod builds through vanilla's constructor carries, what every vanilla client's "
+							+ "connection carries, and what the play buffers creativecore's own PlayerListMixin wrap builds "
+							+ "already carry on this base. The cost: NeoForge's connection-aware codecs read that type off "
+							+ "the buffer (IngredientCodecs, ByteBufCodecs' HolderSet codec, NeoForgeStreamCodecs"
+							+ ".connectionAware), so on these play buffers they write and read vanilla's wire format — a "
+							+ "custom ingredient goes as its item list. Two Forbric ends with creativecore agree, both "
+							+ "sides typing OTHER as the inbound buffers already did; NetworkRegistry and NetworkFilters "
+							+ "read the type off the connection, not the buffer, and are unchanged"));
+
+	/** The reviewed row for a widened call, or null. */
+	static Redirectable redirectable(String member) {
+		for (Redirectable row : REDIRECTABLE) if (row.member().equals(member)) return row;
+		return null;
+	}
+
+	static boolean redirectEnabled() {
+		return enabled() && !"off".equalsIgnoreCase(System.getProperty(REDIRECT_PROPERTY, "on"));
 	}
 
 	/** Whether an injector of this kind ignores the arguments of the call or construction it anchors on. */
@@ -261,13 +327,68 @@ public final class MixinAtWidenedCall {
 		if (declared.isEmpty()) return 0;
 
 		int widened = 0;
-		for (MethodNode method : mixin.methods) {
+		List<MethodNode> wrappers = new ArrayList<>();
+		for (MethodNode method : new ArrayList<>(mixin.methods)) {
 			for (AnnotationNode injector : annotationsOf(method)) {
 				List<MethodNode> bodies = movable(method, injector, declared);
-				if (bodies != null) widened += widenOne(mixin.name, method, injector, injector, bodies);
+				if (bodies == null) continue;
+				List<String[]> moves = new ArrayList<>();
+				widened += widenOne(mixin.name, method, injector, injector, bodies, moves);
+				// A redirect's handler mirrors the call, so the call it now names needs a handler of that shape.
+				if (REDIRECT.equals(injector.desc) && moves.size() == 1) wrappers.add(redirectWrapper(mixin, method, injector,
+						moves.getFirst()[0], moves.getFirst()[1]));
 			}
 		}
+		mixin.methods.addAll(wrappers);
 		return widened;
+	}
+
+	/**
+	 * The handler renamed aside, and in its place a method of its name, access and injector annotation shaped for the
+	 * widened static call: it takes the call's arguments, then the target arguments the handler captured, and hands the
+	 * original the named call's arguments and those captures.
+	 */
+	private static MethodNode redirectWrapper(ClassNode mixin, MethodNode handler, AnnotationNode injector, String named,
+			String moved) {
+		Type[] own = Type.getArgumentTypes(parse(named).descriptor());
+		Type[] wide = Type.getArgumentTypes(parse(moved).descriptor());
+		Type[] params = Type.getArgumentTypes(handler.desc);
+		Type[] outerParams = new Type[wide.length + params.length - own.length];
+		System.arraycopy(wide, 0, outerParams, 0, wide.length);
+		System.arraycopy(params, own.length, outerParams, wide.length, params.length - own.length);
+		Type returned = Type.getReturnType(handler.desc);
+		boolean isStatic = (handler.access & Opcodes.ACC_STATIC) != 0;
+		MethodNode outer = new MethodNode(Opcodes.ASM9, handler.access, handler.name,
+				Type.getMethodDescriptor(returned, outerParams), null,
+				handler.exceptions == null ? null : handler.exceptions.toArray(new String[0]));
+		boolean visible = handler.visibleAnnotations != null && handler.visibleAnnotations.remove(injector);
+		if (!visible && handler.invisibleAnnotations != null) handler.invisibleAnnotations.remove(injector);
+		if (visible) outer.visibleAnnotations = new ArrayList<>(List.of(injector));
+		else outer.invisibleAnnotations = new ArrayList<>(List.of(injector));
+
+		int[] slots = new int[outerParams.length + 1];
+		int slot = isStatic ? 0 : 1;
+		for (int i = 0; i < outerParams.length; i++) {
+			slots[i] = slot;
+			slot += outerParams[i].getSize();
+		}
+		int stack = 0;
+		if (!isStatic) {
+			outer.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+			stack++;
+		}
+		for (int i = 0; i < outerParams.length; i++) {
+			if (i >= own.length && i < wide.length) continue;    // the carrier's appended arguments
+			outer.instructions.add(new VarInsnNode(outerParams[i].getOpcode(Opcodes.ILOAD), slots[i]));
+			stack += outerParams[i].getSize();
+		}
+		String aside = MixinHandlerShim.asideName(mixin.name, handler.name, REDIRECT_SUFFIX);
+		outer.instructions.add(MixinHandlerShim.callOwn(mixin, isStatic, aside, handler.desc));
+		outer.instructions.add(new InsnNode(returned.getOpcode(Opcodes.IRETURN)));
+		outer.maxLocals = slot;
+		outer.maxStack = Math.max(stack, returned.getSize());
+		handler.name = aside;
+		return outer;
 	}
 
 	/**
@@ -289,7 +410,8 @@ public final class MixinAtWidenedCall {
 	 */
 	private static List<MethodNode> movable(MethodNode handler, AnnotationNode injector, List<MethodNode> declared) {
 		if (!annotationsOf(handler).contains(injector) || inGroup(handler)) return null;
-		if (!ARGUMENT_BLIND.contains(injector.desc) && !MODIFY_ARG.equals(injector.desc)) return null;
+		if (!ARGUMENT_BLIND.contains(injector.desc) && !MODIFY_ARG.equals(injector.desc)
+				&& !(REDIRECT.equals(injector.desc) && redirectEnabled())) return null;
 		List<MethodNode> bodies = selected(injector, declared);
 		return bodies.isEmpty() ? null : bodies;
 	}
@@ -319,10 +441,39 @@ public final class MixinAtWidenedCall {
 		boolean blind = ARGUMENT_BLIND.contains(injector.desc);
 		if (CALL_SITES.contains(atValue)) {
 			String moved = widenedAcross(bodies, target);
-			return moved != null && (blind || singleArgumentAtFixedIndex(handler, injector, target)) ? moved : null;
+			if (moved == null) return null;
+			if (REDIRECT.equals(injector.desc)) {
+				return "INVOKE".equals(atValue) && staticRedirect(handler, bodies, target, moved) ? moved : null;
+			}
+			return blind || singleArgumentAtFixedIndex(handler, injector, target) ? moved : null;
 		}
 		if ("NEW".equals(atValue) && blind && target.startsWith("(")) return widenedNewAcross(bodies, target);
 		return null;
+	}
+
+	/**
+	 * A redirect of {@code named} the wrapper can serve at {@code moved}: a {@link #REDIRECTABLE} row, every widened call in
+	 * the bodies an {@code invokestatic}, and a handler that takes the named call's arguments first and returns its type.
+	 */
+	private static boolean staticRedirect(MethodNode handler, List<MethodNode> bodies, String named, String moved) {
+		Member call = parse(moved), own = parse(named);
+		if (call == null || own == null || redirectable(moved) == null) return false;
+		int calls = 0;
+		for (MethodNode body : bodies) {
+			if (body.instructions == null) continue;
+			for (AbstractInsnNode insn : body.instructions) {
+				if (!(insn instanceof MethodInsnNode site) || !site.owner.equals(call.owner()) || !site.name.equals(call.name())
+						|| !site.desc.equals(call.descriptor())) continue;
+				if (site.getOpcode() != Opcodes.INVOKESTATIC) return false;
+				calls++;
+			}
+		}
+		if (calls == 0 || !Type.getReturnType(handler.desc).equals(Type.getReturnType(own.descriptor()))) return false;
+		Type[] wanted = Type.getArgumentTypes(own.descriptor());
+		Type[] params = Type.getArgumentTypes(handler.desc);
+		if (params.length < wanted.length) return false;
+		for (int i = 0; i < wanted.length; i++) if (!params[i].equals(wanted[i])) return false;
+		return true;
 	}
 
 	/** A fixed prefix argument keeps its index/type when the carrier appends arguments. A full-arguments
@@ -369,7 +520,7 @@ public final class MixinAtWidenedCall {
 
 	/** Walks the injector's values — {@code @At} sits nested inside it, sometimes in a list. */
 	private static int widenOne(String mixinName, MethodNode handler, AnnotationNode injector, AnnotationNode annotation,
-			List<MethodNode> bodies) {
+			List<MethodNode> bodies, List<String[]> moves) {
 		if (annotation == null || annotation.values == null) return 0;
 
 		int widened = 0;
@@ -390,9 +541,18 @@ public final class MixinAtWidenedCall {
 				if (moved != null) {
 					annotation.values.set(i + 1, moved);
 					widened++;
-					ForbricLog.info("[Forbric/Mixin] %s: injection point %s names the vanilla signature, and nothing "
-							+ "in the method it selects calls that — pointed at %s, the same call with the "
-							+ "parameters the surviving carrier appended", mixinName.replace('/', '.'), target, moved);
+					moves.add(new String[] {target, moved});
+					if (REDIRECT.equals(injector.desc)) {
+						ForbricLog.info("[Forbric/Mixin] %s: @Redirect %s names the vanilla signature of a static call, and "
+								+ "nothing in the method it selects calls that — pointed at %s, the same call with the "
+								+ "parameters the surviving carrier appended; %s takes them and hands its original the "
+								+ "arguments it was written for, replacing the call as it replaces vanilla's",
+								mixinName.replace('/', '.'), target, moved, handler.name);
+					} else {
+						ForbricLog.info("[Forbric/Mixin] %s: injection point %s names the vanilla signature, and nothing "
+								+ "in the method it selects calls that — pointed at %s, the same call with the "
+								+ "parameters the surviving carrier appended", mixinName.replace('/', '.'), target, moved);
+					}
 				}
 			} else if (isAt && "target".equals(name) && value instanceof String target && "NEW".equals(atValue)) {
 				String moved = decide(handler, injector, bodies, atValue, target);
@@ -404,10 +564,10 @@ public final class MixinAtWidenedCall {
 							+ "arguments the surviving carrier appended", mixinName.replace('/', '.'), target, moved);
 				}
 			} else if (value instanceof AnnotationNode nested) {
-				widened += widenOne(mixinName, handler, injector, nested, bodies);
+				widened += widenOne(mixinName, handler, injector, nested, bodies, moves);
 			} else if (value instanceof List<?> list) {
 				for (Object item : new ArrayList<>(list)) {
-					if (item instanceof AnnotationNode nested) widened += widenOne(mixinName, handler, injector, nested, bodies);
+					if (item instanceof AnnotationNode nested) widened += widenOne(mixinName, handler, injector, nested, bodies, moves);
 				}
 			}
 		}

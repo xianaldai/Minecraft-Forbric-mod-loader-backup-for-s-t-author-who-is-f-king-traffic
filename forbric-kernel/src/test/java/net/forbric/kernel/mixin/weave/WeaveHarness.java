@@ -56,6 +56,15 @@ final class WeaveHarness {
 			return output.contains(line);
 		}
 
+		/**
+		 * Whether the child printed {@code line} as a whole line. {@link #printed} matches any substring, so a probe result
+		 * that only gains a suffix — a guard removed, and {@code widened=look:golem} becomes {@code widened=look:golem,fix}
+		 * — still matches it; a predicate that must tell those apart uses this.
+		 */
+		boolean printedLine(String line) {
+			return output.lines().anyMatch(printedLine -> printedLine.stripTrailing().equals(line));
+		}
+
 		/** The woven bytes of {@code internalName}, exactly as ForbricClassLoader defined them. */
 		byte[] defined(String internalName) throws IOException {
 			Path evidence = dir.resolve("defined");

@@ -119,7 +119,7 @@ public final class KernelFabricEcosystem {
 	 */
 	public static List<Path> discover(EnvType envType, Path gameDir, String gameVersion, String[] launchArgs,
 			DuplicateModArbiter.Decision dupes) {
-		return build(scan(envType, gameDir, dupes), envType, gameDir, gameVersion, launchArgs, dupes);
+		return build(scan(envType, gameDir, dupes, gameVersion), envType, gameDir, gameVersion, launchArgs, dupes);
 	}
 
 	/**
@@ -132,9 +132,26 @@ public final class KernelFabricEcosystem {
 	 * by whichever walk happened to run first, which is the ordering accident this split exists to remove.
 	 */
 	public static FabricModDiscovery scan(EnvType envType, Path gameDir, DuplicateModArbiter.Decision dupes) {
+		return scan(envType, gameDir, dupes, null);
+	}
+
+	/** {@code gameVersion}: what a nested mod's {@code minecraft} requirement is held against ({@code null}: not judged). */
+	public static FabricModDiscovery scan(EnvType envType, Path gameDir, DuplicateModArbiter.Decision dupes,
+			String gameVersion) {
+		return scan(envType, gameDir, dupes, gameVersion, List.of());
+	}
+
+	/**
+	 * As above; {@code requiredElsewhere} is what mods this discovery does not read hard-require, for the no-plan
+	 * walk (see {@link FabricModDiscovery#setRequiredElsewhere}).
+	 */
+	public static FabricModDiscovery scan(EnvType envType, Path gameDir, DuplicateModArbiter.Decision dupes,
+			String gameVersion, List<net.forbric.kernel.fabric.NestedFabricRequirements.Requirement> requiredElsewhere) {
 		Path cacheDir = gameDir.resolve(".forbric-kernel").resolve("jij");
 		FabricModDiscovery discovery = new FabricModDiscovery(envType, cacheDir);
 		discovery.setSkip(dupes::suppressed);
+		discovery.setPlatform(net.forbric.kernel.fabric.NestedFabricRequirements.Platform.running(gameVersion));
+		discovery.setRequiredElsewhere(requiredElsewhere);
 		discovery.discover(gameDir.resolve("mods"));
 		return discovery;
 	}

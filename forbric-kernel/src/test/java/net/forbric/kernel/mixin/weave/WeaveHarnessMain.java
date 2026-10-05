@@ -11,7 +11,10 @@ import java.util.List;
 import net.fabricmc.api.EnvType;
 import net.forbric.api.CompatibilityFinding;
 import net.forbric.api.CompatibilityFindings;
+import net.forbric.api.DiscoveredMod;
 import net.forbric.api.Ecosystem;
+import net.forbric.api.ModPresence;
+import net.forbric.api.UnifiedDependency;
 import net.forbric.kernel.classloading.ForbricClassLoader;
 import net.forbric.kernel.mixin.KernelMixinBootstrap;
 import net.forbric.kernel.mixin.MixinConfigOwners;
@@ -21,11 +24,11 @@ import net.forbric.kernel.mixin.MixinConfigOwners;
  *
  * <p>Everything a production boot does to a guest mixin happens here, through the same entry points and in KernelBoot's
  * order: the named pre-Mixin transformers go on the loader as a {@code TransformChain} ({@link KernelBootChain}), the
- * config owners are published, and {@link KernelMixinBootstrap#init} registers the configs Fabric first with the Forge
- * family appended. {@code ForbricMixinService} then serves the fixture jar's bytes through that chain and its own
- * adapters, real sponge-mixin weaves, the post-Mixin stages run, and {@code FinalMixinApplications} audits the woven
- * class as {@link ForbricClassLoader} defines it. Then the probe method is CALLED, so what the test asserts is what
- * the woven code did, not what the mixin said it would do.
+ * config owners and their mods' manifests are published, and {@link KernelMixinBootstrap#init} registers the configs
+ * Fabric first with the Forge family appended. {@code ForbricMixinService} then serves the fixture jar's bytes through
+ * that chain and its own adapters, real sponge-mixin weaves, the post-Mixin stages run, and
+ * {@code FinalMixinApplications} audits the woven class as {@link ForbricClassLoader} defines it. Then the probe method
+ * is CALLED, so what the test asserts is what the woven code did, not what the mixin said it would do.
  *
  * <p>A child JVM because the bootstrap is one-shot per JVM and leaves Mixin's and the kernel's global state behind.
  *
@@ -68,6 +71,7 @@ public final class WeaveHarnessMain {
 		List<String> configs = new ArrayList<>();
 		for (MixinConfigOwners.Owned one : ordered) if (!configs.contains(one.config())) configs.add(one.config());
 		MixinConfigOwners.publish(ordered);
+		publishPresence(ordered);
 		System.out.println(REGISTERED + String.join(", ", configs));
 		if ("off".equals(System.getProperty("forbric.weaveHarness.bootstrap"))) {
 			System.out.println("[WeaveHarness] bootstrap skipped (control run)");
@@ -86,6 +90,8 @@ public final class WeaveHarnessMain {
 		}
 		System.out.flush();
 
+		// As KernelLoadReport.writeTo does before it reads them: a row held back for a config plugin is settled now.
+		net.forbric.kernel.mixin.PluginDeclinedMixins.resolve();
 		StringBuilder findings = new StringBuilder();
 		for (CompatibilityFinding f : CompatibilityFindings.all()) {
 			findings.append(String.join("\t", f.id(), f.modId(), f.confidence().name(), String.valueOf(f.required()),
@@ -95,6 +101,30 @@ public final class WeaveHarnessMain {
 		PrintStream done = System.out;
 		done.println("[WeaveHarness] findings written: " + CompatibilityFindings.all().size());
 	}
+
+	/**
+	 * KernelBoot publishes every loaded mod's manifest before Mixin parses a config; here each config's owner is such a
+	 * mod, declaring what {@value #REQUIRES} says ({@code id=constraint,...}, mandatory) and nothing else.
+	 */
+	private static void publishPresence(List<MixinConfigOwners.Owned> owners) {
+		List<UnifiedDependency> requires = new ArrayList<>();
+		for (String one : System.getProperty(REQUIRES, "").split(",")) {
+			int eq = one.indexOf('=');
+			if (eq > 0) requires.add(new UnifiedDependency(one.substring(0, eq).strip(), one.substring(eq + 1).strip(), true));
+		}
+		List<DiscoveredMod> fabric = new ArrayList<>();
+		List<DiscoveredMod> forgeFamily = new ArrayList<>();
+		for (MixinConfigOwners.Owned one : owners) {
+			DiscoveredMod mod = new DiscoveredMod(one.ecosystem(), one.modId(), "1.0", one.modId(), requires,
+					List.of(one.config()), null, "fixture");
+			(one.ecosystem() == Ecosystem.FABRIC ? fabric : forgeFamily).add(mod);
+		}
+		ModPresence.publishFabric(fabric);
+		ModPresence.publishForgeFamily(forgeFamily);
+	}
+
+	/** What every fixture mod's manifest requires: {@code id=constraint,...}. */
+	static final String REQUIRES = "forbric.weaveHarness.requires";
 
 	private static String flat(String text) {
 		return text.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ');

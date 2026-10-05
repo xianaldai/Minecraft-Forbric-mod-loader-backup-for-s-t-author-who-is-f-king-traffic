@@ -84,7 +84,7 @@ check "positive: Fabric's providers drawn from NeoForge's appenders" "Tooltips\]
 check_absent "positive: fabric-item-api's ItemStackMixin is not retargeted" 'retargeted guest mixin fabric-item-api-v1.*ItemStackMixin' "$RESULTS/positive.log"
 check_absent "positive: no provider threw" 'a Fabric component tooltip provider threw' "$RESULTS/positive.log"
 
-step "2. bridge-off: the same server with fabric-item-api's injectors left where the retarget put them"
+step "2. bridge-off: the same server with fabric-item-api's injectors left in place, where they bind nowhere"
 run_server bridge-off continue "-Dforbric.fabricTooltipBridge=off"
 judge bridge-off "failed == $FABRIC" "exactly the Fabric cases fail; vanilla, NeoForge and the controls hold"
 check_absent "bridge-off: nothing pruned from ItemStackMixin" 'GuestInjectorPruner\] pruned .* from net.fabricmc.fabric.mixin.item.ItemStackMixin' "$RESULTS/bridge-off.log"

@@ -16,7 +16,7 @@ import org.objectweb.asm.tree.VarInsnNode;
  * A MinecraftForge-wrapped registry tells fabric-registry-sync's listeners about what it registers, as a plain registry does.
  *
  * <p>fabric-registry-sync fires {@code RegistryEntryAddedCallback} from an injection at the return of
- * {@code MappedRegistry.register}. On the merged game seventeen builtin registries — block, item, menu, … — are
+ * {@code MappedRegistry.register}. On the merged game 27 builtin registries — block, item, menu, … — are
  * MinecraftForge {@code NamespacedWrapper}s, whose {@code register} hands the entry to their {@code ForgeRegistry} and
  * never reaches that method, so no listener ever heard of anything registered into them. fabric-menu-api records the
  * stream codec of every {@code ExtendedMenuType} this way: its main entrypoint walks what the menu registry already

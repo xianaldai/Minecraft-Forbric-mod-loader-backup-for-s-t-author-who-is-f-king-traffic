@@ -149,6 +149,26 @@ class VersionPredicateTest {
 		assertFalse(VersionPredicate.matches(">=1.0", "1.0-beta"));
 	}
 
+	/**
+	 * A trailing dash is an empty pre-release, the lowest there is. Every answer here was read off fabric-loader
+	 * 0.19.5's own {@code VersionPredicate.parse(p).test(Version.parse(v))}. {@code >26.2-} is how the whitenoise
+	 * nested in survivalistessentials asks for "26.2 or newer, pre-releases included"; read as {@code >26.2} it turned
+	 * the 26.2 it was built for away.
+	 */
+	@Test
+	void aTrailingDashIsTheLowestPreReleaseAsFabricReadsIt() {
+		assertTrue(VersionPredicate.matchesStrictly(">26.2-", "26.2"));
+		assertTrue(VersionPredicate.matchesStrictly(">26.2-", "26.2-beta.1"));
+		assertTrue(VersionPredicate.matchesStrictly(">=26.2-", "26.2-alpha"));
+		assertTrue(VersionPredicate.matchesStrictly("~26.2-", "26.2"));
+		assertTrue(VersionPredicate.matchesStrictly("<26.3-", "26.2"));
+		assertFalse(VersionPredicate.matchesStrictly("<=26.2-", "26.2"));
+		assertFalse(VersionPredicate.matchesStrictly("=26.2-", "26.2"));
+		assertFalse(VersionPredicate.matchesStrictly("26.2-", "26.2"));
+		assertTrue(VersionPredicate.compare("26.2-alpha", "26.2-") > 0, "below every named pre-release");
+		assertTrue(VersionPredicate.compare("26.2.0", "26.2-") > 0);
+	}
+
 	@Test
 	void trailingZerosArePaddingAndAQualifierPrecedesTheBareVersion() {
 		assertEquals(0, VersionPredicate.compare("1.0.0", "1.0"));

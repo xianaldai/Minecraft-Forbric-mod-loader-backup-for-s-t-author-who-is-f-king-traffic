@@ -47,6 +47,14 @@ FIXTURES = (
     'forbric-kernel/run/client-kernel',
     # The third-party mod sets the bytecode tests read (sweep90, carpet, create-fly, ...).
     'forbric-kernel/build/compat-inputs',
+    # Two more the tests read by path (GuiItemCaptureMixinAdapterTest, KernelClientHookMixinAnchorsTest,
+    # CompatPluginPlatformInjectorTest). Without them the first nightly's strict run failed those tests as skipped.
+    'forbric-kernel/build/sweep80-mac',
+    'forbric-kernel/build/sweep100-mac-network',
+    # The fabric-loader substrate ./bootstrap.sh checks out (gitignored). forbric-loader compiles its sources, so the
+    # installer build (gate-m17) and gate-m0's bundled-baseline check cannot run without it; the first nightly
+    # reported both as failures of the code under test.
+    'fabric-loader',
     # tools/dev.py's state: the pinned fabric-api and energy jars and the natives.
     'forbric-kernel/.dev',
 )

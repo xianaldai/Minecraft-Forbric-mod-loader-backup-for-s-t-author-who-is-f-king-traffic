@@ -355,6 +355,16 @@ public final class MixinHandlerShim {
 	}
 
 	/**
+	 * The name a rewrite moves a handler's own body to, under a wrapper of the handler's name: the handler's name, the
+	 * rule's suffix, and a mark of the mixin class. Mixin merges that body into the target as a plain method, by name; two
+	 * mixins on one target whose handlers share a name would otherwise merge one body ("Method overwrite conflict …
+	 * Skipping method") and each wrapper would call the one that won.
+	 */
+	static String asideName(String mixinName, String handlerName, String suffix) {
+		return handlerName + suffix + "$" + Integer.toHexString(mixinName.hashCode());
+	}
+
+	/**
 	 * A generated method's call to one of its own mixin's methods. A mixin onto an interface is itself an interface,
 	 * and the JVM links a call to an interface's method only through an InterfaceMethodref — a plain Methodref
 	 * verifies, defines and then throws IncompatibleClassChangeError the first time it runs (fusion's sprite hook onto

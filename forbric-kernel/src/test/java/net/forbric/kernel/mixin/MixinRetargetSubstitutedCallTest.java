@@ -125,7 +125,7 @@ class MixinRetargetSubstitutedCallTest {
 		assertEquals(2, MixinRetarget.applyRemembered(MIXIN, node));
 
 		MethodNode outer = method(node, "deserializeModel");
-		MethodNode inner = method(node, "deserializeModel" + MixinRetarget.GUARDED_SUFFIX);
+		MethodNode inner = method(node, MixinHandlerShim.asideName(MIXIN, "deserializeModel", MixinRetarget.GUARDED_SUFFIX));
 		assertEquals(CAPTURING, outer.desc);
 		assertEquals(CAPTURING, inner.desc);
 		assertNull(MixinFit.injectorOf(inner), "the body carries no injector: Mixin merges it as a plain method");
@@ -250,7 +250,7 @@ class MixinRetargetSubstitutedCallTest {
 		AnnotationNode inject = MixinFit.injectorOf(outer);
 		assertEquals(PARSE, MixinFit.value(MixinFit.atNodes(inject).get(0), "target"));
 		assertEquals("CAPTURE_FAILSOFT", MixinFit.asString(MixinFit.value(inject, "locals")));
-		assertNull(MixinFit.injectorOf(method(served, "deserializeModel" + MixinRetarget.GUARDED_SUFFIX)));
+		assertNull(MixinFit.injectorOf(method(served, MixinHandlerShim.asideName(served.name, "deserializeModel", MixinRetarget.GUARDED_SUFFIX))));
 		method(served, "captureBlockItemSprites" + MixinHandlerShim.INNER_SUFFIX);
 		new Analyzer<>(new BasicVerifier()).analyze(served.name, outer);
 		MethodNode live = manager.methods.stream().filter(m -> LAMBDA.equals(m.name + m.desc)).findFirst().orElseThrow();

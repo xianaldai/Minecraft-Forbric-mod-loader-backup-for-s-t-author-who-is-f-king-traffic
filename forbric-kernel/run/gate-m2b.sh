@@ -141,9 +141,13 @@ SUPPRESSED=$(grep -aoE 'suppressed mixin .*' "$LOG" | sort -u)
 [ -n "$SUPPRESSED" ] && echo "$SUPPRESSED" | sed 's/^/[kernel]   /'
 # RegistryDataLoaderMixin is restored by FabricRegistryLoaderMixinAdapter; BootstrapMixin/MainMixin are
 # restored by FabricRegistryInitializationMixinAdapter. ForbricMixinService.suppressedMixinsFor removes those
-# pins only while the adapters are enabled (covered by ForbricMixinServiceTest). Loot remains kernel-owned.
+# pins only while the adapters are enabled (covered by ForbricMixinServiceTest). Loot remains kernel-owned, and so
+# do resource conditions: fabric-resource-conditions-api's SimpleJsonResourceReloadListenerMixin binds a lambda its
+# handler was not written for, which Mixin rejects outright, and KernelFabricConditions judges the conditions at
+# ConditionalOps' funnel (SupersededMixins), so it is left out whole.
 assert_eq "suppressed mixins are the documented set" \
-  "suppressed mixin ReloadableServerRegistriesMixin from fabric-loot-api-v3 (fabric-loot-api-v3.mixins.json)" \
+  "suppressed mixin ReloadableServerRegistriesMixin from fabric-loot-api-v3 (fabric-loot-api-v3.mixins.json)
+suppressed mixin SimpleJsonResourceReloadListenerMixin from fabric-resource-conditions-api-v1 (fabric-resource-conditions-api-v1.mixins.json)" \
   "$SUPPRESSED"
 # DISABLED_CONFIGS ships EMPTY on purpose (a whole-config entry hides which single mixin is at fault) and this
 # gate passes no -Dforbric.disableMixinConfigs, so zero is the only correct answer and a count was never the

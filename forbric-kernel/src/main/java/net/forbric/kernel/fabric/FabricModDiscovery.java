@@ -22,7 +22,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -40,7 +42,7 @@ import net.forbric.kernel.util.ForbricLog;
  *
  * <p>Mods whose {@code environment} excludes the running side are skipped entirely (Fabric's own behaviour) —
  * their jar never joins the classpath, so a client-only fabric-api module cannot be linked against on a
- * dedicated server.
+ * dedicated server. So is a nested mod Fabric Loader could not load here ({@link NestedFabricRequirements}).
  */
 public final class FabricModDiscovery {
 	public static final String MANIFEST = "fabric.mod.json";
@@ -57,6 +59,20 @@ public final class FabricModDiscovery {
 	 */
 	private java.util.function.Predicate<Path> skip = jar -> false;
 
+	/** What a nested mod's {@code minecraft}/{@code java} requirement is held against; the game is unknown until set. */
+	private NestedFabricRequirements.Platform platform = NestedFabricRequirements.Platform.running(null);
+
+	/**
+	 * Hard requirements of jars this discovery does not read (the Forge-family mods and the Fabric jars their JarJar
+	 * carries), so that a nested Fabric mod one of them needs is kept back from Fabric's rule as it would be for a
+	 * Fabric dependent.
+	 */
+	private List<NestedFabricRequirements.Requirement> requiredElsewhere = List.of();
+
+	/** One jar the walk read, before any container exists; {@code parent} indexes the list ({@code -1}: a root). */
+	private record Found(Path jar, KernelModMetadata metadata, int parent) {
+	}
+
 	public FabricModDiscovery(EnvType envType, Path cacheDir) {
 		this.envType = envType;
 		this.cacheDir = cacheDir;
@@ -65,6 +81,16 @@ public final class FabricModDiscovery {
 	/** Sets the top-level skip test (see {@link #skip}). */
 	public void setSkip(java.util.function.Predicate<Path> skip) {
 		if (skip != null) this.skip = skip;
+	}
+
+	/** Sets the platform nested mods are judged against (see {@link #platform}). */
+	public void setPlatform(NestedFabricRequirements.Platform platform) {
+		if (platform != null) this.platform = platform;
+	}
+
+	/** Sets {@link #requiredElsewhere}. */
+	public void setRequiredElsewhere(List<NestedFabricRequirements.Requirement> requirements) {
+		this.requiredElsewhere = requirements == null ? List.of() : List.copyOf(requirements);
 	}
 
 	/** Every discovered mod, parents before their nested children. */
@@ -98,13 +124,48 @@ public final class FabricModDiscovery {
 			return;
 		}
 
+		List<Found> found = new ArrayList<>();
+		Map<Integer, String> leftOut = new LinkedHashMap<>();
 		for (Path jar : jars) {
 			if (skip.test(jar)) {
 				ForbricLog.debug("[Forbric/Fabric] skipping %s — superseded by another jar's copy of the same mod",
 						jar.getFileName());
 				continue;
 			}
-			discoverJar(jar, null);
+			discoverJar(jar, -1, found, leftOut);
+		}
+
+		// Read everything first, then register: whether a nested mod can load is only known once every jar that
+		// could provide its dependencies, or depend on it, has been read (NestedFabricRequirements.resolve).
+		List<NestedFabricRequirements.Candidate<Integer>> candidates = new ArrayList<>();
+		for (int i = 0; i < found.size(); i++) {
+			Found mod = found.get(i);
+			Map<String, String> provides = new LinkedHashMap<>();
+			String version = mod.metadata().getVersion() == null ? "0" : mod.metadata().getVersion().getFriendlyString();
+			provides.put(net.forbric.api.ModPresence.spellingKey(mod.metadata().getId()), version);
+			for (String alias : mod.metadata().getProvides()) provides.putIfAbsent(net.forbric.api.ModPresence.spellingKey(alias), version);
+			boolean root = mod.parent() < 0;
+			candidates.add(new NestedFabricRequirements.Candidate<>(i, mod.metadata().getId(), root, !root, provides,
+					root ? List.of() : List.of(mod.parent()), mod.metadata(), NestedFabricRequirements.requirementsOf(mod.metadata())));
+		}
+		var resolution = NestedFabricRequirements.resolve(candidates, leftOut, requiredElsewhere);
+
+		KernelModContainer[] built = new KernelModContainer[found.size()];
+		for (int i = 0; i < found.size(); i++) {
+			Found mod = found.get(i);
+			Object parentJar = mod.parent() < 0 ? null : found.get(mod.parent()).jar().getFileName();
+			if (resolution.leftOut().containsKey(i)) {
+				NestedFabricRequirements.log(mod.metadata(), parentJar, resolution.leftOut().get(i));
+				continue;
+			}
+			if (resolution.keptBack().containsKey(i)) {
+				NestedFabricRequirements.logKeptBack(mod.metadata(), parentJar, resolution.keptBack().get(i));
+			}
+			KernelModContainer parent = mod.parent() < 0 ? null : built[mod.parent()];
+			if (mod.parent() >= 0 && parent == null) continue;
+			built[i] = new KernelModContainer(mod.metadata(), mod.jar(), parent);
+			containers.add(built[i]);
+			classpathJars.add(mod.jar());
 		}
 	}
 
@@ -156,8 +217,11 @@ public final class FabricModDiscovery {
 				message == null || message.isBlank() ? error.getClass().getSimpleName() : message.strip()));
 	}
 
-	/** Reads one jar; if it is a Fabric mod, registers it and recurses into its nested jars. */
-	private void discoverJar(Path jar, KernelModContainer parent) {
+	/**
+	 * Reads one jar; if it is a Fabric mod, records it and recurses into its nested jars. A nested mod Fabric Loader
+	 * could not load is recorded as left out; its own nested jars are still read, since a mod that loads may need one.
+	 */
+	private void discoverJar(Path jar, int parent, List<Found> found, Map<Integer, String> leftOut) {
 		KernelModMetadata metadata;
 
 		try (JarFile jarFile = new JarFile(jar.toFile())) {
@@ -179,13 +243,14 @@ public final class FabricModDiscovery {
 			return;
 		}
 
-		KernelModContainer container = new KernelModContainer(metadata, jar, parent);
-		containers.add(container);
-		classpathJars.add(jar);
+		int index = found.size();
+		found.add(new Found(jar, metadata, parent));
+		String unmet = parent < 0 ? null : NestedFabricRequirements.unmet(metadata, platform);
+		if (unmet != null) leftOut.put(index, unmet);
 
 		for (String nested : metadata.getNestedJars()) {
 			Path extracted = extract(jar, nested, metadata.getId());
-			if (extracted != null) discoverJar(extracted, container);
+			if (extracted != null) discoverJar(extracted, index, found, leftOut);
 		}
 	}
 

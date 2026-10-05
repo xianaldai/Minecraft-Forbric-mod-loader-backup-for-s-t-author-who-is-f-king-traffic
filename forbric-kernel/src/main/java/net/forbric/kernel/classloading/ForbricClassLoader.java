@@ -211,6 +211,14 @@ public final class ForbricClassLoader extends URLClassLoader {
 
 		String path = name.replace('.', '/') + ".class";
 		URL resource = findResource(path);
+		if (resource == null) {
+			// The same order tryDefineGameClass defines in: offered bytes, verbatim, before a superseded jar. Without
+			// this Mixin found NO class for an offered name (a class-tweaker enum extension, the Mod Menu API
+			// stand-in) while the loader defined one, so a mixin whose target's hierarchy runs through it could not
+			// be resolved here although it resolves on the instance where a jar carries the same class.
+			byte[] generated = generatedClasses.get(name);
+			if (generated != null) return generated;
+		}
 		// Same last-resort as tryDefineGameClass, or Mixin would inspect different bytes than the ones defined.
 		if (resource == null) resource = rescueResource(path);
 

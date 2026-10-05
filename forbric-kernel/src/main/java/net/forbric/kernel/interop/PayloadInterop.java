@@ -227,7 +227,7 @@ public final class PayloadInterop {
 	 * NullPointerException: holder is null" out of {@code MappedRegistry.registerIdMapping}, which NeoForge's handler
 	 * reports without naming a registry. The first run of it ruled out aliases and missing entries (every remote
 	 * name was a real local key) and the second — the class and the {@code byKey} count — found the cause: the
-	 * seventeen registries that are MinecraftForge {@code NamespacedWrapper}s answer {@code containsKey} from their
+	 * registries that are MinecraftForge {@code NamespacedWrapper}s answer {@code containsKey} from their
 	 * delegate while their inherited {@code byKey} holds zero entries. See the kernel's RegistrySyncParityInjector.
 	 */
 	private static void describeFrozenRegistrySnapshot(Object payload) {
@@ -674,17 +674,18 @@ public final class PayloadInterop {
 	 * Whether NeoForge itself registered a handler for this PLAY-phase payload.
 	 *
 	 * <p>Called from the rewritten {@code ServerGamePacketListenerImpl.handleCustomPayload} (see
-	 * {@code CommonNetworkInteropInjector.letNeoForgePayloadsThrough}), which falls through to NeoForge's
-	 * dispatcher when MinecraftForge declines a payload. Falling through UNCONDITIONALLY is wrong and was
-	 * measured to be wrong: NeoForge's dispatcher is strict about what it does not recognise, and a Fabric mod's
-	 * play payload sent through the same listener ended the connection with
-	 * {@code IllegalStateException: Unknown addon} — a client that used to join now could not stay in a world.
+	 * {@code CommonNetworkInteropInjector.letNeoForgePayloadsThrough}), which hands a payload MinecraftForge declined
+	 * to NeoForge's {@code NetworkRegistry.handleModdedPayload}. Handing over UNCONDITIONALLY would be wrong:
+	 * NeoForge's dispatcher is strict about what it does not recognise and disconnects on a channel it never
+	 * registered, where vanilla's own play override simply drops a payload nobody took.
 	 *
 	 * <p>So the fall-through is gated on the one question that makes it safe: is this a payload NeoForge knows?
 	 * If it is, NeoForge's dispatcher is exactly where it should go, and that is the population that was being
-	 * dropped. If it is not — a Fabric payload, an unregistered id, anything at all in doubt — the answer is
-	 * false and the method returns as it did before. Fail-CLOSED on purpose: the old behaviour silently dropped a
-	 * NeoForge mod's packet, the new failure mode disconnects the player, and those are not the same size.
+	 * dropped. If it is not — a Fabric payload NeoForge was never told about, an unregistered id, anything at all
+	 * in doubt — the answer is false and the method returns as it did before. (A Fabric payload the kernel mirrored
+	 * into NeoForge's registry answers true and lands on the no-op handler the mirror installed with it, which is
+	 * the same drop.) Fail-CLOSED on purpose: the old behaviour silently dropped a NeoForge mod's packet, the
+	 * wrong failure mode disconnects the player, and those are not the same size.
 	 *
 	 * @param payload the {@code CustomPacketPayload} the packet carried
 	 */
@@ -713,8 +714,8 @@ public final class PayloadInterop {
 					return true;
 				}
 			}
-			probe(() -> "  neo does not own " + id + " — not falling through (a Fabric payload here would end the "
-					+ "connection with \"Unknown addon\")");
+			probe(() -> "  neo does not own " + id + " — not handing it over (NeoForge's dispatcher would end the "
+					+ "connection with \"No Channel for " + id + "\")");
 			return false;
 		} catch (Throwable t) {
 			probe(() -> "  could not ask NeoForge whether it owns this payload (" + t + ") — not falling through");
@@ -910,7 +911,7 @@ public final class PayloadInterop {
 	 * {@code startConfiguration}/{@code runConfiguration} (NeoForge's bodies) never gathers. Forge's own gate stays
 	 * the gate — its handler adds nothing unless the connection was typed MODDED by the client's intention marker.
 	 *
-	 * <p>{@code SyncRegistriesTask} is dropped. The kernel already remaps the seventeen Forge-wrapped registries
+	 * <p>{@code SyncRegistriesTask} is dropped. The kernel already remaps the Forge-wrapped registries
 	 * from NeoForge's snapshot (through Forge's own {@code injectSnapshot}), and Forge's task would apply a second
 	 * snapshot over that result — a re-map of already-remapped ids, from a client half that blocks the network
 	 * thread on the render thread while it does so. Everything else Forge gathers is kept, mod-added tasks included.

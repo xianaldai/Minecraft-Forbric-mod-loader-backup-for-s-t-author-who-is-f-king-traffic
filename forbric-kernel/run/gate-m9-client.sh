@@ -639,6 +639,24 @@ check_absent "the stale 'recorded but not applied' claim is gone" \
 # now follows (gate M46 proves the formats). RED with M9_EXTRA_JVM=-Dforbric.mixinStubRebind=off.
 check "malilib's language format hook reaches the body the game calls" \
   "MixinLanguage: malilib_onLoadCustomText now targets net.minecraft.locale.Language.loadFromJson\(Ljava/io/InputStream;Ljava/util/function/BiConsumer;Ljava/util/function/BiConsumer;\)V" "$LOG"
+# malilib's onGetTooltipComponentsLast (required: defaultRequire=1) is an @Inject after addToTooltip ordinal 23 of
+# vanilla's tooltip body, and on the merged base that body is only NeoForge's renamed addDetailsToTooltipComponents,
+# which nothing calls (NeoForge draws tooltips from its appenders). R3 moves the hook there to bind, and it is reported
+# as an injector that never runs: malilib's row is marked, and the strict acceptance below still holds. Kept out of that
+# body it bound nowhere, a confirmed required loss that stopped this STRICT client. RED with
+# M9_EXTRA_JVM=-Dforbric.mixinRetarget.renameCensus.uncalled=off: this check and the strict acceptance fail.
+check "malilib's last tooltip hook binds in the renamed tooltip body, where it never runs" \
+  "retargeted guest mixin malilib.*MixinItemStack — addDetailsToTooltip\(.* → addDetailsToTooltipComponents\(.*never runs" "$LOG"
+python3 - "$RUNDIR/.forbric-kernel/compatibility-report.json" <<'PY_MALILIB'
+import json, pathlib, sys
+report = json.loads(pathlib.Path(sys.argv[1]).read_text())
+last = [row for row in report['findings'] if 'fi.dy.masa.malilib.mixin.item.MixinItemStack#onGetTooltipComponentsLast' in row['id']]
+ok = last and all(row['confidence'] == 'CONFIRMED' and not row['required'] and 'never runs' in row['detail'] for row in last)
+print('[kernel] PASS malilib\'s last tooltip hook is reported as never running, not as a required loss' if ok
+      else '[kernel] FAIL malilib\'s last tooltip hook is not reported as never running: ' + str(last))
+raise SystemExit(0 if ok else 1)
+PY_MALILIB
+[ $? -eq 0 ] || FAIL=1
 
 step "an access directive the kernel already satisfies does not mark its mod (must PASS)"
 # fabric-biome-api's widener asks for ChunkGenerator.featuresPerStep as vanilla's Supplier. MinecraftForge

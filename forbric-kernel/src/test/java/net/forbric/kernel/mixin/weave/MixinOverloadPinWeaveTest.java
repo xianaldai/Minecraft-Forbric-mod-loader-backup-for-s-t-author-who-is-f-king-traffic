@@ -33,6 +33,14 @@ import net.forbric.api.Ecosystem;
  * the render body the byte merge did not keep"); with {@code -Dforbric.mixinOverloadPin=off} it is the bare
  * InvalidInjectionException. And it decides nothing else: the woven class and what it returns are identical in
  * both runs, because a diagnosis that moved the injection would put it somewhere the mod did not ask for.
+ *
+ * <p>Both of those runs keep the mixin in front of Mixin with {@code -Dforbric.mixinFit.handlerFit=off}: by default
+ * the verdict now sees that the name binds a lambda the handler was not written for, and with that its only injector,
+ * the mixin is UNFIT and left out before Mixin reads it ({@link #theVerdictLeavesTheMixinOutBeforeMixinRejectsIt}) —
+ * no InvalidInjectionException, the same untouched render, and the loss named by the kernel. Beside an injector that
+ * binds it would be a PARTIAL whose refused injector GuestInjectorPruner takes out (MixinRefusedBindingWeaveTest), so
+ * MixinOverloadPin's diagnosis is what a failure says only where Mixin still meets such a binding: with
+ * {@code -Dforbric.guestInjectorPruner.refused=off} or the handler rule off, as here.
  */
 class MixinOverloadPinWeaveTest {
 	private static final Path SOURCES = Path.of("src/test/resources/weave/overloadpin");
@@ -51,6 +59,7 @@ class MixinOverloadPinWeaveTest {
 	private static Path fixture;
 	private static WeaveHarness.Result explained;
 	private static WeaveHarness.Result off;
+	private static WeaveHarness.Result leftOut;
 
 	@BeforeAll static void weaveBothWays() throws Exception {
 		fixture = WeaveHarness.fixture(work, "overloadpin", List.of(
@@ -59,8 +68,31 @@ class MixinOverloadPinWeaveTest {
 				SOURCES.resolve("fixture/overloadpin/MergePrunePlugin.java"),
 				SOURCES.resolve("fixture/overloadpin/mixin/SkyPassMixin.java")),
 				Map.of(CONFIG, SOURCES.resolve(CONFIG)));
-		explained = run("explained", "on");
-		off = run("overload-pin-off", "off");
+		explained = run("explained", Map.of("forbric.mixinOverloadPin", "on", "forbric.mixinFit.handlerFit", "off"));
+		off = run("overload-pin-off", Map.of("forbric.mixinOverloadPin", "off", "forbric.mixinFit.handlerFit", "off"));
+		leftOut = run("left-out", Map.of());
+	}
+
+	/**
+	 * By default the verdict judges the handler against the lambda the name binds, and the mixin's only injector misses:
+	 * UNFIT, left out before Mixin reads it, the loss the kernel's and naming why. The two runs above, with that rule off,
+	 * are the control: there Mixin rejects the descriptor.
+	 */
+	@Test void theVerdictLeavesTheMixinOutBeforeMixinRejectsIt() throws Exception {
+		assertTrue(leftOutHolds(leftOut), leftOut.describe() + "\nfindings: " + leftOut.findings());
+		assertFalse(callsHandler(leftOut.defined(TARGET)), leftOut.describe());
+		WeaveHarness.assertWovenAndVerified(leftOut, TARGET, fixture);
+		for (WeaveHarness.Result control : List.of(explained, off)) assertFalse(leftOutHolds(control), control.describe());
+	}
+
+	private static boolean leftOutHolds(WeaveHarness.Result run) {
+		List<WeaveHarness.Finding> losses = mixinLosses(run);
+		return run.printed("auto-suppressing guest mixin " + MOD + " (" + CONFIG + "):SkyPassMixin — UNFIT")
+				&& run.printed("@Inject target SkyPass.lambda$render$0 binds lambda$render$0(Ljava/lang/StringBuilder;"
+						+ "Ljava/lang/String;Ljava/lang/String;)V, which the handler was not written for")
+				&& !run.printed("InvalidInjectionException") && run.printedLine(WeaveHarnessMain.DONE + " drew sky+moon")
+				&& losses.size() == 1 && losses.get(0).confirmedRequired()
+				&& losses.get(0).detail().equals("guest mixin SkyPassMixin did not fit the merged game and was left out");
 	}
 
 	@Test void theFailureCarriesTheMergesReasonOnlyWhileTheStageIsOn() throws Exception {
@@ -143,8 +175,8 @@ class MixinOverloadPinWeaveTest {
 		return node.methods.stream().anyMatch(m -> m.name.equals(name) && m.desc.equals(desc));
 	}
 
-	private static WeaveHarness.Result run(String label, String pin) throws Exception {
+	private static WeaveHarness.Result run(String label, Map<String, String> properties) throws Exception {
 		return WeaveHarness.run(work, label, fixture, CONFIG, MOD, Ecosystem.FABRIC, EnvType.SERVER,
-				"fixture.overloadpin.SkyProbe", "render", Map.of("forbric.mixinOverloadPin", pin));
+				"fixture.overloadpin.SkyProbe", "render", properties);
 	}
 }

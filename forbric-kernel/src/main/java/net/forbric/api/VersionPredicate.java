@@ -228,12 +228,22 @@ public final class VersionPredicate {
 	 * ignored for ordering entirely. Splitting on both made {@code 6.3.3+72073ef09e} compare as a pre-release of
 	 * {@code 6.3.3} and therefore fail {@code >=6.3.3} — and fabric-api stamps a build hash onto every module
 	 * version, so that is most of the Fabric ecosystem. Every mod in a real pack reported its dependency unmet.
+	 *
+	 * <p>A trailing {@code -} is an EMPTY pre-release, the lowest one: Fabric's idiom {@code >26.2-} means 26.2 or any
+	 * of its pre-releases, and fabric-loader 0.19.5 admits 26.2 under it. {@link String#split} drops that empty last
+	 * segment, which made {@code 26.2-} equal to {@code 26.2}, so {@code >26.2-} turned 26.2 away (the whitenoise,
+	 * handbook and climatesettings that survivalistessentials and homeostaticseasons nest declare exactly that). It is
+	 * kept, and orders below every qualifier.
 	 */
 	private static String[] split(String version) {
 		String trimmed = version.trim();
 		int build = trimmed.indexOf('+');
 		if (build >= 0) trimmed = trimmed.substring(0, build);
 		String[] parts = trimmed.split("[.\\-]");
+		if (parts.length > 0 && trimmed.endsWith("-")) {
+			parts = java.util.Arrays.copyOf(parts, parts.length + 1);
+			parts[parts.length - 1] = "";
+		}
 		return parts.length == 0 ? new String[] {trimmed} : parts;
 	}
 

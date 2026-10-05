@@ -46,11 +46,13 @@ import net.forbric.kernel.util.ForbricLog;
  * block registry moved, the block-state id map is rebuilt in the new registry order — on the merged base
  * {@code Block.BLOCK_STATE_REGISTRY} IS NeoForge's map, and its bake callback is not on the wrapper's freeze path.
  *
- * <p>Known limit, on purpose: fabric-api's {@code remap} is a mixin on {@code MappedRegistry}'s fields, so on a
- * wrapped registry it is a silent no-op — a Forbric client against a PURE Fabric server gets no remap of these
- * seventeen registries from either ecosystem. Against a Forbric server, NeoForge's sync carries the same ids and
- * this class applies them. {@code -Dforbric.forgeWrapperSync=off} turns the staging into a no-op, which is the old
- * behaviour minus the crash.
+ * <p>fabric-api's sync takes the same route. Its own {@code remap} is a mixin on {@code MappedRegistry}'s fields, which
+ * are empty on a wrapper, so against a PURE Fabric server (where only fabric-api's sync runs) a Forbric client used to
+ * keep its local ids for every wrapped registry — the 27 builtin registries MinecraftForge wraps on the merged game, and
+ * its own three. When fabric-api is installed, {@code RegistrySyncParityInjector} gives the wrapper a {@code remap} that
+ * stages here ({@link #stageFabricRemap}), and {@code ClientRegistrySyncHandler.apply} flushes it; without fabric-api
+ * there is no fabric-api sync to take. {@code -Dforbric.forgeWrapperSync=off} turns the staging into a no-op, which is
+ * the old behaviour minus the crash.
  */
 public final class KernelForgeWrapperSync {
 	private static final String PROPERTY = "forbric.forgeWrapperSync";
@@ -155,7 +157,7 @@ public final class KernelForgeWrapperSync {
 		try {
 			apply(cl, staged);
 		} catch (Throwable t) {
-			// Loud, not fatal: the connection continues with these seventeen registries at their LOCAL ids. With an
+			// Loud, not fatal: the connection continues with every staged registry at its LOCAL ids. With an
 			// identical mod set on both ends those are the server's ids anyway; with a different set they are not,
 			// and the symptom downstream is wrong blocks and items, which is why this is an error and not a warning.
 			ForbricLog.error("[Forbric/RegistrySync] could not apply the server's ids to the Forge-wrapped registries "
@@ -168,8 +170,9 @@ public final class KernelForgeWrapperSync {
 		Class<?> gameData = Class.forName(ForeignType.GAME_DATA.binary(Ecosystem.FORGE), false, cl);
 		Class<?> identifierCls = Class.forName("net.minecraft.resources.Identifier", false, cl);
 		Method injectSnapshot = gameData.getMethod("injectSnapshot", Map.class, boolean.class, boolean.class);
-		// Resolved on the PUBLIC interfaces, not on the wrapper: NamespacedWrapper is package-private, and a Method
-		// looked up on a package-private class fails the access check even when the method itself is public.
+		// Resolved on the PUBLIC interfaces, not on the wrapper: NamespacedWrapper ships package-private (public only while
+		// RegistryWrapperAccessInjector is on), and a Method looked up on a package-private class fails the access check
+		// even when the method itself is public.
 		Class<?> registryCls = Class.forName("net.minecraft.core.Registry", false, cl);
 		Method getValue = registryCls.getMethod("getValue", identifierCls);
 		Method getId = Class.forName("net.minecraft.core.IdMap", false, cl).getMethod("getId", Object.class);
@@ -359,7 +362,8 @@ public final class KernelForgeWrapperSync {
 	}
 
 	private static Object registryName(Object wrapper) throws Exception {
-		// Registry.key() rather than wrapper.getClass().getMethod("key"): see apply() — the wrapper is package-private.
+		// Registry.key() rather than wrapper.getClass().getMethod("key"): see apply() — the wrapper ships package-private
+		// (public only while RegistryWrapperAccessInjector is on).
 		Object key = Class.forName("net.minecraft.core.Registry", false, wrapper.getClass().getClassLoader())
 				.getMethod("key").invoke(wrapper);
 		return key.getClass().getMethod("identifier").invoke(key);

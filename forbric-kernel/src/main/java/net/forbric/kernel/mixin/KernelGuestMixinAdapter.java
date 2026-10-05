@@ -94,10 +94,24 @@ public final class KernelGuestMixinAdapter {
 	private static final java.util.Set<String> PARTIAL =
 			java.util.Collections.synchronizedSet(new java.util.LinkedHashSet<>());
 
+	/**
+	 * The counted ones that still carry an injector Mixin rejects outright: only with
+	 * {@code -Dforbric.guestInjectorPruner.refused=off}, which keeps them as they were. Mixin fails each of them, so the
+	 * summary must not say "no error" of them.
+	 */
+	private static final java.util.Set<String> REJECTING =
+			java.util.Collections.synchronizedSet(new java.util.LinkedHashSet<>());
+
 	/** Records one, keyed so the same mixin evaluated twice counts once. */
 	static void notePartial(String configName, String mixin) {
 		if (configName == null || mixin == null) return;
 		PARTIAL.add(configName + ":" + mixin);
+	}
+
+	/** Records one that keeps an injector Mixin rejects outright. */
+	private static void notePartial(String configName, String mixin, MixinFit.Result kept) {
+		notePartial(configName, mixin);
+		if (configName != null && mixin != null && !kept.rejected().isEmpty()) REJECTING.add(configName + ":" + mixin);
 	}
 
 	/** Every guest mixin that applied only partially so far, sorted. */
@@ -109,8 +123,12 @@ public final class KernelGuestMixinAdapter {
 
 	/** The one line a gate greps: the count, and what it costs. */
 	public static String partialSummary() {
-		return "[Forbric/Mixin] " + PARTIAL.size() + " guest mixin(s) apply only partially on the merged base — "
-				+ "each keeps the handlers that bound and loses the rest, with no error at either end";
+		int rejecting = REJECTING.size();
+		String head = "[Forbric/Mixin] " + PARTIAL.size() + " guest mixin(s) apply only partially on the merged base — ";
+		if (rejecting == 0) return head + "each keeps the handlers that bound and loses the rest, with no error at either end";
+		return head + (PARTIAL.size() - rejecting) + " keep the handlers that bound and lose the rest, with no error at either "
+				+ "end; " + rejecting + " keep an injector Mixin rejects outright (-D"
+				+ net.forbric.kernel.transform.GuestInjectorPruner.REFUSED_PROPERTY + "=off), which fails that mixin when it is applied";
 	}
 
 	private static final String ACCESSOR_DESC = "Lorg/spongepowered/asm/mixin/gen/Accessor;";
@@ -164,6 +182,20 @@ public final class KernelGuestMixinAdapter {
 	 */
 	public static List<String> unfitMixins(String configName, byte[] configJson, Function<String, byte[]> resource,
 			net.fabricmc.api.EnvType side) {
+		return unfitMixins(configName, configJson, resource, side, null, null);
+	}
+
+	/**
+	 * As above, with {@code raw} serving the merged base's bytes BEFORE the transform chain and {@code base} naming
+	 * the members digest of the jar that serves a class, which is what lets an injector target the owning mod's own
+	 * platform lacks too be told from one the merge lost ({@link NativeAbsentTargets}). The platform is the config's
+	 * owner's ecosystem ({@link MixinConfigOwners#ecosystemOf}), and the owner's declared requirements are what discovery
+	 * read from its manifest ({@link net.forbric.api.ModPresence#metadata}), which decide whether it is native to the
+	 * game the table describes at all. A config no single mod claims, a null {@code raw} or a null {@code base} asks
+	 * nothing, and every such target is a miss as before.
+	 */
+	public static List<String> unfitMixins(String configName, byte[] configJson, Function<String, byte[]> resource,
+			net.fabricmc.api.EnvType side, Function<String, byte[]> raw, Function<String, String> base) {
 		if (!enabled()) return List.of();
 
 		UnmodifiableConfig config;
@@ -184,16 +216,30 @@ public final class KernelGuestMixinAdapter {
 		// about an entry this method removes. PluginDeclinedMixins holds the attribution back to ask it later.
 		String pluginClass = asString(config.get(List.of("plugin")));
 		boolean required = Boolean.TRUE.equals(config.get(List.of("required")));
+		// The native game is the owning mod's own: vanilla for a Fabric mod, its patched game for a MinecraftForge or
+		// NeoForge one, which declares methods vanilla does not and the merge may have lost.
+		net.forbric.api.Ecosystem platform = MixinConfigOwners.ecosystemOf(configName);
+		NativeAbsentTargets.Context nativeView = raw == null || base == null || platform == null
+				? NativeAbsentTargets.Context.NONE
+				: new NativeAbsentTargets.Context(raw, declaredDefaultRequire(config), platform, base,
+						declaringMod(configName, platform));
 		Map<String, byte[]> loaded = new LinkedHashMap<>();
 		List<String> suppress = new ArrayList<>();
 
 		net.forbric.api.Ecosystem ecosystem = MixinConfigOwners.ecosystemOf(configName);
+		// The mixins the kernel leaves out by name (MergedBaseMixinCompat's hand list, -Dforbric.suppressMixins) never reach
+		// Mixin, and reportNamedSuppressions has their row: a verdict line about one, or a place in the PARTIAL count, would
+		// describe a mixin that is not there (fabric-loot-api's ReloadableServerRegistriesMixin read PARTIAL, then suppressed).
+		List<String> named = ForbricMixinService.suppressedMixinsFor(configName);
+		Object defaultRequire = config.get(List.of("injectors", "defaultRequire"));
+		int configMinimum = defaultRequire instanceof Number n ? Math.max(0, n.intValue()) : 0;
 		for (String mixin : mixins) {
 			// Which family's mod wrote it decides what shape it was compiled against (MixinStubRebind).
 			MixinStubRebind.noteEcosystem(pkgPath + "/" + mixin.replace('.', '/'), ecosystem, configName);
 			byte[] classBytes = resource.apply(pkgPath + "/" + mixin.replace('.', '/') + ".class");
 			if (classBytes == null) continue;
 			loaded.put(mixin, classBytes);
+			if (named.contains(mixin)) continue;
 			try {
 				if (reportTargetsArbitratedAway(configName, pkg, mixin, pluginClass, classBytes)) continue;
 				if (isPureAccessorMixin(classBytes)) {
@@ -218,18 +264,39 @@ public final class KernelGuestMixinAdapter {
 				// read, so an anchor they move onto the merged game is not missing (CarpetMixinAdapter.asLoaded).
 				byte[] judged = CarpetMixinAdapter.asLoaded(classBytes, resource);
 				MixinFit.Result fit = MixinFit.evaluate(judged, resource,
-						net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added);
+						net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added, nativeView);
 				if (judged != classBytes) {
-					MixinFit.Result raw = MixinFit.evaluate(classBytes, resource,
-							net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added);
-					if (raw.verdict() != fit.verdict() || raw.unresolved().size() != fit.unresolved().size()) {
+					MixinFit.Result unadapted = MixinFit.evaluate(classBytes, resource,
+							net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added, nativeView);
+					if (unadapted.verdict() != fit.verdict() || unadapted.unresolved().size() != fit.unresolved().size()) {
 						ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s is judged as its anchor adapter hands it to Mixin — "
-								+ "verdict %s→%s (%s)", MixinConfigOwners.describe(configName), mixin, raw.verdict(),
+								+ "verdict %s→%s (%s)", MixinConfigOwners.describe(configName), mixin, unadapted.verdict(),
 								fit.verdict(), fit.reason());
 					}
 				}
+				if (!fit.nativeAbsent().isEmpty()) {
+					// Informational, and deliberately nothing more: no finding, no mark on the mod's row. Native Mixin
+					// drops this injector on the mod's own platform without a word, so it is no loss of the merge's --
+					// and Mixin will drop it here the same way, the rest of the mixin applying around it.
+					ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s names %s, which %s lacks too; native Mixin drops "
+							+ "that injector without a word (nothing requires it to inject), and so will this boot — not a "
+							+ "merged-base loss", MixinConfigOwners.describe(configName), mixin,
+							String.join(", ", fit.nativeAbsent()), NativeAbsentTargets.describe(platform));
+				}
 				if (!fit.shouldSuppress()) {
+					// An injector Mixin rejects outright fails this mixin whichever class its other misses are on, so one kept
+					// for a miss on another mod's class answers it first, as a PARTIAL one does below; what is left is judged
+					// as it stands.
+					MixinFit.Result shown = fit;
 					if (!fit.foreign().isEmpty()) {
+						shown = answerRejections(configName, pkg, mixin, pluginClass, classBytes, required, judged, fit, resource,
+								added, configMinimum, false, nativeView);
+						if (shown == null) {
+							suppress.add(mixin);
+							continue;
+						}
+					}
+					if (!shown.foreign().isEmpty()) {
 						// A DIFFERENT thing from the line below, and the reason the two are separated. An anchor
 						// that misses on a merged-base class is routine -- 1226 such anchors across every gate log
 						// in this repo, on runs that pass. An anchor that misses on ANOTHER MOD's class is not:
@@ -252,50 +319,46 @@ public final class KernelGuestMixinAdapter {
 								+ "Both mods are installed and each is within the version range the other declares, "
 								+ "so nothing else will report this; one of them probably needs a different version. "
 								+ "This is a suspected mismatch; actual application has not been observed yet.",
-								MixinConfigOwners.describe(configName), mixin, String.join(", ", fit.foreign()));
-						ForeignMixinBreaks.record(configName, mixin, fit.foreign());
+								MixinConfigOwners.describe(configName), mixin, String.join(", ", shown.foreign()));
+						ForeignMixinBreaks.record(configName, mixin, shown.foreign());
 						attribute(configName, "its mixin " + mixin + " targets another mod's class that has changed ("
-								+ String.join(", ", fit.foreign()) + ")");
+								+ String.join(", ", shown.foreign()) + ")");
 						preflight(configName, pkg, mixin, pluginClass, classBytes, required,
-								"preflight could not resolve this mixin's anchors on another mod", fit.foreign());
-					} else if (fit.verdict() == MixinFit.Verdict.PARTIAL) {
+								"preflight could not resolve this mixin's anchors on another mod", shown.foreign());
+					} else if (shown.verdict() == MixinFit.Verdict.PARTIAL) {
 						// Before reporting a PARTIAL, ask whether it is one the merge MADE: an injector bound by
 						// explicit descriptor to a merge-added delegating stub whose body moved. If rebinding it to
 						// the delegate makes the mixin fit, remember the plan; Mixin receives the rewritten
 						// annotation from the bytecode provider.
-						MixinRetarget.Plan plan = MixinRetarget.plan(MixinFit.parse(judged), resource);
-						MixinFit.Result after = plan.isEmpty() ? null : MixinFit.evaluate(
-								MixinRetarget.rewritten(judged, plan), resource,
-								net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added);
-						if (after != null && after.unresolved().size() < fit.unresolved().size()) {
-							MixinRetarget.remember(plan);
-							ForbricLog.info("[Forbric/Mixin] retargeted guest mixin %s:%s — %s; verdict %s→%s",
-									MixinConfigOwners.describe(configName), mixin, plan.describe(), fit.verdict(),
-									after.verdict());
-							if (after.verdict() == MixinFit.Verdict.PARTIAL) {
-								notePartial(configName, mixin);
-								suspectDrift(configName, pkg, mixin, pluginClass, classBytes, required, after);
-								preflight(configName, pkg, mixin, pluginClass, classBytes, required, after.reason(), after.unresolved());
-								ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s still applies only partially — %s",
-										MixinConfigOwners.describe(configName), mixin, after.reason());
-							}
+						if (retargeted(configName, pkg, mixin, pluginClass, classBytes, required, judged, shown, resource, added,
+								configMinimum, suppress, nativeView)) continue;
+						// An injector Mixin rejects outright would fail the mixin it is kept in: taken out, or the mixin left out.
+						MixinFit.Result kept = answerRejections(configName, pkg, mixin, pluginClass, classBytes, required, judged,
+								shown, resource, added, configMinimum, false, nativeView);
+						if (kept == null) {
+							suppress.add(mixin);
 							continue;
 						}
-						String drifted = driftedTarget(fit);
+						if (kept.verdict() == MixinFit.Verdict.FIT) continue;
+						String drifted = driftedTarget(kept);
 						if (drifted != null) {
 							ForbricLog.warn("[Forbric/Mixin] guest mixin %s:%s targets %s, a renumbered anonymous class — on this "
 									+ "base that name is a different class (%s); its injections bind to unrelated code",
 									MixinConfigOwners.describe(configName), mixin, drifted, MergedBaseAnonymousDrift.describe(drifted));
 						}
-						suspectDrift(configName, pkg, mixin, pluginClass, classBytes, required, fit);
-						notePartial(configName, mixin);
-						preflight(configName, pkg, mixin, pluginClass, classBytes, required, fit.reason(), fit.unresolved());
+						suspectDrift(configName, pkg, mixin, pluginClass, classBytes, required, kept);
+						notePartial(configName, mixin, kept);
+						preflight(configName, pkg, mixin, pluginClass, classBytes, required, kept.reason(), kept.unresolved());
 						ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s applies only partially on the merged base "
-								+ "— %s (kept; -Dforbric.mixinFit=strict drops these)", MixinConfigOwners.describe(configName), mixin,
-								fit.reason());
+								+ "— %s (kept; -Dforbric.mixinFit=strict drops these%s)", MixinConfigOwners.describe(configName), mixin,
+								kept.reason(), rejectionNote(kept));
 					}
 					continue;
 				}
+				// An UNFIT the merge MADE is asked the same question first: MoogsStructureLib's HEAD of placeEntities,
+				// alone in its mixin, misses only because the carrier replaced that method, and R7 moves it there.
+				if (fit.verdict() == MixinFit.Verdict.UNFIT && retargeted(configName, pkg, mixin, pluginClass, classBytes,
+						required, judged, fit, resource, added, configMinimum, suppress, nativeView)) continue;
 				// UNFIT means "no anchor resolves against the merged base", which the adapter reads as dead weight.
 				// It is not dead weight when the anchor belongs to ANOTHER mod: a cross-mod compatibility mixin
 				// targets a member that mod's own mixin adds at runtime. See ForeignMixinTargets for the two Physics
@@ -304,6 +367,13 @@ public final class KernelGuestMixinAdapter {
 				// really is absent — while dropping it removes a working feature with no error anywhere.
 				if (fit.verdict() == MixinFit.Verdict.UNFIT && ForeignMixinTargets.claimedByAnotherConfig(
 						configName, MixinFit.mixinTargets(MixinFit.parse(classBytes)), resource)) {
+					// Kept for the other mod's sake -- but not with an injector Mixin rejects outright, which fails it all the
+					// same: taken out where it can go alone, or the mixin is left out.
+					if (answerRejections(configName, pkg, mixin, pluginClass, classBytes, required, judged, fit, resource, added,
+							configMinimum, true, nativeView) == null) {
+						suppress.add(mixin);
+						continue;
+					}
 					ForbricLog.info("[Forbric/Mixin] keeping guest mixin %s:%s — %s, but another loaded mod's mixin "
 							+ "targets the same class, so the missing member is that mod's to add (cross-mod "
 							+ "compatibility layer, not dead weight)", MixinConfigOwners.describe(configName), mixin, fit.reason());
@@ -334,6 +404,147 @@ public final class KernelGuestMixinAdapter {
 					suppress.size(), loaded.size());
 		}
 		return suppress;
+	}
+
+	/**
+	 * Takes MixinRetarget's plan for a PARTIAL or UNFIT mixin when it leaves fewer misses and a mixin the adapter keeps
+	 * ({@link MixinRetarget#adopt}): remembered for the bytecode provider, announced, and what still misses reported as a
+	 * PARTIAL. False when there is none, and the caller goes on with the verdict as it was.
+	 */
+	private static boolean retargeted(String configName, String pkg, String mixin, String pluginClass, byte[] classBytes,
+			boolean required, byte[] judged, MixinFit.Result fit, Function<String, byte[]> resource, MixinAddedMembers.View added,
+			int configMinimum, List<String> suppress, NativeAbsentTargets.Context nativeView) {
+		MixinRetarget.Adoption adoption = MixinRetarget.adopt(judged, fit, resource, bytes -> MixinFit.evaluate(bytes, resource,
+				net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added, nativeView));
+		if (adoption == null) return false;
+		MixinFit.Result after = adoption.after();
+		MixinRetarget.remember(adoption.plan());
+		ForbricLog.info("[Forbric/Mixin] retargeted guest mixin %s:%s — %s; verdict %s→%s",
+				MixinConfigOwners.describe(configName), mixin, adoption.plan().describe(), fit.verdict(), after.verdict());
+		if (after.verdict() == MixinFit.Verdict.PARTIAL) {
+			// Only the rejections the mixin already had (MixinRetarget.adopt), answered on the rewritten mixin, whose names
+			// are the ones the pruner meets once the plan is applied.
+			after = answerRejections(configName, pkg, mixin, pluginClass, classBytes, required, adoption.rewritten(), after,
+					resource, added, configMinimum, false, nativeView);
+			if (after == null) {
+				suppress.add(mixin);
+				return true;
+			}
+			if (after.verdict() == MixinFit.Verdict.FIT) return true;
+			notePartial(configName, mixin, after);
+			suspectDrift(configName, pkg, mixin, pluginClass, classBytes, required, after);
+			preflight(configName, pkg, mixin, pluginClass, classBytes, required, after.reason(), after.unresolved());
+			ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s still applies only partially — %s%s",
+					MixinConfigOwners.describe(configName), mixin, after.reason(), rejectionNote(after));
+		}
+		return true;
+	}
+
+	/**
+	 * What a kept mixin with an injector Mixin rejects outright ({@link MixinFit.Rejection}) becomes. Kept as it was, the
+	 * injector makes Mixin throw "Invalid descriptor" at the point it finds, whatever {@code require} says, which fails
+	 * the mixin's application to that class (every injector still to come included) and, in a config that stays
+	 * required, the game -- so the PARTIAL verdict's "keeps the handlers that bound and loses the rest" was not true of it.
+	 *
+	 * <p>So the injector is taken out ({@link net.forbric.kernel.transform.GuestInjectorPruner#rememberRefused}) when it
+	 * can go alone -- nothing else in the mixin calls it, it is in no group, no target binds it as written -- and the
+	 * mixin without it is one the adapter keeps; the verdict returned is that mixin's. Otherwise the mixin is left out
+	 * whole, reported as any mixin that did not fit, and null is returned. A mixin a named kernel repair supersedes
+	 * ({@link SupersededMixins}) is always left out whole: the repair does the job of all of it, and pruning would let the
+	 * rest apply beside the repair. With {@code -Dforbric.guestInjectorPruner.refused=off} the mixin stays as it was.
+	 *
+	 * <p>Asked of every mixin the adapter keeps on its verdict: a PARTIAL one, one kept for its misses on another mod's
+	 * class, a retargeted one, and an UNFIT one kept because another mod's mixin targets the same class. Not asked of a
+	 * mixin kept by name ({@link MergedBaseMixinCompat#KEPT_MIXINS}, {@code -Dforbric.keepMixins}), which is handed to
+	 * Mixin unjudged: whoever named it decided, and the entries are measured ones.
+	 *
+	 * @param judged  the mixin as Mixin will receive it before the pruner, whose handler names the pruner looks for
+	 * @param claimed the mixin is kept although UNFIT, because another mod's mixin targets the same class: the pruned
+	 *                mixin is kept whatever its verdict
+	 * @param nativeView the owning mod's own platform, asked of the pruned mixin as of the original
+	 *                ({@link NativeAbsentTargets})
+	 */
+	private static MixinFit.Result answerRejections(String configName, String pkg, String mixin, String pluginClass,
+			byte[] classBytes, boolean required, byte[] judged, MixinFit.Result fit, Function<String, byte[]> resource,
+			MixinAddedMembers.View added, int configMinimum, boolean claimed, NativeAbsentTargets.Context nativeView) {
+		if (fit.rejected().isEmpty() || !"on".equals(refusedHandling())) return fit;
+		String binary = pkg + "." + mixin;
+		String superseded = SupersededMixins.replacementFor(binary);
+		if (superseded == null && net.forbric.kernel.transform.GuestInjectorPruner.refusedEnabled()) {
+			ClassNode node = MixinFit.parse(judged);
+			boolean alone = true;
+			List<String> handlers = new ArrayList<>();
+			for (MixinFit.Rejection r : fit.rejected()) {
+				alone &= r.everywhere() && net.forbric.kernel.transform.GuestInjectorPruner.prunable(node, r.handler(), r.desc());
+				handlers.add(r.handler() + r.desc());
+			}
+			MixinFit.Result after = alone ? MixinFit.evaluate(net.forbric.kernel.transform.GuestInjectorPruner.without(judged,
+					handlers), resource, net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added, nativeView) : null;
+			if (after != null && (claimed || !after.shouldSuppress()) && after.rejected().isEmpty()) {
+				for (MixinFit.Rejection r : fit.rejected()) {
+					MethodNode handler = null;
+					for (MethodNode m : node.methods) if (m.name.equals(r.handler()) && m.desc.equals(r.desc())) handler = m;
+					net.forbric.kernel.transform.GuestInjectorPruner.rememberRefused(new net.forbric.kernel.transform
+							.GuestInjectorPruner.Refused(configName, node.name, r.handler(), r.desc(), r.reason(),
+							minimumOf(handler, configMinimum) >= 1));
+				}
+				ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s keeps %d injector(s) Mixin would reject outright, failing "
+						+ "the mixin with them — %s; the kernel takes them out before Mixin reads the mixin, and the rest "
+						+ "applies — verdict %s→%s", MixinConfigOwners.describe(configName), mixin, handlers.size(),
+						String.join("; ", fit.rejected().stream().map(MixinFit.Rejection::reason).toList()), fit.verdict(),
+						after.verdict());
+				return after;
+			}
+		}
+		List<String> reasons = fit.rejected().stream().map(MixinFit.Rejection::reason).toList();
+		ForbricLog.info("[Forbric/Mixin] auto-suppressing guest mixin %s:%s — Mixin would reject %s outright and fail the "
+				+ "mixin with it (%s)%s", MixinConfigOwners.describe(configName), mixin,
+				String.join(", ", fit.rejected().stream().map(MixinFit.Rejection::handler).toList()), String.join("; ", reasons),
+				superseded != null ? "; " + superseded : "");
+		List<String> evidence = new ArrayList<>(reasons);
+		evidence.add("kernel suppressed this mixin: an injector in it Mixin rejects outright");
+		if (superseded != null) {
+			// The kernel's measured decision, with a named repair doing the whole job: not a loss the player decides on,
+			// and resolved once the repair is seen in the class the game defines, as the same mixin's apply failure was.
+			report(MixinCompatibility.id(configName, binary), configName, pkg, mixin, pluginClass, classBytes,
+					"the kernel leaves out its mixin " + mixin + " on the merged game", CompatibilityFinding.Confidence.CONFIRMED,
+					false, evidence);
+			SupersededMixins.awaitProof(configName, binary);
+		} else {
+			report(MixinCompatibility.id(configName, binary), configName, pkg, mixin, pluginClass, classBytes,
+					"guest mixin " + mixin + " did not fit the merged game and was left out",
+					CompatibilityFinding.Confidence.CONFIRMED, required, evidence);
+		}
+		return null;
+	}
+
+	/**
+	 * {@code -Dforbric.guestInjectorPruner.refused}: {@code on} (the default) answers a rejection as
+	 * {@link #answerRejections} says; {@code off} keeps the mixin as it was, in front of Mixin.
+	 */
+	private static String refusedHandling() {
+		return "off".equalsIgnoreCase(System.getProperty(net.forbric.kernel.transform.GuestInjectorPruner.REFUSED_PROPERTY,
+				"on")) ? "off" : "on";
+	}
+
+	/** What a kept PARTIAL line adds when it still carries an injector Mixin rejects: the switch is off. */
+	private static String rejectionNote(MixinFit.Result kept) {
+		if (kept.rejected().isEmpty()) return "";
+		return "; -D" + net.forbric.kernel.transform.GuestInjectorPruner.REFUSED_PROPERTY + "=off keeps "
+				+ String.join(", ", kept.rejected().stream().map(MixinFit.Rejection::handler).toList())
+				+ ", which Mixin rejects outright, failing this mixin when it is applied";
+	}
+
+	/**
+	 * The author's own count for an injector, as InjectionInfo reads it: an explicit {@code require}, else none inside a
+	 * {@code @Group}, else the config's {@code defaultRequire} as the mod wrote it.
+	 */
+	private static int minimumOf(MethodNode handler, int configMinimum) {
+		if (handler == null) return configMinimum;
+		AnnotationNode injector = MixinFit.injectorOf(handler);
+		Object declared = injector == null ? null : MixinFit.value(injector, "require");
+		if (declared instanceof Number n && n.intValue() >= 0) return n.intValue();
+		return MixinFit.groupOf(handler) != null ? 0 : configMinimum;
 	}
 
 	/** A bytecode preflight cannot know which targets, plugins or preceding transforms will actually run. */
@@ -686,5 +897,34 @@ public final class KernelGuestMixinAdapter {
 
 	private static String asString(Object value) {
 		return value == null ? null : value.toString();
+	}
+
+	/**
+	 * What discovery read from the manifest of the one mod that declares {@code configName} — the same mod, of the same
+	 * platform, not another one answering to its id as an alias — or null when that is not known.
+	 */
+	static net.forbric.api.DiscoveredMod declaringMod(String configName, net.forbric.api.Ecosystem platform) {
+		String modId = MixinConfigOwners.modIdOf(configName);
+		net.forbric.api.DiscoveredMod mod = modId == null ? null : net.forbric.api.ModPresence.metadata(modId);
+		return mod != null && modId.equals(mod.getId()) && mod.getEcosystem() == platform ? mod : null;
+	}
+
+	/**
+	 * The config's {@code injectors.defaultRequire} as the mod wrote it — read here, from the bytes the mod shipped,
+	 * because the relaxation rewrites it to 0 before Mixin sees it — or 0, Mixin's default. Negative when a
+	 * {@code parent} config may supply it ({@code MixinConfig.InjectorOptions.mergeFrom} takes the parent's for a 0):
+	 * an unknown requirement never counts as none.
+	 */
+	static int declaredDefaultRequire(UnmodifiableConfig config) {
+		Object declared;
+		try {
+			declared = config.get(List.of("injectors", "defaultRequire"));
+		} catch (RuntimeException notAnObject) {
+			return -1;
+		}
+		if (declared != null && !(declared instanceof Number)) return -1;
+		int value = declared == null ? 0 : ((Number) declared).intValue();
+		if (value == 0 && config.get(List.of("parent")) != null) return -1;
+		return value;
 	}
 }

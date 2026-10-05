@@ -17,7 +17,9 @@
 package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -343,37 +345,129 @@ class MixinAtWidenedCallTest {
 
 	/**
 	 * creativecore's shape: a @Redirect of RegistryFriendlyByteBuf.decorator(RegistryAccess), which NeoForge's
-	 * configuration listener calls with a ConnectionType appended. No adapter moves a redirect — it would replace the
-	 * carrier's call — so beside a hook that does resolve, the mixin is PARTIAL and says which point is missing.
+	 * configuration listener calls with a ConnectionType appended. A static call on a REDIRECTABLE row: the point moves to
+	 * the widened call and the handler is wrapped to take its arguments, so the verdict reads FIT. Before the row it read
+	 * PARTIAL and the required redirect stopped a strict launch; -Dforbric.mixinAtWidenRedirect=off is that, still.
 	 */
-	@Test void aRedirectOfAWidenedStaticCallIsPartial() {
-		String listener = "net/minecraft/server/network/ServerConfigurationPacketListenerImpl";
-		String buf = "net/minecraft/network/RegistryFriendlyByteBuf";
+	@Test void aRedirectOfAReviewedWidenedStaticCallMovesThroughAWrapper() {
+		byte[] targetBytes = bytes(listener());
+		MixinFit.Result verdict = MixinFit.evaluate(bytes(creativecoreShaped()), name -> name.equals(LISTENER + ".class") ? targetBytes : null);
+		assertEquals(MixinFit.Verdict.FIT, verdict.verdict(), verdict.reason());
+		ClassNode mixin = creativecoreShaped();
+		assertEquals(1, MixinAtWidenedCall.widen(mixin, name -> listener()));
+		MethodNode outer = mixin.methods.stream().filter(m -> m.name.equals("handleConfigurationFinished")).findFirst().orElseThrow();
+		assertEquals("(Lnet/minecraft/core/RegistryAccess;Lnet/neoforged/neoforge/network/connection/ConnectionType;)"
+				+ "Ljava/util/function/Function;", outer.desc, "the wrapper takes the widened call's arguments");
+		assertEquals(DECORATOR_WIDE, MixinFit.value(MixinFit.atNodes(MixinFit.injectorOf(outer)).getFirst(), "target"));
+		String aside = MixinHandlerShim.asideName(mixin.name, "handleConfigurationFinished", MixinAtWidenedCall.REDIRECT_SUFFIX);
+		MethodNode inner = mixin.methods.stream().filter(m -> m.name.equals(aside)).findFirst().orElseThrow();
+		assertEquals("(Lnet/minecraft/core/RegistryAccess;)Ljava/util/function/Function;", inner.desc);
+		assertNull(MixinFit.injectorOf(inner), "the original keeps its body and gives its annotation to the wrapper");
+	}
+
+	/** RED control: the switch leaves the redirect as compiled, and the verdict says which point is missing. */
+	@Test void withTheRedirectRuleOffTheWidenedStaticCallIsPartial() {
+		System.setProperty(MixinAtWidenedCall.REDIRECT_PROPERTY, "off");
+		try {
+			byte[] targetBytes = bytes(listener());
+			MixinFit.Result verdict = MixinFit.evaluate(bytes(creativecoreShaped()), name -> name.equals(LISTENER + ".class") ? targetBytes : null);
+			assertEquals(MixinFit.Verdict.PARTIAL, verdict.verdict(), verdict.reason());
+			assertEquals(List.of("@At(INVOKE) net.minecraft.network.RegistryFriendlyByteBuf.decorator in "
+					+ "ServerConfigurationPacketListenerImpl.handleConfigurationFinished"), verdict.unresolved());
+			assertEquals(0, MixinAtWidenedCall.widen(creativecoreShaped(), name -> listener()), "and the rewrite agrees: nothing moves");
+		} finally {
+			System.clearProperty(MixinAtWidenedCall.REDIRECT_PROPERTY);
+		}
+	}
+
+	/**
+	 * Only a reviewed static call: the same redirect onto an instance call (whose overrides it would replace) or onto a
+	 * static call no row reviews (whose appended arguments may be the carrier's mechanism) stays as compiled.
+	 */
+	@Test void anUnreviewedOrInstanceWidenedCallKeepsItsRedirect() {
+		ClassNode instance = listener();
+		MethodInsnNode call = (MethodInsnNode) instance.methods.getFirst().instructions.get(2);
+		call.setOpcode(Opcodes.INVOKEVIRTUAL);
+		instance.methods.getFirst().instructions.insert(new InsnNode(Opcodes.ACONST_NULL));
+		assertEquals(0, MixinAtWidenedCall.widen(creativecoreShaped(), name -> instance));
+		ClassNode unreviewed = listener();
+		((MethodInsnNode) unreviewed.methods.getFirst().instructions.get(2)).name = "decorated";
+		ClassNode mixin = creativecoreShaped();
+		AnnotationNode at = MixinFit.atNodes(MixinFit.injectorOf(mixin.methods.getFirst())).getFirst();
+		at.values.set(3, ((String) at.values.get(3)).replace(";decorator(", ";decorated("));
+		assertEquals(0, MixinAtWidenedCall.widen(mixin, name -> unreviewed));
+	}
+
+	/** Every reviewed row is a static method of the merged base that keeps the vanilla form it widened, both declared. */
+	@Test void everyRedirectableRowIsAStaticCallBesideTheVanillaFormItWidened() throws Exception {
+		java.nio.file.Path merged = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+		TestFixtures.require(Fixture.STAGED, java.nio.file.Files.isRegularFile(merged), "staged merged base required");
+		java.nio.file.Path vanilla = TestFixtures.vanillaJar();
+		TestFixtures.require(Fixture.MC_LIBRARIES, java.nio.file.Files.isRegularFile(vanilla), "vanilla 26.2 required");
+		for (MixinAtWidenedCall.Redirectable row : MixinAtWidenedCall.REDIRECTABLE) {
+			MixinAtWidenedCall.Member wide = MixinAtWidenedCall.parse(row.member());
+			MethodNode widened = declared(merged, wide.owner(), wide.name(), wide.descriptor());
+			assertNotNull(widened, row.member() + " is no longer in the merged base: delete its row");
+			assertTrue((widened.access & Opcodes.ACC_STATIC) != 0, row.member() + " must be static");
+			int forms = 0;
+			for (MethodNode form : declaredAll(vanilla, wide.owner())) {
+				if (!form.name.equals(wide.name()) || !MixinAtWidenedCall.widens(form.desc, wide.descriptor())) continue;
+				forms++;
+				assertNotNull(declared(merged, wide.owner(), form.name, form.desc), "the merged base dropped vanilla's " + form.name + form.desc);
+			}
+			assertEquals(1, forms, "exactly one vanilla form widens to " + row.member());
+		}
+	}
+
+	private static MethodNode declared(java.nio.file.Path jar, String owner, String name, String desc) throws Exception {
+		for (MethodNode m : declaredAll(jar, owner)) if (m.name.equals(name) && m.desc.equals(desc)) return m;
+		return null;
+	}
+
+	private static List<MethodNode> declaredAll(java.nio.file.Path jar, String owner) throws Exception {
+		try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(jar.toFile())) {
+			java.util.zip.ZipEntry entry = zip.getEntry(owner + ".class");
+			if (entry == null) return List.of();
+			return MixinFit.parse(zip.getInputStream(entry).readAllBytes()).methods;
+		}
+	}
+
+	private static final String LISTENER = "net/minecraft/server/network/ServerConfigurationPacketListenerImpl";
+	private static final String BUF = "net/minecraft/network/RegistryFriendlyByteBuf";
+	private static final String DECORATOR_WIDE = "L" + BUF + ";decorator(Lnet/minecraft/core/RegistryAccess;"
+			+ "Lnet/neoforged/neoforge/network/connection/ConnectionType;)Ljava/util/function/Function;";
+
+	/** NeoForge's listener in miniature: handleConfigurationFinished makes the widened static call; another hook resolves. */
+	private static ClassNode listener() {
 		ClassNode target = new ClassNode();
 		target.version = Opcodes.V21;
 		target.access = Opcodes.ACC_PUBLIC;
-		target.name = listener;
+		target.name = LISTENER;
 		target.superName = "java/lang/Object";
 		MethodNode finished = new MethodNode(Opcodes.ACC_PUBLIC, "handleConfigurationFinished", "()V", null, null);
 		finished.instructions.add(new InsnNode(Opcodes.ACONST_NULL));
 		finished.instructions.add(new InsnNode(Opcodes.ACONST_NULL));
-		finished.instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, buf, "decorator",
+		finished.instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, BUF, "decorator",
 				"(Lnet/minecraft/core/RegistryAccess;Lnet/neoforged/neoforge/network/connection/ConnectionType;)Ljava/util/function/Function;", false));
 		finished.instructions.add(new InsnNode(Opcodes.POP));
 		finished.instructions.add(new InsnNode(Opcodes.RETURN));
 		target.methods = new ArrayList<>(List.of(finished, new MethodNode(Opcodes.ACC_PUBLIC, "startConfiguration", "()V", null, null)));
 		target.methods.get(1).instructions.add(new InsnNode(Opcodes.RETURN));
+		return target;
+	}
 
+	/** creativecore's ServerConfigurationPacketListenerImplMixin, as compiled, beside a hook that resolves. */
+	private static ClassNode creativecoreShaped() {
 		ClassNode mixin = new ClassNode();
 		mixin.version = Opcodes.V21;
 		mixin.name = "team/creative/creativecore/mixin/ServerConfigurationPacketListenerImplMixin";
 		mixin.superName = "java/lang/Object";
 		AnnotationNode type = new AnnotationNode("Lorg/spongepowered/asm/mixin/Mixin;");
-		type.values = new ArrayList<>(List.of("value", new ArrayList<>(List.of(Type.getObjectType(listener)))));
+		type.values = new ArrayList<>(List.of("value", new ArrayList<>(List.of(Type.getObjectType(LISTENER)))));
 		mixin.invisibleAnnotations = new ArrayList<>(List.of(type));
 		AnnotationNode at = new AnnotationNode("Lorg/spongepowered/asm/mixin/injection/At;");
 		at.values = new ArrayList<>(List.of("value", "INVOKE", "target",
-				"L" + buf + ";decorator(Lnet/minecraft/core/RegistryAccess;)Ljava/util/function/Function;"));
+				"L" + BUF + ";decorator(Lnet/minecraft/core/RegistryAccess;)Ljava/util/function/Function;"));
 		AnnotationNode redirect = new AnnotationNode("Lorg/spongepowered/asm/mixin/injection/Redirect;");
 		redirect.values = new ArrayList<>(List.of("method", new ArrayList<>(List.of("handleConfigurationFinished")), "at", at, "require", 1));
 		MethodNode handler = new MethodNode(Opcodes.ACC_PRIVATE, "handleConfigurationFinished",
@@ -386,13 +480,7 @@ class MixinAtWidenedCallTest {
 		MethodNode other = new MethodNode(Opcodes.ACC_PRIVATE, "onStart", "(Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;)V", null, null);
 		other.visibleAnnotations = new ArrayList<>(List.of(inject));
 		mixin.methods = new ArrayList<>(List.of(handler, other));
-
-		byte[] targetBytes = bytes(target);
-		MixinFit.Result verdict = MixinFit.evaluate(bytes(mixin), name -> name.equals(listener + ".class") ? targetBytes : null);
-		assertEquals(MixinFit.Verdict.PARTIAL, verdict.verdict(), verdict.reason());
-		assertEquals(List.of("@At(INVOKE) net.minecraft.network.RegistryFriendlyByteBuf.decorator in "
-				+ "ServerConfigurationPacketListenerImpl.handleConfigurationFinished"), verdict.unresolved());
-		assertEquals(0, MixinAtWidenedCall.widen(mixin, name -> target), "and the rewrite agrees: nothing moves");
+		return mixin;
 	}
 
 	private static byte[] bytes(ClassNode node) {

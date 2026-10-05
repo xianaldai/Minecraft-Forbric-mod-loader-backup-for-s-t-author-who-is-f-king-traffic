@@ -13,9 +13,9 @@ import com.mojang.serialization.DynamicOps;
  * Every parse appends "parse" to the trace and the guest handler appends "gate", so the trace each method returns says
  * whether, where and how often the handler ran.
  *
- * <p>The three descriptors differ on purpose: with one shared descriptor, MixinRetarget's renamed-body rule (R3) moves
- * the loadMerged and loadTwice selectors onto loadMixed, the one sibling that still calls Decoder.parse, before this
- * stage ever sees them.
+ * <p>The three descriptors differ on purpose: with one shared descriptor and -Dforbric.mixinRetarget.renameCensus=off,
+ * MixinRetarget's renamed-body rule (R3) moves the loadMerged and loadTwice selectors onto loadMixed, the one sibling
+ * that still calls Decoder.parse, before this stage ever sees them.
  */
 public class EntryLoader {
 	private static final DynamicOps<String> OPS = new DynamicOps<>() {

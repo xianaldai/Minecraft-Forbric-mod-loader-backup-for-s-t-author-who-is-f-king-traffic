@@ -35,7 +35,8 @@ import net.fabricmc.api.EnvType;
  * </ul>
  * Not run here: the hooks that reflect into MinecraftForge's network registry and event factory
  * ({@code channelActive}, task gathering, configuration-finished, channel bookkeeping), the HEDGE initialisation guard
- * (inert since NeoForge 26.2.0.88) and the play fall-through (off by default). The injector has no switch of its own:
+ * (inert since NeoForge 26.2.0.88), and the play-phase hand-over to NeoForge, which {@code PlayPayloadHandOverExecutionTest}
+ * runs on stand-ins of its own. The injector has no switch of its own:
  * {@code -Dforbric.commonNetworkInterop=off} is read where KernelBoot registers it.
  */
 @ExecutesInjector(CommonNetworkInteropInjector.class)

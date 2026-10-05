@@ -101,24 +101,27 @@ class MixinFitLivenessTest {
 		assertEquals(MixinFit.Verdict.PARTIAL, MixinFit.evaluate(redirect(HUD, HOTBAR, HAS_EXPERIENCE), resolver(Map.of(HUD, hud(false)))).verdict());
 	}
 
-	/** A listed caller in another class is read through the resolver: vanilla's creative screen search. */
+	/** A listed caller in another class is read through the resolver: vanilla's fluid renderer asking the fluid's tint. */
 	@Test
 	void aListedCallerInAnotherClassIsReadThroughTheResolver() {
-		String trees = "net/minecraft/client/multiplayer/SessionSearchTrees";
-		String screen = "net/minecraft/client/gui/screens/inventory/CreativeModeInventoryScreen";
-		String search = "creativeNameSearch", searchDesc = "()Lnet/minecraft/client/searchtree/SearchTree;";
+		String model = "net/minecraft/client/renderer/block/FluidModel";
+		String renderer = "net/minecraft/client/renderer/block/FluidRenderer";
+		String tint = "tintSource", tintDesc = "()Lnet/minecraft/client/color/block/BlockTintSource;";
+		String tesselate = "(Lnet/minecraft/client/renderer/block/BlockAndTintGetter;Lnet/minecraft/core/BlockPos;"
+				+ "Lnet/minecraft/client/renderer/block/FluidRenderer$Output;Lnet/minecraft/world/level/block/state/BlockState;"
+				+ "Lnet/minecraft/world/level/material/FluidState;)V";
 		MixinStubRebind.noteEcosystem(MIXIN, Ecosystem.FABRIC);
-		byte[] mixin = redirect(trees, search, "Ljava/lang/Object;hashCode()I");
-		byte[] target = type(trees, search, searchDesc, "java/lang/Object", "hashCode", "()I", false);
+		byte[] mixin = redirect(model, tint, "Ljava/lang/Object;hashCode()I");
+		byte[] target = type(model, tint, tintDesc, "java/lang/Object", "hashCode", "()I", false);
 
-		MixinFit.Result dead = MixinFit.evaluate(mixin, resolver(Map.of(trees, target,
-				screen, type(screen, "refreshSearchResults", "()V", null, null, null, false))));
+		MixinFit.Result dead = MixinFit.evaluate(mixin, resolver(Map.of(model, target,
+				renderer, type(renderer, "tesselate", tesselate, null, null, null, false))));
 		assertEquals(MixinFit.Verdict.PARTIAL, dead.verdict(), dead.unresolved().toString());
-		assertTrue(dead.unresolved().get(0).endsWith("vanilla calls it from CreativeModeInventoryScreen.refreshSearchResults"),
+		assertTrue(dead.unresolved().get(0).endsWith("vanilla and MinecraftForge call it from FluidRenderer.tesselate"),
 				dead.unresolved().toString());
 
-		MixinFit.Result live = MixinFit.evaluate(mixin, resolver(Map.of(trees, target,
-				screen, type(screen, "refreshSearchResults", "()V", trees, search, searchDesc, false))));
+		MixinFit.Result live = MixinFit.evaluate(mixin, resolver(Map.of(model, target,
+				renderer, type(renderer, "tesselate", tesselate, model, tint, tintDesc, false))));
 		assertEquals(MixinFit.Verdict.FIT, live.verdict(), live.unresolved().toString());
 	}
 

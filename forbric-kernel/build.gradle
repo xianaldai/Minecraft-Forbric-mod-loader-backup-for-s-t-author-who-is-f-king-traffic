@@ -187,6 +187,16 @@ sourceSets {
 		compileClasspath += sourceSets.runtime.output + sourceSets.runtime.compileClasspath
 		runtimeClasspath += sourceSets.runtime.output + sourceSets.runtime.compileClasspath + files(stagedTransferTestLibraries)
 	}
+	// A stand-in for Mod Menu's API (com.terraformersmc.modmenu.api): the interface every Fabric mod with a config
+	// screen implements, and the only place a Fabric mod ever says it has one. Compiled against the game side, and
+	// shipped INSIDE the game-side jar as resources, never as classes -- see runtimeJar. A class file there would be
+	// one of ForbricClassLoader's own, found before any mod's, and would shadow a real Mod Menu. As resources they
+	// are offered by ModMenuApiStandIn only when no installed jar has the real API, and the loader consults offered
+	// bytes only after every owned jar has missed, so a real Mod Menu always wins.
+	modMenuApi {
+		java { srcDir 'src/modmenuApi/java' }
+		compileClasspath += sourceSets.runtime.output + sourceSets.main.output + files(stagedGameJars) + files(stagedMcLibraries)
+	}
 }
 
 repositories {
@@ -299,6 +309,10 @@ def verifyRebornEnergy = tasks.register('verifyRebornEnergy') {
 	}
 }
 tasks.named('compileRuntimeJava') { dependsOn verifyRebornEnergy }
+// Links against the game side, so it is built exactly when the game side is.
+tasks.named('compileModMenuApiJava') {
+	onlyIf { !stagedGameJars.isEmpty() }
+}
 
 test {
 	useJUnitPlatform()
@@ -330,6 +344,9 @@ test {
 	// ledger from the last time it cost a day; this is the fix rather than the note.
 	dependsOn tasks.named('compileRuntimeJava')
 	inputs.files(sourceSets.runtime.output).withPropertyName('gameSideClasses').optional()
+	// The same for the Mod Menu API stand-in, which ModMenuApiStandInShapeTest reads off build/classes/java/modMenuApi.
+	dependsOn tasks.named('compileModMenuApiJava')
+	inputs.files(sourceSets.modMenuApi.output).withPropertyName('modMenuApiStandIn').optional()
 	// NoRawAssumptionsTest reads the test sources and its allowlist as TEXT. An allowlist edit changes no class, so
 	// without these the task stayed UP-TO-DATE and kept the verdict on the previous list.
 	inputs.file('src/test/raw-assumption-allowlist.txt').withPropertyName('rawAssumptionAllowlist')
@@ -459,10 +476,26 @@ tasks.register('runtimeJar', Jar) {
 	archiveBaseName = 'forbric-kernel-runtime'
 	dependsOn 'compileRuntimeJava'
 	from sourceSets.runtime.output
+	// Mod Menu's API stand-in, as bytes under META-INF and under a name no class loader resolves: see the modMenuApi
+	// source set and ModMenuApiStandIn, which reads them from here.
+	from(sourceSets.modMenuApi.output.classesDirs) {
+		include '**/*.class'
+		into 'META-INF/forbric/modmenu-api'
+		rename { String file -> file + '.bin' }
+	}
 	// The boot seam requires exactly these three when the transfer APIs are installed; a jar without them is a
 	// release that turns every fabric-api pack into a required loss. Checked on the artifact itself.
 	doLast {
 		def entries = new java.util.zip.ZipFile(archiveFile.get().asFile).withCloseable { zip -> Collections.list(zip.entries())*.name as Set }
+		// The stand-in is there, and only as resources. A loadable com/terraformersmc class in this jar would be
+		// defined ahead of a real Mod Menu's and break every mod that uses more of Mod Menu than its API.
+		def loadable = entries.findAll { it.startsWith('com/terraformersmc/') }
+		if (loadable) throw new GradleException("forbric-kernel-runtime.jar must not carry Mod Menu classes as classes: ${loadable.take(3)}")
+		def standIn = ['api/ModMenuApi', 'api/ConfigScreenFactory', 'api/UpdateChecker', 'api/UpdateInfo', 'api/UpdateChannel',
+				'util/NullScreenFactory']
+				.collect { "META-INF/forbric/modmenu-api/com/terraformersmc/modmenu/${it}.class.bin".toString() }
+				.findAll { !entries.contains(it) }
+		if (standIn) throw new GradleException("forbric-kernel-runtime.jar was built without its Mod Menu API stand-in: ${standIn}")
 		def missing = ['BlockTransferBridge', 'TransferIssues', 'PairedTransactions', 'RebornEnergyBridge',
 				'RebornEnergyAdapters', 'ForgeEnergyAdapters', 'EnergyUnits']
 				.collect { "net/forbric/kernel/runtime/transfer/${it}.class".toString() }.findAll { !entries.contains(it) }

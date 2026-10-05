@@ -349,7 +349,8 @@ class LaunchInputCheckTest {
 			{"net/forbric/kernel/metadata/forge/EcosystemVersions", "record"},
 			{"net/forbric/kernel/boot/KernelBoot", "discoverForgeFamilyModJars"},
 			{"net/forbric/kernel/boot/PassiveSeeder", "arbitratedForgeFamilyMods"},
-			{"net/forbric/kernel/boot/KernelFabricEcosystem", "scan"},
+			// Reads the Forge-family jars' requirements when there is no plan, then KernelFabricEcosystem.scan.
+			{"net/forbric/kernel/boot/KernelBoot", "scanFabricMods"},
 			// The release line's: reads the selected nested jars' Forge-family manifests for cross-ecosystem presence.
 			{"net/forbric/kernel/boot/KernelBoot", "publishNestedPresence"},
 	};

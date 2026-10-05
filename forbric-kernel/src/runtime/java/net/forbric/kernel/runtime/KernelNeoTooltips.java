@@ -168,7 +168,7 @@ public final class KernelNeoTooltips {
 		}
 		if (!GuestInjectorPruner.fabricTooltipInjectorsPruned()) {
 			ForbricLog.warn("[Forbric/Tooltips] fabric-item-api's tooltip injectors were not pruned — the kernel does not "
-					+ "draw its component tooltip providers; they show only above the item id in advanced tooltips");
+					+ "draw its component tooltip providers, and on NeoForge's dispatcher its own injectors bind nowhere");
 			return null;
 		}
 		if (!NeoTooltipAppendersInjector.aroundSpliced()) {

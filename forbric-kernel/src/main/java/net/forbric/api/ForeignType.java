@@ -222,7 +222,13 @@ public enum ForeignType {
 			"net.neoforged.neoforge.client.event.RegisterClientCommandsEvent"),
 	/** Each family's global-loot-modifier reload listener: same directory, two ideas of what a list file is. */
 	LOOT_MODIFIER_MANAGER("net.minecraftforge.common.loot.LootModifierManager",
-			"net.neoforged.neoforge.common.loot.LootModifierManager");
+			"net.neoforged.neoforge.common.loot.LootModifierManager"),
+	/**
+	 * Each family's per-tab creative search keys. The merged creative screen reads NeoForge's, which also holds the
+	 * trees; the merged class's MinecraftForge bodies looped over MinecraftForge's (CreativeSearchTreesInjector).
+	 */
+	CREATIVE_SEARCH_REGISTRY("net.minecraftforge.client.CreativeModeTabSearchRegistry",
+			"net.neoforged.neoforge.client.CreativeModeTabSearchRegistry");
 
 	private final String forge;
 	private final String neoforge;

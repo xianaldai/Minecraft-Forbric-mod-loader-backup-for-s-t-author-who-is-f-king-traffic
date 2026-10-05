@@ -16,9 +16,14 @@
 
 package net.forbric.kernel.transform;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Predicate;
+
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.InsnList;
@@ -35,11 +40,11 @@ import net.forbric.kernel.util.ForbricLog;
 /**
  * Lets NeoForge's registry sync remap the registries that MinecraftForge wraps.
  *
- * <p>On the merged base, {@code BuiltInRegistries.BLOCK}, {@code ITEM}, {@code ENTITY_TYPE} and fourteen more are
- * {@code net.minecraftforge.registries.NamespacedWrapper}s — the {@code MappedRegistry} subclass that makes a Forge
- * mod's {@code ForgeRegistries.BLOCKS} and vanilla's registry ONE store. It does that by delegating every lookup
- * to its {@code ForgeRegistry}; the {@code MappedRegistry} fields it inherits ({@code byId}, {@code toId},
- * {@code byKey}) stay empty for life.
+ * <p>On the merged base, {@code BuiltInRegistries.BLOCK}, {@code ITEM}, {@code ENTITY_TYPE} and 24 more builtin
+ * registries (plus MinecraftForge's own three) are {@code net.minecraftforge.registries.NamespacedWrapper}s — the
+ * {@code MappedRegistry} subclass that makes a Forge mod's {@code ForgeRegistries.BLOCKS} and vanilla's registry ONE
+ * store. It does that by delegating every lookup to its {@code ForgeRegistry}; the {@code MappedRegistry} fields it
+ * inherits ({@code byId}, {@code toId}, {@code byKey}) stay empty for life.
  *
  * <p>NeoForge's {@code RegistryManager.applySnapshot} — the client half of its configuration-phase registry sync —
  * remaps a registry to the server's ids through exactly those fields: {@code unfreeze(false)}, {@code clear(false)},
@@ -105,6 +110,34 @@ public final class RegistrySyncParityInjector implements ClassTransformer {
 	private static final String FABRIC_APPLY = "apply";
 	private static final String FABRIC_APPLY_DESC = "(Lnet/fabricmc/fabric/impl/registry/sync/packet/RegistrySyncPayload;)V";
 
+	/**
+	 * Whether the loader that defines the wrapper has a class, by internal name. Asked when the wrapper is
+	 * transformed, for the types fabric-api's {@code remap} names.
+	 */
+	private final Predicate<String> gameHasClass;
+
+	/**
+	 * The injector KernelBoot registers: {@code game} is the loader that defines the wrapper, and so the one that
+	 * resolves the types its methods name. It is asked for each type's {@code .class} resource when the wrapper is
+	 * transformed, and fabric-api's {@code remap} is added only when every type it names is there. The decision lives
+	 * here, not in KernelBoot, so that {@code RegistryWrapperAccessInjectorTest} runs the very predicate the game does.
+	 * See {@link #giveWrapperBothContracts}.
+	 */
+	public static RegistrySyncParityInjector forGameLoader(ClassLoader game) {
+		if (game == null) throw new NullPointerException("game");
+		return new RegistrySyncParityInjector(type -> game.getResource(type + ".class") != null);
+	}
+
+	/**
+	 * For tests that stand in for the game loader; the game's injector is {@link #forGameLoader}.
+	 *
+	 * @param gameHasClass whether the game loader has the class with this internal name
+	 */
+	RegistrySyncParityInjector(Predicate<String> gameHasClass) {
+		if (gameHasClass == null) throw new NullPointerException("gameHasClass");
+		this.gameHasClass = gameHasClass;
+	}
+
 	@Override
 	public String name() {
 		return "forbric-registry-sync-parity";
@@ -133,24 +166,24 @@ public final class RegistrySyncParityInjector implements ClassTransformer {
 	@Override
 	public byte[] transform(String className, byte[] classBytes, TransformContext context) {
 		if (classBytes == null || classBytes.length == 0) return classBytes;
-		if (WRAPPER.equals(className)) return giveWrapperBothContracts(className, classBytes);
+		if (WRAPPER.equals(className)) return giveWrapperBothContracts(className, classBytes, missingRemapTypes());
 		if (WRAPPER_PENDING_TAGS.equals(className)) return giveWrapperPendingTagsItsContents(className, classBytes);
 		if (NEO_REGISTRY_MANAGER.equals(className)) return flushAroundApplySnapshot(className, classBytes);
 		if (FABRIC_CLIENT_SYNC.equals(className)) return flushAroundFabricApply(className, classBytes);
 		return classBytes;
 	}
 
-	/**
-	 * Adds NeoForge's {@code clear(Z)} / {@code registerIdMapping(ResourceKey, I)} and fabric-api's
-	 * {@code remap(Object2IntMap, RemapMode)} to the wrapper — unless it grew its own.
-	 *
-	 * <p>fabric-api's half is the same disease with a quieter symptom: its {@code remap} is a mixin method that
-	 * rewrites the {@code MappedRegistry} fields it shadows, and on the wrapper those are the same empty fields —
-	 * so against a PURE Fabric server (where only fabric-api's sync runs) the seventeen wrapped registries kept
-	 * their local ids and nothing said so. With mod sets that differ between client and server, every block, item,
-	 * entity type and sound in those registries then decodes to the wrong one. The override stages the server's
-	 * ids exactly as the NeoForge one does, and {@code ClientRegistrySyncHandler.apply} flushes them.
-	 */
+	/** The reference types {@code remap}'s descriptor names that {@link #gameHasClass} does not find, by internal name. */
+	private List<String> missingRemapTypes() {
+		List<String> missing = new ArrayList<>();
+		for (Type argument : Type.getArgumentTypes(REMAP_DESC)) {
+			if (argument.getSort() == Type.OBJECT && !gameHasClass.test(argument.getInternalName())) {
+				missing.add(argument.getInternalName());
+			}
+		}
+		return missing;
+	}
+
 	/**
 	 * Adds {@code contents()} to MinecraftForge's pending-tags class: the map of tag key to the holders that tag is
 	 * about to hold.
@@ -196,7 +229,33 @@ public final class RegistrySyncParityInjector implements ClassTransformer {
 		return writer.toByteArray();
 	}
 
-	private static byte[] giveWrapperBothContracts(String className, byte[] classBytes) {
+	/**
+	 * Adds NeoForge's {@code clear(Z)} / {@code registerIdMapping(ResourceKey, I)} and, when fabric-api is there,
+	 * fabric-api's {@code remap(Object2IntMap, RemapMode)} to the wrapper — unless it grew its own.
+	 *
+	 * <p>fabric-api's half is the same disease with a quieter symptom: its {@code remap} is a mixin method that
+	 * rewrites the {@code MappedRegistry} fields it shadows, and on the wrapper those are the same empty fields —
+	 * so against a PURE Fabric server (where only fabric-api's sync runs) the wrapped registries kept their local
+	 * ids and nothing said so. With mod sets that differ between client and server, every block, item, entity type
+	 * and sound in those registries then decodes to the wrong one. The override stages the server's ids exactly as
+	 * the NeoForge one does, and {@code ClientRegistrySyncHandler.apply} flushes them.
+	 *
+	 * <p><b>Only when its types are on the game loader.</b> The method is public and names
+	 * {@code RemappableRegistry$RemapMode}. {@code Class.getMethod} searches from the runtime class upwards, resolves
+	 * the parameter types of every public method each class it reaches declares, and stops at the first class that
+	 * declares a match; {@code getMethods} reaches every class. Without fabric-api that type is nowhere, so every
+	 * lookup that reaches {@code NamespacedWrapper} threw {@code NoClassDefFoundError}: {@code getMethods()}, any
+	 * {@code getMethod} on a plain wrapper, and on a {@code NamespacedDefaultedWrapper} (the class of
+	 * {@code BuiltInRegistries.BLOCK}) any name it does not declare itself — {@code getOptional}, {@code keySet}, …
+	 * — in every pack without fabric-api, pure NeoForge and MinecraftForge packs included. There nothing calls
+	 * {@code remap} (the interface it overrides is fabric-api's), so leaving it out costs nothing; with fabric-api it
+	 * is added as before. {@code clear} and {@code registerIdMapping} are protected, which {@code getMethod} does not
+	 * look at, and name only game types.
+	 *
+	 * @param missingRemapTypes the types {@code remap}'s descriptor names that the game loader does not have; empty
+	 *                          when fabric-api's remap can be added
+	 */
+	private static byte[] giveWrapperBothContracts(String className, byte[] classBytes, List<String> missingRemapTypes) {
 		ClassNode node = new ClassNode();
 		new ClassReader(classBytes).accept(node, 0);
 
@@ -235,21 +294,29 @@ public final class RegistrySyncParityInjector implements ClassTransformer {
 		clear.maxLocals = 2;
 		node.methods.add(clear);
 
-		// public void remap(Object2IntMap<Identifier> ids, RemapMode mode) { KernelForgeWrapperSync.stageFabricRemap(this, ids, mode); }
-		MethodNode remap = new MethodNode(Opcodes.ACC_PUBLIC, REMAP, REMAP_DESC, null, null);
-		remap.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
-		remap.instructions.add(new VarInsnNode(Opcodes.ALOAD, 1));
-		remap.instructions.add(new VarInsnNode(Opcodes.ALOAD, 2));
-		remap.instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HOOK_OWNER, "stageFabricRemap",
-				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V", false));
-		remap.instructions.add(new InsnNode(Opcodes.RETURN));
-		remap.maxStack = 3;
-		remap.maxLocals = 3;
-		node.methods.add(remap);
+		if (missingRemapTypes.isEmpty()) {
+			// public void remap(Object2IntMap<Identifier> ids, RemapMode mode) { KernelForgeWrapperSync.stageFabricRemap(this, ids, mode); }
+			MethodNode remap = new MethodNode(Opcodes.ACC_PUBLIC, REMAP, REMAP_DESC, null, null);
+			remap.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+			remap.instructions.add(new VarInsnNode(Opcodes.ALOAD, 1));
+			remap.instructions.add(new VarInsnNode(Opcodes.ALOAD, 2));
+			remap.instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HOOK_OWNER, "stageFabricRemap",
+					"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V", false));
+			remap.instructions.add(new InsnNode(Opcodes.RETURN));
+			remap.maxStack = 3;
+			remap.maxLocals = 3;
+			node.methods.add(remap);
 
-		ForbricLog.info("[Forbric/RegistrySync] gave %s NeoForge's id-remap contract (clear, registerIdMapping) and "
-				+ "fabric-api's (remap) — the server's ids are staged and applied through Forge's own injectSnapshot",
-				className);
+			ForbricLog.info("[Forbric/RegistrySync] gave %s NeoForge's id-remap contract (clear, registerIdMapping) and "
+					+ "fabric-api's (remap) — the server's ids are staged and applied through Forge's own injectSnapshot",
+					className);
+		} else {
+			ForbricLog.info("[Forbric/RegistrySync] gave %s NeoForge's id-remap contract (clear, registerIdMapping) — "
+					+ "the server's ids are staged and applied through Forge's own injectSnapshot; fabric-api's (remap) "
+					+ "left out, because the game has no %s, and a public method naming it would make getMethods() and "
+					+ "every getMethod lookup that reaches this class fail to link", className,
+					String.join(", ", missingRemapTypes));
+		}
 		ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
 		node.accept(writer);
 		return writer.toByteArray();

@@ -22,6 +22,7 @@
 # Generated probe jars and hash manifests; their sources live in /canary/.
 /run/canary/
 /run/energy-api/
+/run/carry-on/
 /run/.gate-downloads/
 /run/.gate-clones/
 

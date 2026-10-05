@@ -68,6 +68,13 @@ import org.objectweb.asm.tree.MethodNode;
  * <p>Anything this cannot parse counts as RESOLVED. A weak parser must never be the reason a working mixin is
  * dropped; the cost of a false negative is a mixin that misbehaves as it does today, while the cost of a false
  * positive is silently deleting behaviour that worked.
+ *
+ * <h2>What native drops as well</h2>
+ *
+ * <p>A miss is the merge's only when the mod's own platform had the member: vanilla 26.2 for a Fabric mod, its own
+ * patched game for a MinecraftForge or NeoForge mod. An injector whose every target that platform lacks too, and which
+ * nothing requires to inject, is one native Mixin drops without a word; it is counted neither way and listed in
+ * {@link Result#nativeAbsent}, so the mixin is judged on the rest. See {@link NativeAbsentTargets}.
  */
 public final class MixinFit {
 	private static final String MIXIN_DESC = "Lorg/spongepowered/asm/mixin/Mixin;";
@@ -80,6 +87,12 @@ public final class MixinFit {
 	private static final String WRAP_OPERATION_DESC = "Lcom/llamalad7/mixinextras/injector/wrapoperation/WrapOperation;";
 	private static final String REDIRECT_DESC = "Lorg/spongepowered/asm/mixin/injection/Redirect;";
 	private static final String GROUP_DESC = "Lorg/spongepowered/asm/mixin/injection/Group;";
+	private static final String INJECT_DESC = "Lorg/spongepowered/asm/mixin/injection/Inject;";
+	private static final String COERCE_DESC = "Lorg/spongepowered/asm/mixin/injection/Coerce;";
+	private static final String SURROGATE_DESC = "Lorg/spongepowered/asm/mixin/injection/Surrogate;";
+	private static final String CALLBACK_INFO_DESC = "Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;";
+	private static final String CALLBACK_INFO_RETURNABLE_DESC =
+			"Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfoReturnable;";
 
 	/** Injector annotations whose {@code method} value names one or more target methods on the mixin's target. */
 	static final Set<String> INJECTOR_DESCS = Set.of(
@@ -111,13 +124,56 @@ public final class MixinFit {
 	}
 
 	/**
-	 * @param verdict    the decision
-	 * @param unresolved human-readable anchors that did not resolve, for the log
-	 * @param resolved   how many anchors resolved
-	 * @param total      how many anchors were checked
+	 * One {@code @Inject} Mixin will certainly reject with "Invalid descriptor": in a target where its selectors bind
+	 * exactly one method, that method is not one the handler was written for, the handler captures no locals, and one of
+	 * its {@code @At}s is sure to find a point in that method ({@link #findsAPoint}). Mixin checks the handler at each
+	 * point it finds and throws {@code InvalidInjectionException} at the first, whatever {@code require} says (when the
+	 * selectors bind two or more methods it skips the one that does not fit instead; where it finds no point it injects
+	 * nothing and {@code require} counts that as any other miss), and the exception fails the mixin's application to that
+	 * class, every injector after it included -- in a config that stays required, the game. A PARTIAL verdict alone said
+	 * nothing about that.
+	 *
+	 * @param handler    the handler method's name
+	 * @param desc       its descriptor
+	 * @param reason     the refused binding, as the unresolved anchor names it
+	 * @param everywhere whether no target binds it to a method it fits, so removing it loses nothing that would run
+	 */
+	public record Rejection(String handler, String desc, String reason, boolean everywhere) {
+		String key() {
+			return handler + desc;
+		}
+	}
+
+	/**
+	 * @param verdict       the decision
+	 * @param unresolved    human-readable anchors that did not resolve, for the log
+	 * @param resolved      how many anchors resolved
+	 * @param total         how many anchors were checked
+	 * @param nativeAbsent  injector targets the mod's own platform lacks too, which native Mixin drops without a word
+	 *                      ({@link NativeAbsentTargets}); counted in none of the above, so they decide nothing
+	 * @param soft          how many of {@code unresolved} are soft: an injector bound only where nothing runs, a drifted
+	 *                      anonymous target — reasons for PARTIAL, never for UNFIT
+	 * @param rejected      the injectors among the misses that Mixin will reject outright ({@link Rejection})
 	 */
 	public record Result(Verdict verdict, List<String> unresolved, int resolved, int total,
-			List<String> foreign) {
+			List<String> foreign, List<String> nativeAbsent, int soft, List<Rejection> rejected) {
+		public Result(Verdict verdict, List<String> unresolved, int resolved, int total, List<String> foreign) {
+			this(verdict, unresolved, resolved, total, foreign, List.of(), 0, List.of());
+		}
+
+		/** The anchors that did not resolve at all: {@code unresolved} without the soft ones. */
+		public int hardUnresolved() {
+			return unresolved.size() - soft;
+		}
+
+		/** Whether every rejection in {@code later} was already one of this result's, by handler. */
+		boolean coversRejectionsOf(Result later) {
+			Set<String> mine = new java.util.HashSet<>();
+			for (Rejection r : rejected) mine.add(r.key());
+			for (Rejection r : later.rejected) if (!mine.contains(r.key())) return false;
+			return true;
+		}
+
 		/**
 		 * Whether the caller should drop this mixin.
 		 *
@@ -181,6 +237,26 @@ public final class MixinFit {
 		return !"off".equalsIgnoreCase(System.getProperty(LIVENESS_PROPERTY, "on"));
 	}
 
+	/**
+	 * {@code -Dforbric.mixinFit.handlerFit=off}: a name-only {@code @Inject} selector reads as resolved whenever the name
+	 * binds, as before the verdict asked whether the method it binds is one the handler was written for.
+	 */
+	static final String HANDLER_FIT_PROPERTY = "forbric.mixinFit.handlerFit";
+
+	static boolean asksHandlerFit() {
+		return !"off".equalsIgnoreCase(System.getProperty(HANDLER_FIT_PROPERTY, "on"));
+	}
+
+	/**
+	 * {@code -Dforbric.mixinFit.rejectionPoint=off}: a refused binding is a {@link Rejection} whatever its {@code @At} finds
+	 * in the method it binds, as before the verdict asked whether Mixin would meet the handler at a point there at all.
+	 */
+	static final String REJECTION_POINT_PROPERTY = "forbric.mixinFit.rejectionPoint";
+
+	static boolean asksRejectionPoint() {
+		return !"off".equalsIgnoreCase(System.getProperty(REJECTION_POINT_PROPERTY, "on"));
+	}
+
 	private MixinFit() {
 	}
 
@@ -215,18 +291,33 @@ public final class MixinFit {
 	 */
 	public static Result evaluate(byte[] mixinBytes, Function<String, byte[]> targetResolver,
 			java.util.function.Predicate<String> gameClass, MixinAddedMembers.View added) {
+		return evaluate(mixinBytes, targetResolver, gameClass, added, NativeAbsentTargets.Context.NONE);
+	}
+
+	/**
+	 * @param nativeView what lets an injector target the mod's own platform lacks too be told from one the merge lost;
+	 *                   such an injector is left out of the verdict and named in {@link Result#nativeAbsent}.
+	 *                   {@code Context.NONE} asks nothing and counts it as a miss, as before
+	 */
+	public static Result evaluate(byte[] mixinBytes, Function<String, byte[]> targetResolver,
+			java.util.function.Predicate<String> gameClass, MixinAddedMembers.View added,
+			NativeAbsentTargets.Context nativeView) {
 		ClassNode mixin = read(mixinBytes, false);
 		List<String> targets = mixinTargets(mixin);
 		if (targets.isEmpty()) return new Result(Verdict.FIT, List.of(), 0, 0, List.of());
 
 		List<String> unresolved = new ArrayList<>();
 		List<String> orphaned = new ArrayList<>();
+		List<String> nativeAbsent = new ArrayList<>();
 		int resolved = 0;
 		int total = 0;
 		int softMisses = 0;
 		int bound = 0;
 
 		List<String> foreign = new ArrayList<>();
+		// Injectors Mixin will reject outright, by the first target that shows it, and those some target binds as written.
+		Map<MethodNode, String> rejectedIn = new java.util.LinkedHashMap<>();
+		Set<MethodNode> boundIn = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 		for (String declared : targets) {
 			// The same move MixinAnonymousRetarget will make to the @Mixin annotation. Judged here too, because a
 			// verdict about the class the mixin will NOT be applied to is worse than no verdict: Polymer's two
@@ -244,8 +335,16 @@ public final class MixinFit {
 			// same 1226 there is not one of the latter.
 			boolean gameOwned = gameClass.test(targetName.replace('/', '.'));
 
+			// The platform is asked about the class it compiled at the name the mixin declares, so only when the mixin
+			// lands there: a target MixinAnonymousRetarget moves, or another mod's class, is not the platform's to answer.
+			// Minecraft's own libraries are (brigadier, DataFixerUpper): the kernel loads them beside the game rather than
+			// as game classes, so they are not game-owned here, and NativeAbsentTargets answers for exactly the library
+			// jars every platform loads, by the jar that serves the class.
+			NativeAbsentTargets.Context asked = moved == null && nativeView != null
+					&& (gameOwned || NativeAbsentTargets.inVanillaPackages(targetName))
+					? nativeView : NativeAbsentTargets.Context.NONE;
 			List<Anchor> anchors = new ArrayList<>(anchorsOf(mixin, target, targetResolver,
-					added == null ? MixinAddedMembers.View.NONE : added, declared));
+					added == null ? MixinAddedMembers.View.NONE : added, declared, asked));
 			// A renumbered anonymous class: every member anchor may resolve and still belong to a different class
 			// than the one vanilla compiled at that name. Soft — it forces PARTIAL, never UNFIT.
 			if (moved == null && gameOwned && MergedBaseAnonymousDrift.drifted(targetName)) {
@@ -254,7 +353,15 @@ public final class MixinFit {
 						+ ")", false, true));
 			}
 			for (Anchor anchor : anchors) {
+				// Native Mixin drops it on the mod's own platform too, so it is neither a hit nor a miss here: the mixin
+				// is judged on the rest, and Mixin drops this one exactly as native does.
+				if (anchor.nativeAbsent) {
+					nativeAbsent.add(anchor.describe(targetName));
+					continue;
+				}
 				total++;
+				if (anchor.rejectedBy != null) rejectedIn.putIfAbsent(anchor.rejectedBy, anchor.describe(targetName));
+				if (anchor.injector != null && (anchor.resolved || anchor.bound)) boundIn.add(anchor.injector);
 				if (anchor.resolved) {
 					resolved++;
 				} else {
@@ -269,13 +376,22 @@ public final class MixinFit {
 
 		// An orphaned @Shadow field is the silent case: it resolves (the field is still declared) and then reads
 		// null at runtime. It outranks the count-based verdicts precisely because nothing else detects it.
-		if (!orphaned.isEmpty()) return new Result(Verdict.HAZARD, orphaned, resolved, total, List.of());
-		if (total == 0 || unresolved.isEmpty()) return new Result(Verdict.FIT, List.of(), resolved, total, List.of());
+		List<String> absent = List.copyOf(nativeAbsent);
+		if (!orphaned.isEmpty()) return new Result(Verdict.HAZARD, orphaned, resolved, total, List.of(), absent, 0, List.of());
+		if (total == 0 || unresolved.isEmpty()) return new Result(Verdict.FIT, List.of(), resolved, total, List.of(), absent, 0, List.of());
 		// UNFIT is "no HARD anchor resolves"; a soft miss alone is PARTIAL, whatever else is there. An injector bound where
 		// nothing runs still bound — it is what resolved before liveness was asked — so it keeps a mixin from UNFIT.
 		boolean anyHardResolved = resolved > 0 || bound > 0 || unresolved.size() == softMisses;
 		return new Result(anyHardResolved ? Verdict.PARTIAL : Verdict.UNFIT, unresolved, resolved, total,
-				List.copyOf(foreign));
+				List.copyOf(foreign), absent, softMisses, rejections(rejectedIn, boundIn));
+	}
+
+	/** The rejections, in the mixin's own order: each handler once, with whether some target binds it where it fits. */
+	private static List<Rejection> rejections(Map<MethodNode, String> rejectedIn, Set<MethodNode> boundIn) {
+		if (rejectedIn.isEmpty()) return List.of();
+		List<Rejection> out = new ArrayList<>();
+		rejectedIn.forEach((handler, reason) -> out.add(new Rejection(handler.name, handler.desc, reason, !boundIn.contains(handler))));
+		return List.copyOf(out);
 	}
 
 	// ---------------------------------------------------------------------------------------------------------------
@@ -295,8 +411,17 @@ public final class MixinFit {
 		 * resolved, and the mixin still applies there, so it must not become the reason a mixin is dropped.
 		 */
 		final boolean bound;
+		/**
+		 * An injector target the mod's own platform lacks too, on an injector nothing makes count: native Mixin drops it
+		 * without a word, so it is reported apart and counted as neither resolved nor missing ({@link NativeAbsentTargets}).
+		 */
+		boolean nativeAbsent;
 		/** The {@code @Group} the injector naming this anchor belongs to, or {@code null}; see {@link #settleGroups}. */
 		String group;
+		/** The injector whose target selectors this anchor is, for an {@code @Inject target} anchor; null otherwise. */
+		MethodNode injector;
+		/** That injector, when this miss is a binding Mixin will reject outright ({@link Rejection}); null otherwise. */
+		MethodNode rejectedBy;
 		/** That injector, so a group can tell its alternatives apart. */
 		MethodNode handler;
 
@@ -326,6 +451,13 @@ public final class MixinFit {
 			return new Anchor("@Inject target", detail, false, true, false, true);
 		}
 
+		/** An injector whose every target the mod's own platform lacks too, and which nothing requires to inject. */
+		static Anchor absentNatively(String detail) {
+			Anchor anchor = new Anchor("@Inject target", detail, false);
+			anchor.nativeAbsent = true;
+			return anchor;
+		}
+
 		void alternativeOf(String group, MethodNode handler) {
 			this.group = group;
 			this.handler = handler;
@@ -338,7 +470,7 @@ public final class MixinFit {
 	}
 
 	private static List<Anchor> anchorsOf(ClassNode mixin, ClassNode target, Function<String, byte[]> resolver,
-			MixinAddedMembers.View added, String declared) {
+			MixinAddedMembers.View added, String declared, NativeAbsentTargets.Context nativeView) {
 		// The target again with its local variable tables, read once and only if an injector needs it.
 		Supplier<ClassNode> withLocals = new Supplier<>() {
 			private ClassNode read;
@@ -402,7 +534,7 @@ public final class MixinFit {
 			AnnotationNode injector = injectorOf(m);
 			if (injector == null) continue;
 			int first = out.size();
-			injectorAnchors(mixin, m, injector, target, resolver, withLocals, out);
+			injectorAnchors(mixin, m, injector, target, resolver, withLocals, nativeView, out);
 			String group = groupOf(m);
 			if (group != null) {
 				for (int i = first; i < out.size(); i++) out.get(i).alternativeOf(group, m);
@@ -426,7 +558,8 @@ public final class MixinFit {
 	 * to {@code out}; nothing when the injector names no selector.
 	 */
 	private static void injectorAnchors(ClassNode mixin, MethodNode m, AnnotationNode injector, ClassNode target,
-			Function<String, byte[]> resolver, Supplier<ClassNode> withLocals, List<Anchor> out) {
+			Function<String, byte[]> resolver, Supplier<ClassNode> withLocals, NativeAbsentTargets.Context nativeView,
+			List<Anchor> out) {
 		// An injector's `method` is a list of CANDIDATE selectors, not a conjunction. Mixin's default
 		// require=1 counts matches across the whole list, so mods routinely ship alternative names to span
 		// mappings or MC versions — Iris's LevelRenderer mixin carries both `lambda$addSkyPass$0` AND
@@ -437,13 +570,25 @@ public final class MixinFit {
 		List<MethodNode> hits = new ArrayList<>();
 		List<String> misses = new ArrayList<>();
 		String pinnedAs = null;
+		// A name binds and is still a miss when Mixin rejects the handler for the method it binds ("Invalid descriptor"):
+		// MoogsStructureLib's HEAD of placeEntities, whose vanilla shape is gone and whose name binds MinecraftForge's.
+		List<String> refused = new ArrayList<>();
+		// The method each refused selector binds, where Mixin would meet the handler.
+		List<MethodNode> refusedIn = new ArrayList<>();
 		for (String selector : selectors) {
 			// A name-only @Inject that MixinOverloadPin moves off the first overload is judged where it will land:
-			// its anchors are in the overload it was written for, not in the other ecosystem's declared first.
-			MethodNode pinned = selectors.size() == 1 ? MixinOverloadPin.destination(m, selector, target) : null;
+			// its anchors are in the overload it was written for, not in the other ecosystem's declared first. The pin
+			// lands only on an overload the handler takes strictly, so a pinned selector is never a refused one.
+			MethodNode pinned = selectors.size() == 1 ? MixinOverloadPin.destination(mixin, m, selector, target) : null;
 			if (pinned != null) pinnedAs = pinned.name + pinned.desc;
 			List<MethodNode> targetMethods = pinned != null ? List.of(pinned) : resolveSelector(target, selector, resolver);
-			if (!targetMethods.isEmpty()) hits.addAll(targetMethods); else misses.add(selector);
+			String refusal = targetMethods.isEmpty() || pinned != null ? null
+					: refusedBinding(mixin, m, injector, selector, target);
+			if (refusal != null) {
+				refused.add(refusal);
+				refusedIn.add(firstNamed(target, boundName(selector)));
+			}
+			if (!targetMethods.isEmpty() && refusal == null) hits.addAll(targetMethods); else misses.add(selector);
 		}
 		if (selectors.isEmpty()) return;
 		// The move InsertedLambdaArgumentShim will make for a selector naming a lambda the pruner dropped, judged
@@ -463,13 +608,34 @@ public final class MixinFit {
 			if (shimmed != null) {
 				hits.add(shimmed);
 				misses.clear();
+				refused.clear();
+				refusedIn.clear();
 			}
 		}
 		String where = misses.isEmpty() ? String.join("|", selectors)
 				: hits.isEmpty() ? String.join("|", misses)
 				: String.join("|", misses) + " (" + hits.size() + "/" + selectors.size() + " selectors hit)";
 		if (hits.isEmpty()) {
-			out.add(new Anchor("@Inject target", where, false));
+			// Not Enough Crashes' populateCrashReport: a name no vanilla 26.2 BlockEntity has either, in a Fabric mod.
+			// Native Mixin skips an injector that matches nothing and need not inject, and says nothing; a miss here
+			// would have been the whole mixin's, and a required loss native never has. A MinecraftForge or NeoForge
+			// mod is asked about its own patched game, which may have the method the merge lost. Asked only when no
+			// selector bound at all: a refused binding is a method the game HAS, bound where the handler does not fit.
+			if (refused.isEmpty() && NativeAbsentTargets.dropsNatively(m, injector, selectors, target.name, nativeView)) {
+				out.add(Anchor.absentNatively(where));
+				return;
+			}
+			// One method bound, and refused: Mixin throws rather than skip it -- at the first point it finds there. Two or
+			// more bound and Mixin skips each that does not fit, looking for a match among the others; no point found and
+			// it injects nothing, which require counts as any other miss.
+			boolean throwsThere = refused.size() == 1 && rejectsWhole(m, injector);
+			boolean meets = throwsThere && meetsAPoint(injector, refusedIn.get(0));
+			Anchor miss = new Anchor("@Inject target", refused.isEmpty() ? where : String.join("; ", refused)
+					+ (throwsThere && !meets ? "; its @At may find no point there, and Mixin rejects a handler only at a point it finds" : ""),
+					false);
+			miss.injector = m;
+			if (meets) miss.rejectedBy = m;
+			out.add(miss);
 			return;
 		}
 		// The move MixinStubRebind will make for an injector bound to a carrier stub its own platform ran as a body
@@ -488,10 +654,12 @@ public final class MixinFit {
 		}
 		// Bound is not run. An injector whose every method is one nothing in the merged game calls attaches and
 		// never fires: Better Mount HUD's XP redirect in Hud.extractHotbarAndDecorations, whose vanilla caller
-		// NeoForge's HUD layers replaced. Soft — it makes the mixin PARTIAL with the reason, never UNFIT, and no
-		// injector moves because of it.
+		// NeoForge's HUD layers replaced, and malilib's tooltip hook in the renamed tooltip body R3 moves it to. Soft —
+		// it makes the mixin PARTIAL with the reason, never UNFIT, and no injector moves because of it.
 		String never = neverRuns(mixin, target, hits, resolver);
-		out.add(never == null ? new Anchor("@Inject target", where, true) : Anchor.neverRuns(never));
+		Anchor bound = never == null ? new Anchor("@Inject target", where, true) : Anchor.neverRuns(never);
+		bound.injector = m;
+		out.add(bound);
 
 		// Each @At(INVOKE/FIELD, target=…) must name an instruction inside a method the injector actually
 		// bound to — again ANY, for the same require=1 reason.
@@ -524,7 +692,11 @@ public final class MixinFit {
 				}
 			} else if (!anywhere) {
 				anywhere = MixinAtWidenedCall.wouldMove(m, injector, target.methods, atValue, atTarget) != null
-						|| MixinWrapOperationShim.wouldWrap(mixin.name, m, target.methods) != null;
+						|| MixinWrapOperationShim.wouldWrap(mixin.name, m, target.methods) != null
+						// …and MixinSubtypeOwnerRetarget's: the same call through another owner (Decoder.parse made as
+						// Codec.parse, Monster.lookAt made as Mob.lookAt through the field the merge widened).
+						|| MixinSubtypeOwnerRetarget.wouldMove(mixin.name, m, injector, atTarget, target,
+								name -> withCode(resolver, name)) != null;
 			}
 			// An anchor into another class names that class in full and still says where it was looked for: owo's
 			// Fabric and Quilt alternatives both anchor on a class called Hooks, and "Hooks.startServer in main" read
@@ -586,7 +758,8 @@ public final class MixinFit {
 		if (satisfied.isEmpty()) return anchors;
 		List<Anchor> kept = new ArrayList<>(anchors.size());
 		for (Anchor anchor : anchors) {
-			if (!anchor.resolved && anchor.group != null && satisfied.contains(anchor.group)) continue;
+			// A binding Mixin rejects outright throws whatever the group's count says, so it is never settled away.
+			if (!anchor.resolved && anchor.group != null && satisfied.contains(anchor.group) && anchor.rejectedBy == null) continue;
 			kept.add(anchor);
 		}
 		return kept;
@@ -745,14 +918,294 @@ public final class MixinFit {
 	}
 
 	/**
+	 * Why a name-only {@code @Inject} selector does not bind for {@code handler}: the method the name binds is not one the
+	 * handler was written for, so Mixin rejects it ("Invalid descriptor") — or, beside other targets, skips it. Null when it
+	 * is, when the selector spells a descriptor or a pattern, or when the handler has no callback to judge by.
+	 *
+	 * <p>Mixin binds a name-only selector to the FIRST method of that name the target declares (its default quantifier
+	 * matches one) and accepts a handler that takes that method's arguments then its callback — {@code CallbackInfo} for a
+	 * void method, {@code CallbackInfoReturnable} otherwise — or the callback alone; a {@code @Coerce} argument and the
+	 * locals captured after the callback are not judged, and a {@code @Surrogate} Mixin finds may stand in
+	 * ({@link #surrogateBinds}: exactly the callback descriptor, a visible annotation). On
+	 * vanilla the name bound the method the mod was compiled against; on the merged base it can bind a carrier's
+	 * overload. Every such case is a miss, whatever moves it afterwards: {@link MergedBaseCalleeSwaps#REPLACED} names the
+	 * replacement in the line and MixinRetarget's R7 follows it, MixinHandlerShim wraps a lambda the merge reshaped. A
+	 * selector {@link MixinOverloadPin} will spell never gets here: the verdict asks the pin first and judges the
+	 * overload it lands on. Where the name is the injector's one binding, the miss is also a {@link Rejection}.
+	 */
+	static String refusedBinding(ClassNode mixin, MethodNode handler, AnnotationNode injector, String selector, ClassNode target) {
+		if (!asksHandlerFit() || !INJECT_DESC.equals(injector.desc) || target.methods == null) return null;
+		String name = boundName(selector);
+		if (name == null) return null;
+		MethodNode bound = firstNamed(target, name);
+		if (bound == null || handlerFits(handler, bound.desc) || surrogateBinds(mixin, handler, bound.desc)) return null;
+		String binds = "binds " + bound.name + bound.desc + ", which the handler was not written for";
+		MergedBaseCalleeSwaps.Replaced row = MergedBaseCalleeSwaps.replaced(target.name, name, null,
+				MixinStubRebind.ecosystemOf(mixin.name));
+		if (row != null) {
+			String vanilla = row.vanilla().substring(row.vanilla().indexOf('('));
+			boolean declared = false;
+			for (MethodNode m : target.methods) declared |= m.name.equals(name) && m.desc.equals(vanilla);
+			if (!declared) {
+				return name + vanilla + " is gone: the carrier replaced it with "
+						+ row.replacement().substring(0, row.replacement().indexOf('(')) + ", and the name " + binds;
+			}
+		}
+		// What the handler was written for, when the class says: a later overload of the name, or (MixinOverloadPin's
+		// evidence) a body of it the duplicate-lambda pruner dropped.
+		for (MethodNode m : target.methods) {
+			if (m != bound && m.name.equals(name) && handlerFits(handler, m.desc)) {
+				return name + " " + binds + "; it fits " + name + m.desc + ", declared later, and Mixin binds the first";
+			}
+		}
+		for (String dropped : net.forbric.kernel.transform.DuplicateLambdaPruneInjector.droppedDescriptors(target.name, name)) {
+			if (MixinOverloadPin.fits(handler.desc, dropped)) {
+				return name + " " + binds + "; the shape it was written for, " + dropped + ", was a lambda of the "
+						+ MixinOverloadPin.enclosing(name) + " body the byte merge did not keep";
+			}
+		}
+		return name + " " + binds;
+	}
+
+	/**
+	 * Whether a refused binding of this injector makes Mixin throw rather than skip: an {@code @Inject} that selects by
+	 * {@code method} alone and captures no locals. With {@code locals} set, Mixin's descriptor check goes the capture way
+	 * (CAPTURE_FAILSOFT, which the kernel makes of FAILHARD, warns and skips), and {@code PRINT} only prints.
+	 */
+	static boolean rejectsWhole(MethodNode handler, AnnotationNode injector) {
+		if (!INJECT_DESC.equals(injector.desc) || injector.values == null) return false;
+		for (int i = 0; i + 1 < injector.values.size(); i += 2) {
+			Object key = injector.values.get(i);
+			if ("target".equals(key)) return false;
+			if ("locals".equals(key) && injector.values.get(i + 1) instanceof String[] e && e.length == 2
+					&& !"NO_CAPTURE".equals(e[1])) return false;
+		}
+		return true;
+	}
+
+	/**
+	 * The refused binding that makes Mixin reject {@code handler}'s {@code @Inject} in {@code mixin} as it now stands, or
+	 * null: asked again of the node Mixin receives, after every adapter has had its say, by the same rule the verdict's
+	 * {@link Rejection} uses -- in each target, the selectors bind one method and it is not one the handler was written
+	 * for, and an {@code @At} is sure to find a point in it. Null when some target binds it where it fits or binds two
+	 * methods, when a selector is anything but a name (a pinned or rebound selector spells its descriptor), when no point
+	 * is certain, and when a target cannot be read.
+	 *
+	 * @param targets the targets WITH their instructions: the point is looked for in the method the name binds
+	 */
+	public static String stillRejected(ClassNode mixin, MethodNode handler, Function<String, ClassNode> targets) {
+		AnnotationNode injector = injectorOf(handler);
+		if (injector == null || !rejectsWhole(handler, injector) || !asksHandlerFit()) return null;
+		List<String> selectors = stringList(value(injector, "method"));
+		if (selectors.isEmpty()) return null;
+		String reason = null;
+		for (String targetName : mixinTargets(mixin)) {
+			ClassNode target = targets.apply(targetName);
+			if (target == null || target.methods == null) return null;
+			Set<MethodNode> bound = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+			String refusal = null;
+			for (String selector : selectors) {
+				String name = boundName(selector);
+				if (name == null) return null;
+				for (MethodNode method : target.methods) {
+					if (method.name.equals(name)) {
+						bound.add(method);
+						break;
+					}
+				}
+				String refused = refusedBinding(mixin, handler, injector, selector, target);
+				if (refused != null) refusal = refused;
+			}
+			if (bound.isEmpty()) continue;
+			if (bound.size() > 1 || refusal == null || !meetsAPoint(injector, bound.iterator().next())) return null;
+			reason = refusal;
+		}
+		return reason;
+	}
+
+	/** The method a name binds in {@code target}: the first it declares of that name, as Mixin's default quantifier takes. */
+	private static MethodNode firstNamed(ClassNode target, String name) {
+		if (name == null || target.methods == null) return null;
+		for (MethodNode m : target.methods) if (m.name.equals(name)) return m;
+		return null;
+	}
+
+	/** {@link #findsAPoint}, or true with {@code -Dforbric.mixinFit.rejectionPoint=off}. */
+	private static boolean meetsAPoint(AnnotationNode injector, MethodNode bound) {
+		return !asksRejectionPoint() || findsAPoint(injector, bound);
+	}
+
+	/**
+	 * Whether one of {@code injector}'s {@code @At}s is sure to find a point in {@code bound}, so Mixin will meet the
+	 * handler there. Mixin checks an {@code @Inject} handler's descriptor at each point it finds
+	 * ({@code CallbackInjector.inject(Target, InjectionNode)}): a method it binds and finds no point in is a method it
+	 * injects nothing into, and {@code require} counts it as any other miss -- no "Invalid descriptor".
+	 *
+	 * <p>Sure: {@code HEAD} (the first instruction); {@code RETURN} and {@code TAIL} where the method has a return of its
+	 * own type (past {@code ordinal}); {@code INVOKE}, {@code INVOKE_ASSIGN} (a call that returns a value) and
+	 * {@code FIELD} where the method has an instruction of that member (past {@code ordinal}, and of {@code opcode} for a
+	 * field); {@code NEW} where it constructs that type (with those constructor arguments, when the target spells them).
+	 * Anything else -- a slice, another kind of point, a target this cannot read, a method without code -- is
+	 * not sure, and the binding stays an ordinary miss.
+	 */
+	static boolean findsAPoint(AnnotationNode injector, MethodNode bound) {
+		if (bound == null || bound.instructions == null || bound.instructions.size() == 0) return false;
+		if (value(injector, "slice") instanceof List<?> slices && !slices.isEmpty()) return false;
+		for (AnnotationNode at : atNodes(injector)) {
+			String kind = asString(value(at, "value"));
+			if (kind == null || value(at, "slice") != null) continue;
+			// HEAD takes the first instruction and TAIL the last return, whatever the ordinal; the others count past it.
+			if ("HEAD".equals(kind) || ("TAIL".equals(kind) && returns(bound) > 0)) return true;
+			int ordinal = value(at, "ordinal") instanceof Number n ? n.intValue() : -1;
+			int found = switch (kind) {
+				case "RETURN" -> returns(bound);
+				case "INVOKE", "INVOKE_ASSIGN", "FIELD" -> occurrences(bound, kind, asString(value(at, "target")),
+						value(at, "opcode") instanceof Number n ? n.intValue() : -1);
+				case "NEW" -> constructions(bound, asString(value(at, "target")));
+				default -> 0;
+			};
+			if (ordinal < 0 ? found > 0 : found > ordinal) return true;
+		}
+		return false;
+	}
+
+	/** How many returns of its own type {@code method} has: what {@code RETURN} and {@code TAIL} look for. */
+	private static int returns(MethodNode method) {
+		int opcode = Type.getReturnType(method.desc).getOpcode(Opcodes.IRETURN);
+		int count = 0;
+		for (AbstractInsnNode insn : method.instructions) if (insn.getOpcode() == opcode) count++;
+		return count;
+	}
+
+	/** How many instructions of {@code method} an {@code INVOKE}, {@code INVOKE_ASSIGN} or {@code FIELD} point would take. */
+	private static int occurrences(MethodNode method, String kind, String target, int opcode) {
+		Member want = target == null ? null : parseMember(target);
+		if (want == null) return 0;
+		int count = 0;
+		for (AbstractInsnNode insn : method.instructions) {
+			if ("FIELD".equals(kind)) {
+				if (insn instanceof FieldInsnNode fi && fi.name.equals(want.name) && (want.owner == null || fi.owner.equals(want.owner))
+						&& (want.desc == null || fi.desc.equals(want.desc)) && (opcode <= 0 || fi.getOpcode() == opcode)) count++;
+			} else if (insn instanceof MethodInsnNode mi && mi.name.equals(want.name) && (want.owner == null || mi.owner.equals(want.owner))
+					&& (want.desc == null || mi.desc.equals(want.desc))
+					&& ("INVOKE".equals(kind) || Type.getReturnType(mi.desc).getSort() != Type.VOID)) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	/**
+	 * How many {@code new} of the type a {@code NEW} point names {@code method} has -- with a constructor descriptor, only
+	 * those whose constructor call takes exactly those arguments.
+	 */
+	private static int constructions(MethodNode method, String target) {
+		if (target == null || target.isEmpty()) return 0;
+		String type;
+		Type[] wanted = null;
+		try {
+			if (target.startsWith("(")) {
+				Type ctor = Type.getMethodType(target);
+				type = ctor.getReturnType().getInternalName();
+				wanted = ctor.getArgumentTypes();
+			} else {
+				type = target.startsWith("L") && target.endsWith(";") ? target.substring(1, target.length() - 1) : target.replace('.', '/');
+			}
+		} catch (RuntimeException unreadable) {
+			return 0;
+		}
+		int count = 0;
+		for (AbstractInsnNode insn = method.instructions.getFirst(); insn != null; insn = insn.getNext()) {
+			if (!(insn instanceof org.objectweb.asm.tree.TypeInsnNode t) || t.getOpcode() != Opcodes.NEW || !type.equals(t.desc)) continue;
+			if (wanted == null) {
+				count++;
+				continue;
+			}
+			for (AbstractInsnNode c = insn.getNext(); c != null; c = c.getNext()) {
+				if (c instanceof MethodInsnNode call && call.getOpcode() == Opcodes.INVOKESPECIAL && "<init>".equals(call.name)
+						&& type.equals(call.owner)) {
+					if (java.util.Arrays.equals(Type.getArgumentTypes(call.desc), wanted)) count++;
+					break;
+				}
+			}
+		}
+		return count;
+	}
+
+	/**
+	 * Whether {@code mixin} declares a {@code @Surrogate} Mixin binds in {@code handler}'s place on a method of {@code desc}.
+	 * When the handler does not fit, Mixin looks one up by the handler's name and exactly the callback descriptor --
+	 * {@code desc}'s arguments, then {@code CallbackInfo} or {@code CallbackInfoReturnable} as its return calls for,
+	 * returning void -- and takes it only with a visible {@code @Surrogate} ({@code Bytecode.findMethod},
+	 * {@code Annotations.getVisible}); a {@code @Coerce} or the callback alone does not stand in there.
+	 */
+	static boolean surrogateBinds(ClassNode mixin, MethodNode handler, String desc) {
+		if (mixin == null || mixin.methods == null || handler == null) return false;
+		String callback = "(" + desc.substring(1, desc.indexOf(')'))
+				+ (Type.getReturnType(desc).getSort() == Type.VOID ? CALLBACK_INFO_DESC : CALLBACK_INFO_RETURNABLE_DESC) + ")V";
+		for (MethodNode m : mixin.methods) {
+			if (m != handler && m.name.equals(handler.name) && m.desc.equals(callback) && has(m.visibleAnnotations, SURROGATE_DESC)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** The method name a selector binds by name alone ({@code name} or {@code Lowner;name}), or null for any other form. */
+	private static String boundName(String selector) {
+		String name = selector.trim();
+		int semi = name.indexOf(';');
+		if (name.startsWith("L") && semi > 0) name = name.substring(semi + 1);
+		if (name.isEmpty()) return null;
+		for (char c : name.toCharArray()) if ("(*{}+/ =:".indexOf(c) >= 0) return null;
+		return name;
+	}
+
+	/**
+	 * Whether Mixin's {@code @Inject} accepts {@code handler} on a method of {@code desc}: its arguments then the
+	 * callback its return calls for, or that callback alone. True when the handler takes no callback (not judged).
+	 */
+	static boolean handlerFits(MethodNode handler, String desc) {
+		Type[] params = Type.getArgumentTypes(handler.desc);
+		int callback = -1;
+		for (int i = 0; i < params.length && callback < 0; i++) {
+			String d = params[i].getDescriptor();
+			if (CALLBACK_INFO_DESC.equals(d) || CALLBACK_INFO_RETURNABLE_DESC.equals(d)) callback = i;
+		}
+		if (callback < 0) return true;
+		boolean returns = Type.getReturnType(desc).getSort() != Type.VOID;
+		if (returns != CALLBACK_INFO_RETURNABLE_DESC.equals(params[callback].getDescriptor())) return false;
+		if (callback == 0) return true;
+		Type[] args = Type.getArgumentTypes(desc);
+		if (callback != args.length) return false;
+		for (int i = 0; i < callback; i++) {
+			if (!params[i].equals(args[i]) && !coerced(handler, i)) return false;
+		}
+		return true;
+	}
+
+	/** Whether the handler's {@code index}-th parameter carries {@code @Coerce}. */
+	private static boolean coerced(MethodNode handler, int index) {
+		for (List<AnnotationNode>[] table : java.util.Arrays.asList(handler.visibleParameterAnnotations,
+				handler.invisibleParameterAnnotations)) {
+			if (table != null && index < table.length && has(table[index], COERCE_DESC)) return true;
+		}
+		return false;
+	}
+
+	/**
 	 * "extractHotbarAndDecorations never runs: …" when every method the injector bound is one
-	 * {@link MergedBaseUncalledMethods} lists for the mod's ecosystem and the live bytes agree; null when any may run, the
-	 * rule is off, or the mod's ecosystem is unknown (a config two mods claim).
+	 * {@link MergedBaseUncalledMethods} lists for the mod's ecosystem, or a body a carrier renamed that nothing in the
+	 * merged game calls ({@link CarrierRenames#neverRuns}: NeoForge's {@code ItemStack.addDetailsToTooltipComponents},
+	 * where R3 moves malilib's tooltip hook), and the live bytes agree; null when any may run, the rule is off, or the
+	 * mod's ecosystem is unknown (a config two mods claim).
 	 */
 	private static String neverRuns(ClassNode mixin, ClassNode target, List<MethodNode> hits,
 			Function<String, byte[]> resolver) {
 		if (!asksLiveness()) return null;
-		for (MethodNode hit : hits) if (!MergedBaseUncalledMethods.lists(hit.name, hit.desc)) return null;
+		for (MethodNode hit : hits) {
+			if (!MergedBaseUncalledMethods.lists(hit.name, hit.desc) && !CarrierRenames.listsUncalled(target.name)) return null;
+		}
 		net.forbric.api.Ecosystem ecosystem = MixinStubRebind.ecosystemOf(mixin.name);
 		if (ecosystem == null) return null;
 		List<String> dead = new ArrayList<>();
@@ -765,6 +1218,8 @@ public final class MixinFit {
 				}
 			}
 			String why = owner == null ? null : MergedBaseUncalledMethods.neverRuns(owner, hit, ecosystem, resolver);
+			// Or a body a carrier renamed and nothing calls, where R3 moved the injector to bind as it would in the body.
+			if (why == null && owner != null) why = CarrierRenames.neverRuns(owner, hit, ecosystem);
 			if (why == null) return null;
 			String line = hit.name + " never runs: " + why;
 			if (!dead.contains(line)) dead.add(line);
@@ -1289,6 +1744,15 @@ public final class MixinFit {
 		ClassNode node = new ClassNode();
 		int flags = ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES | (withCode ? 0 : ClassReader.SKIP_CODE);
 		new ClassReader(bytes).accept(node, flags);
+		return node;
+	}
+
+	/** {@code internalName} with everything, local variable tables included, as the adapters read it; null when unseen. */
+	private static ClassNode withCode(Function<String, byte[]> resolver, String internalName) {
+		byte[] bytes = resolver.apply(internalName + ".class");
+		if (bytes == null) return null;
+		ClassNode node = new ClassNode();
+		new ClassReader(bytes).accept(node, 0);
 		return node;
 	}
 }

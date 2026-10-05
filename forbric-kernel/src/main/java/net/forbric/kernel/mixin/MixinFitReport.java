@@ -30,11 +30,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.Function;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 import com.electronwill.nightconfig.core.UnmodifiableConfig;
 import com.electronwill.nightconfig.json.JsonFormat;
+
+import net.forbric.api.DiscoveredMod;
+import net.forbric.api.Ecosystem;
+import net.forbric.kernel.metadata.fabric.FabricModJsonReader;
+import net.forbric.kernel.metadata.forge.ForgeMetadataMapper;
+import net.forbric.kernel.metadata.forge.ModsTomlParser;
 
 /**
  * Offline driver for {@link MixinFit}: reports what every guest mixin in a mods directory would be judged as,
@@ -70,6 +77,9 @@ public final class MixinFitReport {
 
 		Map<String, byte[]> merged = readJar(Path.of(args[0]));
 		System.out.printf("[fit] merged base: %d classes from %s%n", merged.size(), Path.of(args[0]).getFileName());
+		// The jar given here serves every class, as the merged base does at runtime: one digest for all of them.
+		String members = NativeAbsentTargets.membersDigest(merged);
+		Function<String, String> base = owner -> members;
 
 		List<Path> jars = new ArrayList<>();
 		try (var stream = Files.list(Path.of(args[1]))) {
@@ -86,6 +96,8 @@ public final class MixinFitReport {
 		for (Path jar : jars) {
 			for (Map.Entry<String, Map<String, byte[]>> unit : expand(jar).entrySet()) {
 				Map<String, byte[]> content = unit.getValue();
+				Ecosystem platform = platformOf(content);
+				DiscoveredMod mod = modOf(content, platform, unit.getKey());
 				for (Map.Entry<String, byte[]> cfg : mixinConfigs(content).entrySet()) {
 					Parsed parsed = parseConfig(cfg.getValue());
 					if (parsed == null) continue;
@@ -97,7 +109,10 @@ public final class MixinFitReport {
 						scanned++;
 						MixinFit.Result r;
 						try {
-							r = MixinFit.evaluate(bytes, name -> merged.get(name));
+							// The raw view is the jar itself here, which is also what the census reads beside the three
+							// platforms' own; the platform is the unit's manifest's, as the boot's is its declaring mod's.
+							r = MixinFit.evaluate(bytes, name -> merged.get(name), name -> true, MixinAddedMembers.View.NONE,
+									new NativeAbsentTargets.Context(merged::get, parsed.defaultRequire(), platform, base, mod));
 						} catch (RuntimeException e) {
 							System.out.printf("  !! %s:%s — scan failed: %s%n", cfg.getKey(), entry, e);
 							continue;
@@ -105,7 +120,9 @@ public final class MixinFitReport {
 						tally.merge(r.verdict(), 1, Integer::sum);
 						if (r.shouldSuppress() || verbose) {
 							byVerdict.computeIfAbsent(r.verdict().name(), k -> new ArrayList<>())
-									.add(String.format("%-58s %s", cfg.getKey() + ":" + entry, r.reason()));
+									.add(String.format("%-58s %s%s", cfg.getKey() + ":" + entry, r.reason(), r.nativeAbsent().isEmpty()
+											? "" : " (" + NativeAbsentTargets.describe(platform) + " lacks too, dropped as native drops it: "
+													+ String.join(", ", r.nativeAbsent()) + ")"));
 						}
 					}
 				}
@@ -128,8 +145,11 @@ public final class MixinFitReport {
 		}
 	}
 
-	/** @param arrays each entry's array ({@code mixins}, {@code client} or {@code server}), the first that names it */
-	record Parsed(String pkg, Set<String> mixins, Map<String, String> arrays) {
+	/**
+	 * @param arrays         each entry's array ({@code mixins}, {@code client} or {@code server}), the first that names it
+	 * @param defaultRequire the config's own {@code injectors.defaultRequire}, as {@link KernelGuestMixinAdapter} reads it
+	 */
+	record Parsed(String pkg, Set<String> mixins, Map<String, String> arrays, int defaultRequire) {
 	}
 
 	static Parsed parseConfig(byte[] json) {
@@ -151,7 +171,42 @@ public final class MixinFitReport {
 				}
 			}
 		}
-		return mixins.isEmpty() ? null : new Parsed(pkg.toString(), mixins, arrays);
+		return mixins.isEmpty() ? null : new Parsed(pkg.toString(), mixins, arrays,
+				KernelGuestMixinAdapter.declaredDefaultRequire(config));
+	}
+
+	/**
+	 * The ecosystem a unit's manifest declares, or null when it declares none or more than one (a universal jar, whose
+	 * running ecosystem the boot's arbitration decides): then no injector target is judged absent from a platform.
+	 */
+	static Ecosystem platformOf(Map<String, byte[]> content) {
+		List<Ecosystem> declared = new ArrayList<>();
+		if (content.containsKey("fabric.mod.json")) declared.add(Ecosystem.FABRIC);
+		if (content.containsKey("META-INF/mods.toml")) declared.add(Ecosystem.FORGE);
+		if (content.containsKey("META-INF/neoforge.mods.toml")) declared.add(Ecosystem.NEOFORGE);
+		return declared.size() == 1 ? declared.get(0) : null;
+	}
+
+	/**
+	 * The one mod a unit's manifest declares for {@code platform}, as discovery reads it, or null when it declares none
+	 * or several (a MinecraftForge toml listing two mods shares one config list between them, which the boot leaves
+	 * unowned) or the manifest cannot be read: then no injector target is judged absent from that platform's game.
+	 */
+	static DiscoveredMod modOf(Map<String, byte[]> content, Ecosystem platform, String source) {
+		if (platform == null) return null;
+		try {
+			if (platform == Ecosystem.FABRIC) {
+				byte[] json = content.get("fabric.mod.json");
+				return json == null ? null : FabricModJsonReader.read(new ByteArrayInputStream(json), source);
+			}
+			byte[] toml = content.get(platform == Ecosystem.FORGE ? "META-INF/mods.toml" : "META-INF/neoforge.mods.toml");
+			if (toml == null) return null;
+			List<DiscoveredMod> mods = ForgeMetadataMapper.toDiscoveredMods(ModsTomlParser.parse(new ByteArrayInputStream(toml)),
+					"0", source, List.of(), List.of(), config -> true, platform);
+			return mods.size() == 1 ? mods.get(0) : null;
+		} catch (RuntimeException unreadable) {
+			return null;
+		}
 	}
 
 	static Map<String, byte[]> mixinConfigs(Map<String, byte[]> content) {

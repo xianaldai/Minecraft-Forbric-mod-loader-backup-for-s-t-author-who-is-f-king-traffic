@@ -38,7 +38,7 @@ import net.forbric.kernel.util.ForbricLog;
  * <p>This class takes NeoForge's snapshot itself — {@code RegistryManager.takeSnapshot(SYNC_TO_CLIENT)}, the
  * public API the server uses to build the sync — the first time a connection's remap begins, and
  * {@code revertToFrozen()} now applies it back: plain registries through NeoForge's own {@code applySnapshot}
- * loop, the seventeen Forge-wrapped ones through the staged path that loop already goes through on connect, and
+ * loop, the Forge-wrapped ones through the staged path that loop already goes through on connect, and
  * fabric-api's {@code unmap} first, so its own bookkeeping ({@code fabric_prevIndexedEntries}, its remap event)
  * is left the way it would leave it. A snapshot whose ids all still match is not applied at all — the common
  * case, and one where every registry would otherwise be torn down and rebuilt for nothing.

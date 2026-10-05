@@ -200,6 +200,7 @@ public final class KernelRuntimeClasses {
 		CLASSES.put("net.forbric.kernel.runtime.KernelForgeOptions", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelForgeClientConsumers", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelForgeCreativeTabs", new Entry(Origin.COMPILED, List.of()));
+		CLASSES.put("net.forbric.kernel.runtime.KernelCreativeSearch", new Entry(Origin.COMPILED, List.of()));
 		// Also asked by the lifecycle: hold MinecraftForge's half while a client's Forge mods wait for Minecraft.<init>,
 		// then post it once they exist.
 		CLASSES.put("net.forbric.kernel.runtime.KernelForgeSpawnPlacements", new Entry(Origin.COMPILED, List.of(

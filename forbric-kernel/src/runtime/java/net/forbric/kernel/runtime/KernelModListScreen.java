@@ -104,7 +104,8 @@ public final class KernelModListScreen extends Screen {
 	 * The static-factory shape a family's own mod list may be opened through.
 	 *
 	 * <p>NeoForge 26.2.0.88's mods button calls {@code ModListScreen.create(screen)} rather than constructing it,
-	 * so {@code ModsButtonRedirector} re-points that call here. Nothing in the kernel calls this itself.
+	 * so {@code ModsButtonRedirector} re-points that call here. The kernel's stand-in for Mod Menu's API answers
+	 * {@code ModMenuApi.createModsScreen} with it too. Nothing in the kernel calls this itself.
 	 */
 	public static KernelModListScreen create(Screen parent) {
 		return new KernelModListScreen(parent);

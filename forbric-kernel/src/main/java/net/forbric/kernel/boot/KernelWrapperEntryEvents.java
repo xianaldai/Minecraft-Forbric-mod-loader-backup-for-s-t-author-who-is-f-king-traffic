@@ -19,7 +19,8 @@ import net.forbric.kernel.util.ForbricLog;
  * {@code ForgeRegistry} just assigned; the {@code toId} map Fabric reads stays empty on a wrapper.
  *
  * <p>Reflective, as the wrapper's other boot-side hook {@link KernelForgeWrapperSync} is, and resolved once per wrapper
- * class on the public types that declare each member — {@code NamespacedWrapper} itself is package-private. A registry
+ * class on the public types that declare each member — {@code NamespacedWrapper} itself ships package-private, and stays
+ * so with {@code -Dforbric.publicRegistryWrappers=off}. A registry
  * class fabric-registry-sync never touched (no fabric-api installed) has no event, and is left alone. A listener's own
  * exception is the registration's, exactly as on a plain registry: fabric-registry-sync refuses an id that is already an
  * alias by throwing from its listener.

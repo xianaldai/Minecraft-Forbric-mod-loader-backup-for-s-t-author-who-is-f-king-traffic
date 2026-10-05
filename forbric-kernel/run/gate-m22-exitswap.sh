@@ -14,6 +14,15 @@
 # So this launches with a COPY of the boot jar, destroys that copy while the client is in a world, and asserts
 # the quit is still a quit. The destruction is total (the file is truncated), which is far beyond a swap — if the
 # shutdown path survives that, it survives a replacement.
+#
+# The exit hook was not the only class read late. Every hook spliced into the game is read from the jar at its first
+# use: the first nightly (2026-10-05) crashed the server here when the first lava flow came after the truncation
+# (NoClassDefFoundError: net/forbric/kernel/interop/ForgeRuntimeInterop, through MinecraftForge's fluid rules), and
+# every run, green ones included, logged NoClassDefFoundError: net/forbric/kernel/boot/KernelRegistryRevert when the
+# client left the world — this gate only looked for the interop package, so that one never counted. The kernel now
+# defines its whole jar at boot (KernelJarPreload), and the absence check below covers every kernel class.
+#
+# RED control: M22_EXTRA_JVM='-Dforbric.bootJarPreload=off' — the disconnect's KernelRegistryRevert fails again.
 # GATE-PARALLEL: clone=client-merged-pack:M22_RUNDIR mem=3000
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
@@ -36,7 +45,7 @@ rm -rf "$RUNDIR/crash-reports"
 reap_stale_server "$RUNDIR"
 (
   FORBRIC_BOOT_JAR="$COPY" RUNDIR="$RUNDIR" \
-  FORBRIC_JVM="-Dforbric.clientSmoke=true -Dforbric.clientSmokeWorld=$WORLD -Dforbric.clientSmokeReadyTicks=60 -Dforbric.clientSmokeDisconnectTicks=140" \
+  FORBRIC_JVM="-Dforbric.clientSmoke=true -Dforbric.clientSmokeWorld=$WORLD -Dforbric.clientSmokeReadyTicks=60 -Dforbric.clientSmokeDisconnectTicks=140 ${M22_EXTRA_JVM:-}" \
   "$KERNEL/run/launch-kernel-client.sh" \
     --quickPlayPath "$RUNDIR/quickPlay/log.json" --quickPlaySingleplayer "$WORLD" > "$LOG" 2>&1
 ) &
@@ -65,9 +74,10 @@ step "the quit is still a quit (must PASS)"
 # The outcome, from the two places a player and a launcher each read it: no crash report on disk, and the
 # shutdown hook's own line in the log. Either alone is weaker than it looks — a hook that never ran leaves no
 # crash report either.
+check "the kernel jar was defined while it was readable" "Forbric/Boot\] defined [0-9]+ of the kernel jar's [0-9]+ classes up front" "$LOG"
 check "the shutdown hook still ran"   "Forbric/Shutdown\] stopped [0-9]+ config file-watcher" "$LOG"
 check_absent "no crash report was written"  "Preparing crash report"                          "$LOG"
-check_absent "the exit hook resolved"       "NoClassDefFoundError: net/forbric/kernel/interop" "$LOG"
+check_absent "every kernel class resolved"  "NoClassDefFoundError: net/forbric/"              "$LOG"
 if [ -d "$RUNDIR/crash-reports" ] && [ -n "$(ls -A "$RUNDIR/crash-reports" 2>/dev/null)" ]; then
   echo "[kernel] FAIL a crash report reached disk: $(ls "$RUNDIR/crash-reports")"; FAIL=1
 else

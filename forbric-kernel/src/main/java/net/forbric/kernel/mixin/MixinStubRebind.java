@@ -291,7 +291,7 @@ public final class MixinStubRebind {
 	}
 
 	/** The keys {@code handler} shares in its mixin's own namespace. */
-	private static Set<String> shareKeys(MethodNode handler) {
+	static Set<String> shareKeys(MethodNode handler) {
 		Set<String> keys = new java.util.HashSet<>();
 		for (int i = 0; i < Type.getArgumentTypes(handler.desc).length; i++) {
 			AnnotationNode share = sugar(handler, i, SHARE);
@@ -306,7 +306,7 @@ public final class MixinStubRebind {
 	 * injector shares values too — binds it, or cannot be read (a wildcard, a regex, a {@code @Desc} target). Left on
 	 * the stub, such a sharer would keep a value of its own while the rest of its group moved.
 	 */
-	private static boolean mayBind(MethodNode handler, ClassNode target, MethodNode method) {
+	static boolean mayBind(MethodNode handler, ClassNode target, MethodNode method) {
 		List<AnnotationNode> annotations = new ArrayList<>();
 		if (handler.visibleAnnotations != null) annotations.addAll(handler.visibleAnnotations);
 		if (handler.invisibleAnnotations != null) annotations.addAll(handler.invisibleAnnotations);
@@ -1197,7 +1197,7 @@ public final class MixinStubRebind {
 	}
 
 	/** The annotation {@code desc} on {@code handler}'s {@code parameter}, visible or not; null when absent. */
-	private static AnnotationNode sugar(MethodNode handler, int parameter, String desc) {
+	static AnnotationNode sugar(MethodNode handler, int parameter, String desc) {
 		for (List<AnnotationNode>[] all : List.of(nonNull(handler.visibleParameterAnnotations), nonNull(handler.invisibleParameterAnnotations))) {
 			if (parameter < all.length && all[parameter] != null) for (AnnotationNode a : all[parameter]) if (desc.equals(a.desc)) return a;
 		}

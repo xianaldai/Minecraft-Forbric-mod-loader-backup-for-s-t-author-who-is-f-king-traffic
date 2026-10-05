@@ -20,8 +20,11 @@ import java.lang.reflect.Method;
 import java.util.Optional;
 import java.util.function.BiFunction;
 
+import net.fabricmc.loader.api.FabricLoader;
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ModCatalog;
+import net.forbric.kernel.boot.ModMenuApiStandIn;
+import net.forbric.kernel.fabric.ModMenuConfigFactories;
 import net.forbric.kernel.util.ForbricLog;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
@@ -36,7 +39,8 @@ import net.minecraft.client.gui.screens.Screen;
  * MinecraftForge registers a {@code ConfigScreenHandler.ConfigScreenFactory} record holding a
  * {@code BiFunction<Minecraft, Screen, Screen>}. Fabric has no config SPI at all — Fabric mods register with
  * <em>Mod Menu</em>, which is itself a mod, so the registry lives in a class this kernel cannot compile against
- * and may not be installed.
+ * and may not be installed. When it is not, the registrations themselves — each mod's {@code "modmenu"}
+ * entrypoint — are still there to be read, and are (see {@link ModMenu}).
  *
  * <p>Each screen therefore answers for its own family and no other. That is why Mod Menu opens Fabric mods'
  * configs and nothing else: it asks its own registry, which only Fabric mods can register in. Nothing is wrong
@@ -52,6 +56,9 @@ import net.minecraft.client.gui.screens.Screen;
 public final class KernelModConfigScreens {
 	private KernelModConfigScreens() {
 	}
+
+	/** Mods whose config screen already threw on a press, so the warning is said once and not on every click. */
+	private static final java.util.Set<String> PRESS_FAILURES = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
 	/** Whether {@link #open} would produce a screen. Cheap enough to ask per selection change. */
 	public static boolean has(ModCatalog.Entry entry) {
@@ -78,9 +85,15 @@ public final class KernelModConfigScreens {
 			};
 		} catch (Throwable t) {
 			// A family that is not present, or a mod whose factory throws. Neither may cost the screen the
-			// player is standing in.
-			ForbricLog.debug("[Forbric/ModConfig] no config screen for %s (%s): %s", entry.modId(),
-					entry.ecosystem(), String.valueOf(t));
+			// player is standing in. A probe failing is routine and stays at debug; a press that fails is the player
+			// clicking Config and seeing nothing, so it says which mod's factory threw, once per mod.
+			if (probe || !PRESS_FAILURES.add(entry.modId())) {
+				ForbricLog.debug("[Forbric/ModConfig] no config screen for %s (%s): %s", entry.modId(),
+						entry.ecosystem(), String.valueOf(t));
+			} else {
+				ForbricLog.warn("[Forbric/ModConfig] %s (%s) has a Config button, but its config screen threw when it "
+						+ "was opened: %s", entry.modId(), entry.ecosystem(), String.valueOf(t));
+			}
 			return null;
 		}
 	}
@@ -132,36 +145,89 @@ public final class KernelModConfigScreens {
 	};
 
 	/**
-	 * Fabric's answer, which is Mod Menu's.
+	 * Fabric's answer: Mod Menu's when Mod Menu is installed, and otherwise the mods' own Mod Menu entrypoints.
 	 *
-	 * <p>Reflective on purpose: Mod Menu is a mod the player may not have installed, and the kernel has no
-	 * business requiring one. Without it, Fabric mods simply have no config button — the same as on a plain
-	 * Fabric instance, where Mod Menu is also what provides one.
+	 * <p>Reflective on purpose: Mod Menu is a mod the player may not have installed, and the kernel has no business
+	 * requiring one. When it is installed it is asked, exactly as before — it is what a plain Fabric instance asks.
+	 *
+	 * <p>When it is not, this used to answer "no config" for every Fabric mod, and that was wrong in a way the player
+	 * could see: the mods still DECLARE their screens, in a {@code "modmenu"} entrypoint implementing Mod Menu's API.
+	 * The kernel stands in for that API ({@code ModMenuApiStandIn}), so those entrypoints link, and
+	 * {@link ModMenuConfigFactories} reads them the way Mod Menu's own initializer does. In a player's 40-mod pack with no
+	 * Mod Menu, Fabric mods with a Config button went from 0 to 16 of 24, and 15 of the 16 opened their own screen when
+ * pressed; Voxy's own factory declined on that machine, which its log said it does where it cannot run.
+	 * {@code -Dforbric.modMenuStandIn=off} restores the old answer.
 	 */
 	private static final class ModMenu {
 		private static final String CLASS = "com.terraformersmc.modmenu.ModMenu";
+		private static final String API = "com.terraformersmc.modmenu.api.ModMenuApi";
 		private static volatile Method has;
 		private static volatile Method get;
+		/** The mods' own entrypoints, read once; null when Mod Menu is installed or there is nothing to read. */
+		private static volatile ModMenuConfigFactories entrypoints;
 		private static volatile boolean looked;
 
 		static Screen resolve(String modId, Screen parent, boolean probe) throws Exception {
-			if (!looked) {
-				looked = true;
-				try {
-					Class<?> mm = Class.forName(CLASS, false,
-							KernelModConfigScreens.class.getClassLoader());
-					has = mm.getMethod("hasConfigScreen", String.class);
-					get = mm.getMethod("getConfigScreen", String.class, Screen.class);
-					ForbricLog.info("[Forbric/ModConfig] Mod Menu is installed — Fabric mods' config screens come "
-							+ "from it, the same place they come from on a plain Fabric instance");
-				} catch (Throwable absent) {
-					ForbricLog.info("[Forbric/ModConfig] Mod Menu is not installed — Fabric mods will have no "
-							+ "config button, because Fabric itself defines no config-screen API for one");
-				}
+			if (!looked) look();
+			if (has != null) {
+				if (!(Boolean) has.invoke(null, modId)) return null;
+				return probe ? PRESENT : (Screen) get.invoke(null, modId, parent);
 			}
-			if (has == null) return null;
-			if (!(Boolean) has.invoke(null, modId)) return null;
-			return probe ? PRESENT : (Screen) get.invoke(null, modId, parent);
+			ModMenuConfigFactories own = entrypoints;
+			if (own == null || !own.has(modId)) return null;
+			return probe ? PRESENT : (Screen) own.create(modId, parent);
+		}
+
+		/** Once: is Mod Menu here, and if not, what do the mods' entrypoints say. {@code looked} is set last. */
+		private static synchronized void look() {
+			if (looked) return;
+			try {
+				Class<?> mm = Class.forName(CLASS, false, KernelModConfigScreens.class.getClassLoader());
+				has = mm.getMethod("hasConfigScreen", String.class);
+				get = mm.getMethod("getConfigScreen", String.class, Screen.class);
+				ForbricLog.info("[Forbric/ModConfig] Mod Menu is installed — Fabric mods' config screens come "
+						+ "from it, the same place they come from on a plain Fabric instance");
+			} catch (Throwable absent) {
+				has = null;
+				get = null;
+				entrypoints = readEntrypoints();
+			}
+			looked = true;
+		}
+
+		private static ModMenuConfigFactories readEntrypoints() {
+			String none = "[Forbric/ModConfig] Mod Menu is not installed — Fabric mods will have no config button, "
+					+ "because Fabric itself defines no config-screen API for one";
+			if (!ModMenuApiStandIn.enabled()) {
+				ForbricLog.info(none + " (-D%s=off)", ModMenuApiStandIn.SWITCH);
+				return null;
+			}
+			Class<?> api;
+			try {
+				api = Class.forName(API, false, KernelModConfigScreens.class.getClassLoader());
+			} catch (Throwable absent) {
+				// No stand-in offered (a dedicated server, or a kernel built without the game side) and no jar with it.
+				ForbricLog.info(none);
+				return null;
+			}
+			try {
+				ModMenuConfigFactories read = ModMenuConfigFactories.read(FabricLoader.getInstance(), api);
+				int fabric = 0;
+				int withConfig = 0;
+				for (ModCatalog.Entry entry : ModCatalog.all()) {
+					if (entry.ecosystem() != Ecosystem.FABRIC) continue;
+					fabric++;
+					if (read.has(entry.modId())) withConfig++;
+				}
+				ForbricLog.info("[Forbric/ModConfig] Mod Menu is not installed — %d of %d Fabric mod(s) get a config "
+						+ "button from their own Mod Menu entrypoint, read the way Mod Menu reads it (%d entrypoint(s), "
+						+ "%d skipped as broken)", withConfig, fabric, read.entrypoints(), read.broken());
+				return read;
+			} catch (Throwable t) {
+				ForbricLog.warn("[Forbric/ModConfig] could not read Fabric mods' Mod Menu entrypoints (%s) — Fabric "
+						+ "mods have no config button", String.valueOf(t));
+				return null;
+			}
 		}
 	}
 

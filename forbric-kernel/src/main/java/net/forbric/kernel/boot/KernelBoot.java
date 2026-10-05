@@ -214,7 +214,7 @@ public final class KernelBoot {
 		// Pre-scan every declared nested candidate before either discovery discards a root. The later
 		// arbitrateNested call verifies physical files against this same decision; it does not choose again.
 		DuplicateModArbiter.Decision topLevelDupes =
-				DuplicateModArbiter.arbitrate(gameDir.resolve("mods"), side.envType);
+				DuplicateModArbiter.arbitrate(gameDir.resolve("mods"), side.envType, gameVersion);
 
 		// Forge/NeoForge mod jars (Mojmap-compiled like the merged base → load directly, no remap), plus the
 		// libraries they nest at META-INF/jarjar/ — see extractForgeFamilyJarJar.
@@ -242,7 +242,8 @@ public final class KernelBoot {
 		// Fabric discovery consumes the same preselected physical files and registers nothing yet. The union
 		// below is checked against the plan before either loader builds containers or adds losing jars to the
 		// classpath. When arbitration is explicitly disabled, both original discovery paths remain available.
-		FabricModDiscovery fabricScan = KernelFabricEcosystem.scan(side.envType, gameDir, topLevelDupes);
+		FabricModDiscovery fabricScan = scanFabricMods(side, gameDir, topLevelDupes, gameVersion, candidatePlan, modJars,
+				nested);
 		List<Path> allNested = new ArrayList<>(nested);
 		for (Path jar : fabricScan.getClasspathJars()) {
 			if (!modJars.contains(jar) && !nested.contains(jar)) allNested.add(jar);
@@ -339,6 +340,10 @@ public final class KernelBoot {
 		// platform-only class would otherwise get a bare NoClassDefFoundError. See ForbricClassLoader.setRescueJars
 		// for why this cannot shadow the winner, and for what it deliberately does not fix.
 		loader.setRescueJars(rescueUrls(dupes));
+		// Fabric mods declare their config screens through Mod Menu's API, which is a mod's, not Fabric's. Without Mod
+		// Menu installed, that declaration cannot even be linked and no Fabric mod has a Config button. Offered now,
+		// while the URLs are final and before any mod class can link against it. See ModMenuApiStandIn.
+		if (side == Side.CLIENT) ModMenuApiStandIn.install(loader);
 
 		// Every mod jar probes as the loader the arbiter gave it, so a mod cannot wander into a branch it never ran
 		// on its own platform — and a universal jar answers as the ONE ecosystem it was arbitrated to. Plain
@@ -599,12 +604,18 @@ public final class KernelBoot {
 		// …and NeoForge's configuration-phase registry sync remaps a registry through MappedRegistry fields those same
 		// wrappers never fill, so the first real client to connect was dropped with "Failed to sync registries from the
 		// server: NullPointerException". The wrapper gets NeoForge's remap contract and Forge's own injectSnapshot
-		// does the work.
-		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.RegistrySyncParityInjector());
+		// does the work. fabric-api's remap is added only when its types are on this loader: getMethod resolves the
+		// types of the public methods of each class it searches, so one naming an absent class makes a mod's
+		// registry.getClass().getMethod throw whenever the search reaches the wrapper (forGameLoader decides it).
+		chain.register(TransformPhase.COREMOD, net.forbric.kernel.transform.RegistrySyncParityInjector.forGameLoader(loader));
 		// …and their register never reaches MappedRegistry.register, where fabric-registry-sync fires
 		// RegistryEntryAddedCallback, so fabric-menu-api had no codec for a Fabric mod's menu registered after its own
 		// main entrypoint, and Farmer's Delight's cooking pot never opened. The wrapper fires the event itself.
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.WrapperEntryAddedInjector());
+		// …and they are not public, where the MappedRegistry they stand in for is: a registry method a mod looks up on
+		// registry.getClass() is declared by a class it cannot access, and invoking it threw. Meow Anti-Xray resolves its
+		// ores that way and took the server down the moment it was Done. The wrappers are public, as vanilla's are.
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.RegistryWrapperAccessInjector());
 
 		// A Fabric mod's registry reads its data where native Fabric reads it. The merged Registries body is
 		// NeoForge's, which prefixes the namespace itself; Fabric prefixes in a return-value mixin instead, and
@@ -649,6 +660,21 @@ public final class KernelBoot {
 		// repository is built on a dedicated server too.
 		chain.register(TransformPhase.COREMOD, new PackOverlayMutabilityInjector());
 		chain.register(TransformPhase.COREMOD, new NullPackGuardInjector());
+
+		// The merged SessionSearchTrees kept MinecraftForge's bodies for vanilla's two search-tree producers, which file
+		// their trees in a private map the (NeoForge) creative screen never reads; a mod that refreshes the search that
+		// way (TCDCommons, on every join) left every creative search empty. They file into NeoForge's registry instead.
+		// Client only: a dedicated server never loads the class, so it carries no anchor for it. Registered before
+		// DuplicateLambdaPruneInjector (same phase, ties go by registration order): the rewrite leaves MinecraftForge's
+		// two lambdas unreachable beside NeoForge's live ones of the same name, and only a prune that runs after it
+		// sees them as the orphans they now are.
+		if (side == Side.CLIENT && net.forbric.kernel.transform.CreativeSearchTreesInjector.enabled()) {
+			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.CreativeSearchTreesInjector());
+		} else if (side == Side.CLIENT) {
+			ForbricLog.warn("[Forbric/CreativeSearch] -D%s=off — a mod that refreshes the creative search through "
+					+ "vanilla's SessionSearchTrees methods leaves every creative search empty for the session",
+					net.forbric.kernel.transform.CreativeSearchTreesInjector.PROPERTY);
+		}
 
 		// A merged method keeps ONE body but BOTH ecosystems' lambdas, and a mixin's `method = "lambda$x$0"`
 		// carries no descriptor because javac never lets one class have two. Drop the orphaned half before Mixin
@@ -758,6 +784,9 @@ public final class KernelBoot {
 		// The merged composter reads only NeoForge's compostables data map; on a miss it asks vanilla's map too (what a
 		// Fabric mod added after bootstrap), through vanilla-shaped calls a Fabric wrap such as BCLib's binds to.
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.CompostablesFallbackInjector());
+		// Those data-map lookups (and the oxidation, waxing and stripping ones) end in Holder.Reference.getData, which
+		// threw for a value not registered yet; it answers "no data" there, so they fall back to vanilla's maps.
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.UnboundHolderDataInjector());
 		// The merged Zombie converts through MinecraftForge's lambdas; NeoForge's conversion Post is posted there too.
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.NeoConversionPostInjector());
 		// NeoForge's tooltip registration event goes to each mod on its own, not through ModLoader's aborting fan-out.
@@ -793,6 +822,12 @@ public final class KernelBoot {
 		// another, and so is anything that closes the loader early. None of them should be able to turn a quit into
 		// a crash report, and a class the shutdown path cannot do without has no business being resolved for the
 		// first time during shutdown.
+		//
+		// The exit hook is not the only one. Every hook the chain splices into the game is read from the kernel jar at
+		// its first use, and gate M22 measured two more after the jar was truncated: ForgeRuntimeInterop at the first
+		// lava flow (a server crash report) and KernelRegistryRevert on leaving a world. So the whole jar is defined
+		// now, while it is readable; the exit hook is still initialized by name below, as before.
+		KernelJarPreload.run(KernelBoot.class);
 		try {
 			Class.forName(ExitHookInjector.HOOK_OWNER.replace('/', '.'), true, KernelBoot.class.getClassLoader());
 		} catch (Throwable t) {
@@ -1381,6 +1416,22 @@ public final class KernelBoot {
 	/** @see #nestedJarJarJars */
 	public static List<Path> nestedJarJarJars() {
 		return nestedJarJarJars;
+	}
+
+	/**
+	 * The Fabric half of discovery: reads, registers nothing. With a plan it consumes the plan's files, and the plan has
+	 * already settled Fabric's nested rule over every ecosystem's mods. Without one
+	 * ({@code -Dforbric.crossJarArbitration=off}) it walks {@code mods/} and Fabric {@code jars} only, so what the
+	 * jars it does not read hard-require is handed over (the Forge-family mods, and the Fabric jars the Forge-family
+	 * walk took out of their parents), and a nested Fabric mod one of them needs is not left out from under it
+	 * ({@link net.forbric.kernel.fabric.NestedFabricRequirements#requiredOutsideFabricDiscovery}).
+	 */
+	static FabricModDiscovery scanFabricMods(Side side, Path gameDir, DuplicateModArbiter.Decision topLevelDupes,
+			String gameVersion, NestedCandidatePlan plan, List<Path> forgeFamilyJars, List<Path> jarJarChildren) {
+		List<net.forbric.kernel.fabric.NestedFabricRequirements.Requirement> requiredElsewhere = plan != null ? List.of()
+				: net.forbric.kernel.fabric.NestedFabricRequirements.requiredOutsideFabricDiscovery(forgeFamilyJars,
+						jarJarChildren, side.api());
+		return KernelFabricEcosystem.scan(side.envType, gameDir, topLevelDupes, gameVersion, requiredElsewhere);
 	}
 
 	// Package-private so the tests can drive the real extraction against real jars rather than a mock of it.

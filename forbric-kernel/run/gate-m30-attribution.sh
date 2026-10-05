@@ -7,8 +7,12 @@
 # written once, at load-complete, so a failure during world creation never reached it at all.
 #
 # Four attribution canaries beside two healthy ones, so each attribution is asserted on its own:
-#   forbricmixincanary      UnfitMixin (left out by the fit check) + ApplyFailingMixin (fails at apply on RegionFileStorage,
-#                           a class first loaded at world creation — AFTER load-complete)
+#   forbricmixincanary      UnfitMixin (left out by the fit check: its injector must inject — require = 1 — into a method
+#                           the game lacks; without that require vanilla lacks it too, and native Mixin, and so the
+#                           kernel, would drop just the injector) + ApplyFailingMixin (fails at apply on
+#                           RegionFileStorage, a class first loaded at world creation — AFTER load-complete; one handler
+#                           fits so the mixin is kept, and the refused one sits at a JUMP the fit check cannot prove
+#                           Mixin meets, so it is Mixin that fails on it, not the fit check that takes it out first)
 #   forbricsubscribercanary BrokenSubscriber (<clinit> throws)
 #   forbricforgecanary      FluidSourceWaiter (Forge CreateFluidSourceEvent has no game hook)
 #   forbricabicanary        compiled against net.neoforged.neoforge.event.ForbricVanishedEvent, absent here; its

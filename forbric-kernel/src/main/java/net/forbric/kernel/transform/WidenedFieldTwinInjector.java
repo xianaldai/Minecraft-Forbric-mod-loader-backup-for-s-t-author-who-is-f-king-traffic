@@ -83,6 +83,29 @@ public final class WidenedFieldTwinInjector implements ClassTransformer {
 			new Row("net/minecraft/world/entity/ai/attributes/AttributeSupplier$Builder", "builder", IMMUTABLE_MAP_BUILDER_DESC,
 					MAP_DESC, Shape.FRESH_DRAIN));
 
+	/**
+	 * A field the merge WIDENED to a supertype of vanilla's: javac names the field's static type as the owner of every
+	 * call made through it, so each such call moved owner with it ({@code Monster.lookAt} became {@code Mob.lookAt}).
+	 *
+	 * @param owner       the class declaring the field (internal name)
+	 * @param name        the field
+	 * @param vanillaType the type vanilla declares it with (internal name)
+	 * @param mergedType  the wider type the merged base declares it with (internal name)
+	 */
+	public record Narrowed(String owner, String name, String vanillaType, String mergedType) {
+	}
+
+	/** The {@link Shape#NARROW} rows, for MixinSubtypeOwnerRetarget: the merge widened these fields, nothing else. */
+	public static List<Narrowed> narrowed() {
+		List<Narrowed> out = new ArrayList<>();
+		for (Row row : ROWS) {
+			if (row.shape() != Shape.NARROW) continue;
+			out.add(new Narrowed(row.owner(), row.name(), org.objectweb.asm.Type.getType(row.vanillaDesc()).getInternalName(),
+					org.objectweb.asm.Type.getType(row.mergedDesc()).getInternalName()));
+		}
+		return List.copyOf(out);
+	}
+
 	private int twins;
 
 	public static boolean enabled() {

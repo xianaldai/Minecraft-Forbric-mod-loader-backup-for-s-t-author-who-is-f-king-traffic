@@ -2348,7 +2348,8 @@ public final class KernelLifecycle {
 	 * Puts back exactly what {@link #reopenForgeRegistries} opened — each gate by the same mechanism that opened it.
 	 *
 	 * <p>{@code ForgeRegistry} is public, so {@code freeze()} is reachable by reflection. {@code NamespacedWrapper}
-	 * is NOT: it is package-private, and {@code Method.invoke} on a public method of a package-private class throws
+	 * is NOT: it ships package-private (public only while {@code RegistryWrapperAccessInjector} is on), and
+	 * {@code Method.invoke} on a public method of a package-private class throws
 	 * {@code IllegalAccessException} from outside the package however public the method looks. Calling
 	 * {@code lock()} therefore failed on all 30 wrappers, every boot, and only said so at WARN — so the registration
 	 * window the kernel opens for late Fabric registration was never closed again on the MinecraftForge side.

@@ -24,8 +24,13 @@
 #
 #   1. positive — STRICT, every case passes, zero confirmed required findings, no exception on stop.
 #   2. off — -Dforbric.defaultConflictRepair=off -Dforbric.furnaceTickCalls=off -Dforbric.dragonParts=off
-#      -Dforbric.foreignFluidTypes=off -Dforbric.fabricFuel=off: exactly the
+#      -Dforbric.foreignFluidTypes=off -Dforbric.fabricFuel=off -Dforbric.forgePartTracking=off: exactly the
 #      repaired cases fail and the controls hold.
+#      forgePartTracking is in that list because since 86c93b6c the dragon's null NeoForge getParts() is guarded twice:
+#      ForgePartTrackingInjector reads it as no parts in the server's tracking callbacks. With only dragonParts off the
+#      dragon is then added without its parts (dragon.add still fails: part lookup=null), and hurting it through a part
+#      and removing it no longer throw, so dragon.hurt and dragon.remove passed and the first nightly went red on the
+#      control, not on a repair. Both switched off, the three dragon cases fail as they did before (measured).
 # Not covered here: a client (the dragon's parts in the client's entity lookups), and a native server as an oracle.
 # GATE-PARALLEL: rundirs=server-everyday-m45 mem=2000
 set -uo pipefail
@@ -91,8 +96,8 @@ check "positive: the dragon's parts are NeoForge's" 'EnderDragonPart is a NeoFor
 check "positive: foreign fluids get a NeoForge type" 'gets the one its fluid tags imply' "$RESULTS/positive.log"
 check "positive: Fabric's fuel events run on NeoForge's fuel builder" 'Forbric/Fuel\] DataMapHooks.populateFuelValues runs fabric-content-registries' "$RESULTS/positive.log"
 
-step "2. off: the same server with the four repairs switched off"
-run_server off continue "-Dforbric.defaultConflictRepair=off -Dforbric.furnaceTickCalls=off -Dforbric.dragonParts=off -Dforbric.foreignFluidTypes=off -Dforbric.fabricFuel=off"
+step "2. off: the same server with the repairs switched off"
+run_server off continue "-Dforbric.defaultConflictRepair=off -Dforbric.furnaceTickCalls=off -Dforbric.dragonParts=off -Dforbric.foreignFluidTypes=off -Dforbric.fabricFuel=off -Dforbric.forgePartTracking=off"
 judge off "failed == $REPAIRED" "exactly the repaired cases fail; the controls hold"
 
 if [ "$FAIL" -eq 0 ]; then

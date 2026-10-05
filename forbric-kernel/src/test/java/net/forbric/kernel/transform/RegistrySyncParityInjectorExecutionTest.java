@@ -3,6 +3,9 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
@@ -506,10 +509,15 @@ class RegistrySyncParityInjectorExecutionTest {
 	}
 
 	private static Map<String, byte[]> repaired(Map<String, byte[]> original) {
+		return repaired(original, original::containsKey);
+	}
+
+	/** {@code gameHasClass} is what the injector is told the game loader has, as KernelBoot tells it from its loader. */
+	private static Map<String, byte[]> repaired(Map<String, byte[]> original, java.util.function.Predicate<String> gameHasClass) {
 		Map<String, byte[]> classes = new HashMap<>(original);
 		for (String target : TARGETS) {
 			String internal = target.replace('.', '/');
-			byte[] out = InjectorExecution.transform(new RegistrySyncParityInjector(), target, original.get(internal), EnvType.CLIENT);
+			byte[] out = InjectorExecution.transform(new RegistrySyncParityInjector(gameHasClass), target, original.get(internal), EnvType.CLIENT);
 			assertNotSame(original.get(internal), out, target + " is the merged shape");
 			classes.put(internal, out);
 		}
@@ -570,7 +578,7 @@ class RegistrySyncParityInjectorExecutionTest {
 		assertInstanceOf(AbstractMethodError.class, missing, "premise: as merged, contents() is not implemented");
 		for (String target : List.of(WRAPPER, PENDING)) {
 			byte[] once = classes.get(target.replace('.', '/'));
-			assertSame(once, InjectorExecution.transform(new RegistrySyncParityInjector(), target, once, EnvType.CLIENT),
+			assertSame(once, InjectorExecution.transform(new RegistrySyncParityInjector(classes::containsKey), target, once, EnvType.CLIENT),
 					target + " already has the contract and is left alone");
 		}
 	}
@@ -583,6 +591,61 @@ class RegistrySyncParityInjectorExecutionTest {
 		assertEquals(List.of(0, 1, 2), ids(loader), "and disconnecting puts the client's own ids back");
 		assertEquals(List.of(0, 1, 2), fabricSync(InjectorExecution.load(original)),
 				"premise: as merged, fabric-api's remap writes the wrapper's unused vanilla fields and the ids never move");
+	}
+
+	/**
+	 * A game without fabric-api's remap types gets a wrapper without fabric-api's {@code remap} (a public method naming an
+	 * absent class breaks {@code getMethods()} and every {@code getMethod} that reaches the wrapper), and NeoForge's sync
+	 * and the disconnect revert work exactly as with it.
+	 */
+	@Test void withoutFabricApiTheWrapperKeepsNeoForgesSyncAndHasNoRemap(@TempDir Path work) throws Throwable {
+		Map<String, byte[]> original = merged(work);
+		Map<String, byte[]> classes = repaired(original, type -> !type.startsWith("net/fabricmc/") && original.containsKey(type));
+		ClassLoader loader = InjectorExecution.load(classes);
+		assertEquals("", InjectorExecution.verify(classes.get(WRAPPER.replace('.', '/')), loader), WRAPPER);
+		Class<?> wrapper = loader.loadClass(WRAPPER);
+		assertThrows(NoSuchMethodException.class, () -> wrapper.getDeclaredMethod("remap",
+				loader.loadClass("it.unimi.dsi.fastutil.objects.Object2IntMap"),
+				loader.loadClass("net.fabricmc.fabric.impl.registry.sync.RemappableRegistry$RemapMode")));
+		assertNotNull(wrapper.getDeclaredMethod("registerIdMapping", loader.loadClass("net.minecraft.resources.ResourceKey"), int.class));
+
+		assertEquals(List.of(0, 1, 2), ids(loader));
+		assertEquals(Set.of(), neoForgeSync(loader), "nothing missing");
+		assertEquals(List.of(2, 0, 1), ids(loader), "NeoForge's sync moves the wrapped registry's ids without fabric-api's half");
+		InjectorExecution.invokeStatic(loader.loadClass(MANAGER), "revertToFrozen");
+		assertEquals(List.of(0, 1, 2), ids(loader), "and disconnecting puts the client's own ids back");
+	}
+
+	/**
+	 * The injector KernelBoot registers, {@link RegistrySyncParityInjector#forGameLoader}, decides from the class files
+	 * on the game's loader: one that has fabric-api's registry-sync types gets {@code remap}, one that does not gets no
+	 * {@code remap}, and NeoForge's half either way. No stand-in predicate between the test and the decision; the games
+	 * are directories of the stand-ins' class files, with and without {@code net/fabricmc/}.
+	 */
+	@Test void theInjectorKernelBootRegistersAsksTheGameLoaderForRemapsClassFiles(@TempDir Path work) throws Throwable {
+		Map<String, byte[]> original = merged(work.resolve("compiled"));
+		byte[] wrapper = original.get(WRAPPER.replace('.', '/'));
+		for (boolean fabricApi : List.of(true, false)) {
+			Path game = work.resolve(fabricApi ? "with-fabric-api" : "without-fabric-api");
+			for (var entry : original.entrySet()) {
+				if (!fabricApi && entry.getKey().startsWith("net/fabricmc/")) continue;
+				Path file = game.resolve(entry.getKey() + ".class");
+				Files.createDirectories(file.getParent());
+				Files.write(file, entry.getValue());
+			}
+			try (URLClassLoader loader = new URLClassLoader(new URL[] {game.toUri().toURL()}, null)) {
+				assertEquals(fabricApi, loader.getResource("net/fabricmc/fabric/impl/registry/sync/RemappableRegistry$RemapMode.class") != null,
+						"premise: the game " + (fabricApi ? "has" : "lacks") + " fabric-api's RemapMode");
+				org.objectweb.asm.tree.ClassNode out = new org.objectweb.asm.tree.ClassNode();
+				new org.objectweb.asm.ClassReader(InjectorExecution.transform(RegistrySyncParityInjector.forGameLoader(loader), WRAPPER,
+						wrapper, EnvType.CLIENT)).accept(out, 0);
+				Set<String> declared = new java.util.TreeSet<>();
+				for (org.objectweb.asm.tree.MethodNode m : out.methods) declared.add(m.name);
+				assertTrue(declared.containsAll(Set.of("clear", "registerIdMapping")), "NeoForge's sync contract either way: " + declared);
+				assertEquals(fabricApi, declared.contains("remap"), (fabricApi ? "with" : "without")
+						+ " fabric-api's types on the game loader, fabric-api's remap is " + (fabricApi ? "added" : "left out") + ": " + declared);
+			}
+		}
 	}
 
 	/** fabric-api's sync, from a server whose ids are stone 1, dirt 2, gear 0: the item ids after it. */

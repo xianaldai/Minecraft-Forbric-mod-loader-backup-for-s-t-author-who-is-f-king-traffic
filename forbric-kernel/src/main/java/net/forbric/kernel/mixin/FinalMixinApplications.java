@@ -264,13 +264,17 @@ public final class FinalMixinApplications {
   return result;
  }
  /** "Hud.extractHotbarAndDecorations (nothing in the merged game calls it; …)" when every method of the final class that
-  * calls {@code handler} is one MergedBaseUncalledMethods lists for the config's ecosystem; null when any may run. */
+  * calls {@code handler} is one MergedBaseUncalledMethods lists for the config's ecosystem, or a body a carrier renamed
+  * that nothing in the merged game calls (CarrierRenames: malilib's tooltip hook, which R3 moves where vanilla's
+  * tooltip body is); null when any may run. */
  private static String neverRuns(Plan plan,ClassNode target,MethodNode handler) {
-  if(!MixinFit.asksLiveness()||!MergedBaseUncalledMethods.lists(target.name))return null;
+  if(!MixinFit.asksLiveness()||!MergedBaseUncalledMethods.lists(target.name)&&!CarrierRenames.listsUncalled(target.name))return null;
   net.forbric.api.Ecosystem ecosystem=MixinConfigOwners.ecosystemOf(plan.config().name());if(ecosystem==null)return null;
   List<String> hosts=new ArrayList<>();
   for(MethodNode method:attachmentHosts(target,handler).keySet()) {
-   String why=MergedBaseUncalledMethods.neverRuns(target,method,ecosystem);if(why==null)return null;
+   String why=MergedBaseUncalledMethods.neverRuns(target,method,ecosystem);
+   if(why==null)why=CarrierRenames.neverRuns(target,method,ecosystem);
+   if(why==null)return null;
    hosts.add(target.name.substring(target.name.lastIndexOf('/')+1)+"."+method.name+" ("+why+")");
   }
   return hosts.isEmpty()?null:String.join("; ",hosts);

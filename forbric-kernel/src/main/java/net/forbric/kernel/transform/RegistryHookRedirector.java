@@ -63,7 +63,7 @@ import net.forbric.kernel.util.ForbricLog;
  * <p><b>What this does NOT mean today.</b> "Never instantiated" holds for THIS seam only. Once the kernel constructs
  * the traditional-Forge baseline ({@code KernelForgeBaseline}, so that {@code ForgeRegistries.BLOCKS} and
  * {@code BuiltInRegistries.BLOCK} are one store), Forge's own {@code RegistryManager.injectForgeRegistry} replaces
- * seventeen builtin registries in the root registry with {@code NamespacedWrapper}s — block, item, entity_type,
+ * 27 builtin registries in the root registry with {@code NamespacedWrapper}s — block, item, entity_type,
  * fluid, attribute, sound_event, particle_type, … — and the rest of the kernel is written for that reality
  * ({@code reopenForgeRegistries}, {@code RegistryAliasParityInjector}, {@code RegistrySyncParityInjector}). Read
  * the paragraphs above as the history of why the FIRST creation stays plain, not as a description of the runtime.

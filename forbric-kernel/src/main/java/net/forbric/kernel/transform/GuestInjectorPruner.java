@@ -78,9 +78,26 @@ import net.forbric.kernel.util.ForbricLog;
  * the same lines twice — and {@code hookDamage} (custom damage handlers) applies as written. Nothing is recorded for
  * them: the bridge does their job, and {@code FabricApiModuleLossAudit} names a mod's use of the registry when it
  * is off.
+ *
+ * <p>The table names injectors the kernel replaces. The other kind of entry is found, not listed: an {@code @Inject}
+ * that Mixin will reject outright ({@link net.forbric.kernel.mixin.MixinFit.Rejection} -- the one method its name binds
+ * on the merged base is not one its handler was written for, its {@code @At} is sure to find a point there, and Mixin
+ * throws "Invalid descriptor" at that point whatever {@code require} says). Kept in a mixin, it failed the mixin's
+ * application to that class with every injector still to come, and a config that stays required with it.
+ * {@code KernelGuestMixinAdapter} answers it for every mixin it keeps on its verdict -- a PARTIAL one, one kept for its
+ * misses on another mod's class, an UNFIT one kept because another mod's mixin targets the class -- and remembers such
+ * an injector when nothing else in the mixin calls it and no target binds it as written ({@link #rememberRefused}).
+ * {@link #pruneRefused} removes it from the node the bytecode provider hands Mixin -- after every mixin adapter has
+ * run, and only while the same rule still says Mixin rejects it there -- so the rest of the mixin applies. Each removal
+ * is a confirmed finding naming the binding; it is required when the author's own count for the injector is at least
+ * one. {@code -Dforbric.guestInjectorPruner.refused=off} keeps such a mixin whole in front of Mixin, as before; with the
+ * whole pruner off the adapter leaves it out instead, never half-applied.
  */
 public final class GuestInjectorPruner implements ClassTransformer {
 	public static final String PROPERTY = "forbric.guestInjectorPruner";
+
+	/** {@code -Dforbric.guestInjectorPruner.refused=off}: an injector Mixin rejects outright stays in its mixin. */
+	public static final String REFUSED_PROPERTY = "forbric.guestInjectorPruner.refused";
 
 	static final String MODEL_MANAGER_MIXIN = "net.fabricmc.fabric.mixin.client.model.loading.ModelManagerMixin";
 	static final String MODEL_LAMBDA = "lambda$loadBlockModels$2";
@@ -135,8 +152,9 @@ public final class GuestInjectorPruner implements ClassTransformer {
 	private static final Map<String, String> COSTS = Map.of(MODEL_MANAGER_MIXIN,
 			"the whole mixin stays pinned, so every Fabric ModelLoadingPlugin -- block-state resolvers, extra "
 					+ "models, model modifiers -- is registered and never called",
-			ITEM_STACK_MIXIN, "fabric-item-api's tooltip injectors stay where the retarget put them, so the kernel's "
-					+ "tooltip bridge stands down and a Fabric mod's component tooltips are missing from normal tooltips");
+			ITEM_STACK_MIXIN, "fabric-item-api's tooltip injectors stay in addDetailsToTooltip, where NeoForge's dispatcher "
+					+ "makes none of the calls they anchor on (R3 moves none of them: they share an index), so they bind nowhere, "
+					+ "the kernel's tooltip bridge stands down, and a Fabric mod's component tooltips are drawn nowhere");
 
 	/** Why an entry's injectors cannot stay, for the log line. */
 	private static final Map<String, String> REASONS = Map.of(MODEL_MANAGER_MIXIN,
@@ -148,8 +166,8 @@ public final class GuestInjectorPruner implements ClassTransformer {
 	/** What happens to an entry's mixin when a reshaped fabric-api leaves it untouched. */
 	private static final Map<String, String> DRIFT = Map.of(MODEL_MANAGER_MIXIN, "it will read PARTIAL and apply half — the state that made every block "
 					+ "model missingno",
-			ITEM_STACK_MIXIN, "it is retargeted as before and the kernel's tooltip bridge stands down; Fabric component "
-					+ "tooltip providers show only above the item id in advanced tooltips");
+			ITEM_STACK_MIXIN, "its tooltip injectors bind nowhere on NeoForge's dispatcher and the kernel's tooltip bridge "
+					+ "stands down; Fabric component tooltip providers are drawn nowhere");
 
 	/** The finding a removed injector records, or none when a kernel repair does its job. */
 	private static final Map<String, String> LOSSES = Map.of(MODEL_MANAGER_MIXIN,
@@ -351,5 +369,134 @@ public final class GuestInjectorPruner implements ClassTransformer {
 	/** How many injector methods were removed, for the boot summary. */
 	public int prunedInjectors() {
 		return pruned;
+	}
+
+	// -----------------------------------------------------------------------------------------------------------------
+	// Injectors Mixin rejects outright
+
+	/**
+	 * An {@code @Inject} the adapter found Mixin would reject: in {@code config}, the mixin {@code mixin} (internal name),
+	 * the handler {@code name}{@code desc}, the refused binding, and whether its loss is required -- the author's own count
+	 * for it ({@code require}, else the config's {@code defaultRequire}) is at least one, as FinalMixinApplications judges
+	 * an injector that did not attach.
+	 */
+	public record Refused(String config, String mixin, String name, String desc, String reason, boolean required) {
+	}
+
+	/** Mixin (internal name) → the injectors to take out of it. */
+	private static final Map<String, List<Refused>> REFUSED = new java.util.concurrent.ConcurrentHashMap<>();
+	/** What was taken out already, so a mixin Mixin reads twice is logged once. */
+	private static final Set<String> REFUSED_DONE = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+	/** Whether injectors Mixin rejects outright are taken out: this kind's switch, and the pruner's own. */
+	public static boolean refusedEnabled() {
+		return enabled() && !"off".equalsIgnoreCase(System.getProperty(REFUSED_PROPERTY, "on"));
+	}
+
+	/**
+	 * Whether {@code name}{@code desc} in {@code mixin} can go on its own: an injector method, in no {@code @Group} (whose
+	 * count would then be the group's to fail), and nothing else in the mixin calls it or takes a handle to it.
+	 */
+	public static boolean prunable(ClassNode mixin, String name, String desc) {
+		MethodNode handler = null;
+		for (MethodNode m : mixin.methods) if (m.name.equals(name) && m.desc.equals(desc)) handler = m;
+		if (handler == null || countInjectors(handler) != 1) return false;
+		for (AnnotationNode a : allAnnotations(handler)) if ("Lorg/spongepowered/asm/mixin/injection/Group;".equals(a.desc)) return false;
+		for (MethodNode m : mixin.methods) {
+			if (m == handler || m.instructions == null) continue;
+			for (org.objectweb.asm.tree.AbstractInsnNode insn : m.instructions) {
+				if (insn instanceof org.objectweb.asm.tree.MethodInsnNode call && call.owner.equals(mixin.name)
+						&& call.name.equals(name) && call.desc.equals(desc)) return false;
+				if (insn instanceof org.objectweb.asm.tree.InvokeDynamicInsnNode indy) {
+					for (Object argument : indy.bsmArgs) {
+						if (argument instanceof org.objectweb.asm.Handle h && h.getOwner().equals(mixin.name)
+								&& h.getName().equals(name) && h.getDesc().equals(desc)) return false;
+					}
+				}
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * {@code mixinBytes} without {@code name}{@code desc} and the {@code @Surrogate}s of that name, which stand in only
+	 * for it: what Mixin will receive once {@link #pruneRefused} has run, for the verdict to judge.
+	 */
+	public static byte[] without(byte[] mixinBytes, List<String> handlers) {
+		ClassNode node = new ClassNode();
+		new ClassReader(mixinBytes).accept(node, 0);
+		for (String handler : handlers) {
+			int paren = handler.indexOf('(');
+			remove(node, handler.substring(0, paren), handler.substring(paren));
+		}
+		ClassWriter writer = new ClassWriter(0);
+		node.accept(writer);
+		return writer.toByteArray();
+	}
+
+	/** Remembers {@code refused} for {@link #pruneRefused}. */
+	public static void rememberRefused(Refused refused) {
+		REFUSED.computeIfAbsent(refused.mixin(), k -> new java.util.concurrent.CopyOnWriteArrayList<>()).add(refused);
+	}
+
+	/**
+	 * Takes the remembered injectors out of {@code node}, the mixin as Mixin is about to receive it, each only while
+	 * {@code stillRejected} -- the verdict's rule asked of this node -- still names a refused binding; one an adapter
+	 * already moved where it fits stays. Each one taken out is a confirmed finding.
+	 *
+	 * @return how many were taken out
+	 */
+	public static int pruneRefused(ClassNode node, java.util.function.BiFunction<ClassNode, MethodNode, String> stillRejected) {
+		List<Refused> entries = node == null || node.methods == null ? null : REFUSED.get(node.name);
+		if (entries == null || !refusedEnabled()) return 0;
+		int removed = 0;
+		for (Refused entry : entries) {
+			MethodNode handler = null;
+			for (MethodNode m : node.methods) if (m.name.equals(entry.name()) && m.desc.equals(entry.desc())) handler = m;
+			if (handler == null) continue;
+			String why = stillRejected.apply(node, handler);
+			String key = node.name + "." + entry.name() + entry.desc();
+			if (why == null) {
+				if (REFUSED_DONE.add(key + "?")) {
+					ForbricLog.info("[Forbric/GuestInjectorPruner] %s.%s is no longer rejected once the mixin adapters ran; "
+							+ "left in place", node.name.replace('/', '.'), entry.name());
+				}
+				continue;
+			}
+			remove(node, entry.name(), entry.desc());
+			removed++;
+			String mixin = node.name.replace('/', '.');
+			net.forbric.kernel.mixin.MixinCompatibility.recordRemovedInjector(entry.config(), mixin, entry.name(), entry.desc(),
+					"the kernel removed injector " + entry.name() + " before Mixin read it: " + why + ". Mixin would have "
+							+ "rejected it (\"Invalid descriptor\") and failed the mixin with it; the rest of the mixin applies",
+					entry.required(),
+					List.of("kernel pruned " + entry.name() + entry.desc() + " from " + mixin, "refused binding: " + why,
+							"source=GuestInjectorPruner (an injector Mixin rejects outright)",
+							"-D" + REFUSED_PROPERTY + "=off keeps it, and Mixin rejects the mixin"));
+			if (REFUSED_DONE.add(key)) {
+				ForbricLog.info("[Forbric/GuestInjectorPruner] pruned %s.%s — %s; Mixin would have rejected it and failed the "
+						+ "mixin with it, so the other %d injector(s) apply as written", mixin, entry.name(), why, countInjectors(node));
+			}
+		}
+		return removed;
+	}
+
+	/** Test seam: forget every remembered injector. */
+	public static void forgetRefused() {
+		REFUSED.clear();
+		REFUSED_DONE.clear();
+	}
+
+	/** Removes {@code name}{@code desc} and the {@code @Surrogate}s of that name from {@code node}. */
+	private static void remove(ClassNode node, String name, String desc) {
+		node.methods.removeIf(m -> m.name.equals(name) && (m.desc.equals(desc) || allAnnotations(m).stream()
+				.anyMatch(a -> "Lorg/spongepowered/asm/mixin/injection/Surrogate;".equals(a.desc))));
+	}
+
+	/** How many injector annotations {@code m} carries. */
+	private static int countInjectors(MethodNode m) {
+		int n = 0;
+		for (AnnotationNode a : allAnnotations(m)) if (INJECTOR_DESCS.contains(a.desc)) n++;
+		return n;
 	}
 }
