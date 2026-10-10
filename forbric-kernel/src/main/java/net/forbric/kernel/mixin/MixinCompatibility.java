@@ -5,14 +5,17 @@ import java.util.List;
 
 import net.forbric.api.CompatibilityFinding;
 import net.forbric.api.CompatibilityFindings;
+import net.forbric.kernel.util.ForbricLog;
 
 /** One identity from preflight through application; prose is evidence, never the identity. */
 public final class MixinCompatibility {
 	private static final java.util.Map<String, Boolean> ORIGINAL_REQUIRED = new java.util.concurrent.ConcurrentHashMap<>();
+	private record InjectionWarning(String config, String mixin, String handler, String target, String reason) { }
+	private static final java.util.Set<InjectionWarning> WARNED_INJECTIONS = java.util.concurrent.ConcurrentHashMap.newKeySet();
 	private MixinCompatibility() { }
 
 	/** Every new loader session re-reads its own original declarations. */
-	public static void reset() { ORIGINAL_REQUIRED.clear(); FinalMixinApplications.reset(); SupersededMixins.reset(); }
+	public static void reset() { ORIGINAL_REQUIRED.clear(); WARNED_INJECTIONS.clear(); FinalMixinApplications.reset(); SupersededMixins.reset(); }
 
 	/** Keep the mod's declaration before Forbric relaxes required=true in the bytes handed to Mixin. */
 	static void rememberOriginalConfig(String config, byte[] bytes) {
@@ -81,6 +84,49 @@ public final class MixinCompatibility {
 		CompatibilityFindings.record(new CompatibilityFinding("mixin-injector:" + config + ":" + mixin + "#" + name + desc,
 				owner(config), "Mixin injection " + name, "mixin:" + config, CompatibilityFinding.Confidence.CONFIRMED,
 				required, detail, evidence));
+		String target = evidence == null ? "<unknown>" : evidence.stream().filter(e -> e != null && e.startsWith("target="))
+				.map(e -> e.substring("target=".length())).findFirst().orElse("<unknown>");
+		warnInjection(config, mixin, name + desc, target, "injector removed before application: " + detail
+				+ (evidence == null || evidence.isEmpty() ? "" : "; evidence=" + evidence));
+	}
+
+	/**
+	 * A transported source callback or Operation its seam declined at run time, because another mixin changed the
+	 * carrier helper or the host's call into it. The game keeps running with the carrier's code as written and only
+	 * this handler is lost, at this one site: CONFIRMED (the decline was observed) and not necessary on the prompt's
+	 * terms, like a NEVER_RUNS injector, so it marks the mod's row and never asks the player to quit.
+	 */
+	static void recordDeclinedSeam(String config, String mixin, String name, String desc, String site, String detail,
+			List<String> evidence) {
+		CompatibilityFindings.record(new CompatibilityFinding("mixin-seam:" + config + ":" + mixin + "#" + name + desc,
+				owner(config), "Mixin injection " + name, "mixin:" + config, CompatibilityFinding.Confidence.CONFIRMED,
+				false, detail, evidence));
+		warnInjection(config, mixin, name + desc, site, detail);
+	}
+
+	/** Actual injection misses stay visible in latest.log, including originally optional injectors. */
+	static void warnInjection(String config, String mixin, String handler, String target, String reason) {
+		// Definitions may be observed again when a deferred replacement is checked. One line per observation,
+		// per launch, rather than repeating it every time the same final class is inspected.
+		if (!WARNED_INJECTIONS.add(new InjectionWarning(config, mixin, handler, target, reason))) return;
+		ForbricLog.warn("[Forbric/Mixin] injection warning: mod=%s config=%s mixin=%s handler=%s target=%s — %s",
+				owner(config), config, mixin, handler, target, reason);
+	}
+
+	/** Whole-mixin skips have no final handler to observe. Report them after plugins and repairs settle. */
+	public static void warnUnresolvedMixins() {
+		for (CompatibilityFinding finding : CompatibilityFindings.all()) {
+			if (finding.confidence() != CompatibilityFinding.Confidence.CONFIRMED
+					|| !finding.id().startsWith("mixin:") || !finding.source().startsWith("mixin:")) continue;
+			String config = finding.source().substring("mixin:".length());
+			String prefix = "mixin:" + config + ":";
+			if (!finding.id().startsWith(prefix)) continue;
+			String mixin = finding.id().substring(prefix.length());
+			if (SupersededMixins.provedReplacement(mixin) != null) continue;
+			String target = finding.evidence().stream().filter(e -> e.startsWith("target="))
+					.map(e -> e.substring("target=".length())).findFirst().orElse("<unknown>");
+			warnInjection(config, mixin, "<whole mixin>", target, finding.detail() + "; evidence=" + finding.evidence());
+		}
 	}
 
 	private static String owner(String config) {

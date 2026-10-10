@@ -42,6 +42,12 @@
 - **中枢把各 Forge 系之间的分歧当作数据保留，不取平均把它抹掉**。早先一版统一的订阅者注册一下子弄坏了三样东西（见 `KernelEventSubscribers` 自己的 javadoc）。所以 `ForeignType` 只映射*名字*，两个 `ServerModLoader.load` 触发点保留各自不同的描述符和不同的钩子。
 - **不是每次归并都意味着漏了拆分。**`LoaderProbePolicy.Family` 故意只有两个取值：一个 NeoForge mod 探测 MinecraftForge 的 `FMLLoader` 时，仍然必须得到肯定的回答。
 
+## 兼容契约
+
+兼容转换按公开 API 契约和已证明的字节码结构匹配，不按第三方 mod 的 ID、包名、私有回调名或版本哈希放行。同一种回调结构换成新的 mod，仍使用同一个适配器；有歧义或无法证明安全的结构保持原样，并交给兼容性诊断。测试包含真实回调改包名、改方法名后的执行，以及必须拒绝的近似结构。
+
+工作线程通过已证明的启动、排空和退出流程，或 `ManagedWorkerResources.register` 注册生命周期，不再反射某个 mod 的懒加载单例。注册表初始化按完整循环记录回调，正常返回才发布；注册窗口关闭后只补新增对象，不重复初始化已有对象。公开 entrypoint 和 API 的名称仍作为协议边界保留。第三方 mod 互相争用同一指令的冲突会被报告，不再由加载器内置具名优先级决定谁丢功能；结果与 Mixin 自己处理这两个 mod 时一致：一个 mod 的注入器拿走了另一个 mod 在配置插件 `postApply` 里用原始 ASM 寻找的调用时，Mixin 先应用所有注入器、后调用 `postApply`，所以注入器保有该调用、补丁什么也找不到，`ContendedCallSites` 会点名两个 mod 和这条调用。
+
 ## 共用部分（沿用，未重写）
 
 合并基底的流水线留在 `../forbric-loader` 里：`src/tools/{MergedBaseBuilder,MergedLinkChecker,
@@ -84,7 +90,17 @@ RuntimeInteropPatcher}` + `run/{build-merged-base,assemble-*-runtime}.sh` 产出
 
 其余闸门（`m8`、`m10`、`m11`、`m18`–`m23`）各自锁定一个曾经发布出去的缺陷。上次统计时，二十五个闸门里有十六个已有一天没跑过，其中一个一直是红的。所以 `gate-m0` 现在拒绝为没有实际执行的测试任务出报告。
 
-旧的 `forbric-loader` 仍保持可运行，用作**差分对照基准**，并且仍负责构建内核所用的共享游戏产物。
+旧的 `forbric-loader` 仍保持可运行，用作**差分对照基准**，并且仍负责构建内核所用的共享游戏产物。它无法验证被移除的有状态父类；声明 `required-ancestor-compositions.tsv` 的基底必须使用已注册状态协议证明的内核。
+
+## 通用兼容规则与协议扩展
+
+Mixin 的跳过、接口保留、调用重定位和局部变量选择来自实际源字节码、当前目标和控制流证据。类名、mod id、处理器名或固定 ordinal 不再作为这批兼容规则的许可条件；无法证明的回调不会被搬到另一个事件顺序。原生参考索引中的哈希用于验证证据来源，不用于限制某个 mod 版本。
+
+mod 写给其他 mod 的声明可以跨生态读取（`CrossEcosystemDeclarations`）。Fabric mod 的 `custom` 值会出现在它的 `[modproperties]` 表里，类型与 FML 读 TOML 得到的一致。它在带命名空间的 entrypoint 键下声明的类名也会出现在同名键下，前提是某个读取方自己的字节码把这个键当 `String` 读，且没有读取方把它当成别的类型。Forge 家族 mod 带命名空间、值是它自己 jar 里定义的类名的属性，会成为同名键的 Fabric entrypoint；其他值只保留为属性。一个从 Forge 家族 `ModList` 读 `getModProperties()` 的类，在这个类里能看到有声明的 Fabric mod（`DeclarationReaderModListInjector`）；追加这些 Fabric mod 时如果出错，这个类拿到原生结果，并记一条点名它的 `SUSPECTED` finding；Mods 界面、握手、版本检查等其他 `ModList` 读取方仍然只看到原生列表。
+
+可选 SDK 通过 `META-INF/services/net.forbric.api.ProtocolExtension` 提供独立协议适配器，每个游戏类加载器拥有自己的注册表。新增协议可以提供缺失 API、注册转换、接收配置生命周期和提供配置界面。合并掉有状态父类时，产物会声明 `required-ancestor-compositions.tsv` 要求；`AncestorComposition` 必须证明最终定义保留了该状态协议，否则加载会明确失败。
+
+共享 API 提供 `VirtualGetters`，按完整 JVM 返回类型选择公开 getter；`VirtualProperties` 根据已定义的公开 getter 证明可写存储。它们可以用于任意声明类，并保留虚调用分派；属性写入前必须先获得实际 getter/字段证据。协议提供者在构造时不能链接游戏类，应通过 `Context.gameLoader()` 解析游戏对象，具体约定见 `ProtocolExtension`。
 
 ## 构建与运行
 

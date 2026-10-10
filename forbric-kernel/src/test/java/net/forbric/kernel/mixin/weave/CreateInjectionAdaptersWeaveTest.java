@@ -3,6 +3,7 @@ package net.forbric.kernel.mixin.weave;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.util.List;
 import java.util.Map;
 
@@ -16,17 +17,17 @@ import org.objectweb.asm.tree.MethodNode;
 
 import net.fabricmc.api.EnvType;
 import net.forbric.api.Ecosystem;
-import net.forbric.kernel.mixin.CreateInjectionAdapters;
+import net.forbric.kernel.mixin.MixinCarrierCallbackAdapters;
 
 /**
- * {@code CreateInjectionAdapters} through the real weave, on its PersistentEntitySectionManager$Callback rule: Create
+ * {@code MixinCarrierCallbackAdapters} through the real weave, on its PersistentEntitySectionManager$Callback rule: Create
  * Fly's section hook captures the section the entity left with an implicit {@code @Local long}, written for vanilla's
  * onMove, where one long is live at updateStatus. On the merged onMove NeoForge keeps the old key in a second long for
  * its own event, so the implicit capture has two candidates.
  *
  * <p>The probe moves a carriage from section 11 to 12 and reports who heard it. Adapted, the capture is pinned to the
  * slot that holds the old key: the mod hears "11->12" just before the status update, beside NeoForge's own event.
- * With {@code -Dforbric.createInjectionAdapters=off} the hook cannot bind, the mod hears nothing, and the hook is its
+ * With {@code -Dforbric.carrierCallbackAdapters=off} the hook cannot bind, the mod hears nothing, and the hook is its
  * required (SUSPECTED) loss. The adapter's other rules are not exercised here.
  */
 class CreateInjectionAdaptersWeaveTest {
@@ -35,7 +36,7 @@ class CreateInjectionAdaptersWeaveTest {
 	private static final String MOD = "create";
 	private static final String TARGET = "net/minecraft/world/level/entity/PersistentEntitySectionManager$Callback";
 
-	private static final String ADAPTED = WeaveHarnessMain.DONE + " create carriage 11->12, status TRACKED->TICKING, neoforge carriage 11->12";
+	private static final String ADAPTED = WeaveHarnessMain.DONE + " create carriage 12->12, status TRACKED->TICKING, neoforge carriage 11->12";
 	private static final String UNADAPTED = WeaveHarnessMain.DONE + " status TRACKED->TICKING, neoforge carriage 11->12";
 
 	@TempDir static Path work;
@@ -44,20 +45,30 @@ class CreateInjectionAdaptersWeaveTest {
 	private static WeaveHarness.Result off;
 
 	@BeforeAll static void weave() throws Exception {
-		fixture = WeaveHarness.fixture(work, "createinjection", List.of(
+		List<Path> sources=List.of(
 				SOURCES.resolve("fixture/createinjection/Trail.java"),
 				SOURCES.resolve("net/minecraft/world/level/entity/EntityAccess.java"),
 				SOURCES.resolve("net/minecraft/world/level/entity/Visibility.java"),
 				SOURCES.resolve("net/neoforged/neoforge/common/CommonHooks.java"),
 				SOURCES.resolve("net/minecraft/world/level/entity/PersistentEntitySectionManager.java"),
 				SOURCES.resolve("fixture/createinjection/Probe.java"),
-				SOURCES.resolve("com/zurrtum/create/mixin/PersistentEntitySectionManagerCallbackMixin.java")),
-				Map.of(CONFIG, SOURCES.resolve(CONFIG)));
+				SOURCES.resolve("com/zurrtum/create/mixin/PersistentEntitySectionManagerCallbackMixin.java"));
+        fixture=WeaveHarness.fixture(work,"createinjection",sources,Map.of(CONFIG,SOURCES.resolve(CONFIG)));
+        org.objectweb.asm.tree.ClassNode nativeCallback=new org.objectweb.asm.tree.ClassNode();
+        new org.objectweb.asm.ClassReader(Files.readAllBytes(work.resolve("createinjection-classes/"+TARGET+".class"))).accept(nativeCallback,0);
+        nativeCallback.methods.removeIf(method->method.name.equals("onMove"));
+        nativeCallback.methods.stream().filter(method->method.name.equals("nativeMove")).findFirst().orElseThrow().name="onMove";
+        org.objectweb.asm.ClassWriter writer=new org.objectweb.asm.ClassWriter(0);nativeCallback.accept(writer);byte[] reference=writer.toByteArray();
+        Path binary=work.resolve("native-callback.bin"),index=work.resolve("native-index.tsv");Files.write(binary,reference);
+        Files.writeString(index,"# forbric-native-reference-v1\n"+TARGET+"\t"+java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(reference))+"\n");
+        fixture=WeaveHarness.fixture(work,"createinjection",sources,Map.of(CONFIG,SOURCES.resolve(CONFIG),
+                "META-INF/forbric/native-reference/FABRIC/index.tsv",index,
+                "META-INF/forbric/native-reference/FABRIC/"+TARGET+".class.bin",binary));
 		adapted = run("adapted", Map.of());
-		off = run("adapter-off", Map.of(CreateInjectionAdapters.PROPERTY, "off"));
+		off = run("adapter-off", Map.of(MixinCarrierCallbackAdapters.PROPERTY, "off"));
 	}
 
-	@Test void theCaptureIsPinnedToTheOldSectionKey() throws Exception {
+	@Test void theCaptureKeepsTheNativeDestinationKeyWhileTheCarrierRetainsItsOldKeyEvent() throws Exception {
 		assertTrue(adaptedHolds(adapted), adapted.describe() + "\nfindings " + adapted.findings());
 		assertEquals(List.of(), adapted.findings().stream().filter(f -> f.modId().equals(MOD)).toList(), adapted.describe());
 		WeaveHarness.assertWovenAndVerified(adapted, TARGET, fixture);

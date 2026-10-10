@@ -51,26 +51,17 @@ class ForbricMixinServiceTest {
 	}
 
 	/**
-	 * The {@code ModelManagerMixin} pin is conditional on the pruner: trimmed to the injectors that fit by default,
-	 * pinned whole only when {@code -Dforbric.guestInjectorPruner=off}. The kill switch has to reproduce the OLD
-	 * behaviour (pinned, block models load, plugins dead) and never the half-applied one (4666 missingno models),
-	 * which is what an unconditional removal of the pin would have shipped.
+	 * No configuration is suppressed by name, with the pruner on or off. Leaving the reader-deserializer pair out
+	 * whole while the pruner is off is decided from the mixin's source (PrunerOffWholeMixinRefusalTest), not from a
+	 * config identity listed here.
 	 */
-	@Test
-	void theModelManagerMixinIsPinnedOnlyWhenThePrunerIsOff() {
-		String config = "fabric-model-loading-api-v1.mixins.json";
-		assertTrue(MergedBaseMixinCompat.SUPPRESSED_UNLESS_PRUNED.contains(config + ":ModelManagerMixin"),
-				"precondition: the entry moved to SUPPRESSED_UNLESS_PRUNED");
-		assertFalse(MergedBaseMixinCompat.SUPPRESSED_MIXINS.contains(config + ":ModelManagerMixin"),
-				"and left the unconditional list");
-
-		assertFalse(ForbricMixinService.suppressedMixinsFor(config).contains("ModelManagerMixin"),
-				"by default the pruner trims the mixin, so it must NOT be suppressed");
-
-		System.setProperty(net.forbric.kernel.transform.GuestInjectorPruner.PROPERTY, "off");
-		assertTrue(ForbricMixinService.suppressedMixinsFor(config).contains("ModelManagerMixin"),
-				"with the pruner off the whole-mixin pin returns");
-	}
+    @Test void noConfigurationIdentityIsSuppressedWithoutItsSourceProtocol() {
+        MergedBaseMixinCompat.reset();
+        assertTrue(MergedBaseMixinCompat.SUPPRESSED_UNLESS_PRUNED.isEmpty());
+        assertTrue(ForbricMixinService.suppressedMixinsFor("fabric-model-loading-api-v1.mixins.json").isEmpty());
+        System.setProperty(net.forbric.kernel.transform.GuestInjectorPruner.PROPERTY,"off");
+        assertTrue(ForbricMixinService.suppressedMixinsFor("fabric-model-loading-api-v1.mixins.json").isEmpty());
+    }
 
 	/**
 	 * {@code -Dforbric.keepMixins} has to reach the SHIPPED suppression list, not just the adapter's derived one.
@@ -90,7 +81,7 @@ class ForbricMixinServiceTest {
 		System.setProperty(FabricRegistryInitializationMixinAdapter.PROPERTY, "off");
 		String config = "fabric-registry-sync-v0.mixins.json";
 		String pkg = "net.fabricmc.fabric.mixin.registry.sync";
-		assertTrue(MergedBaseMixinCompat.SUPPRESSED_MIXINS.contains(config + ":BootstrapMixin"), "precondition");
+		System.setProperty("forbric.suppressMixins",config+":BootstrapMixin,"+config+":PropertyListedMixin");
 		java.nio.file.Path jar = dir.resolve("registry-sync.jar");
 		try (var out = new java.util.jar.JarOutputStream(java.nio.file.Files.newOutputStream(jar))) {
 			out.putNextEntry(new java.util.jar.JarEntry(config));
@@ -98,7 +89,7 @@ class ForbricMixinServiceTest {
 					+ "\"PropertyListedMixin\"]}").getBytes(java.nio.charset.StandardCharsets.UTF_8));
 			out.closeEntry();
 		}
-		System.setProperty("forbric.suppressMixins", config + ":PropertyListedMixin");
+		System.setProperty("forbric.suppressMixins", config + ":BootstrapMixin," + config + ":PropertyListedMixin");
 		net.forbric.api.CompatibilityFindings.reset();
 		try (var loader = new net.forbric.kernel.classloading.ForbricClassLoader(new java.net.URL[] {jar.toUri().toURL()},
 				getClass().getClassLoader())) {
@@ -114,7 +105,7 @@ class ForbricMixinServiceTest {
 					.findFirst().orElseThrow(() -> new AssertionError("no finding for the hand-listed mixin: " + findings));
 			assertTrue(hand.confidence() == net.forbric.api.CompatibilityFinding.Confidence.CONFIRMED && !hand.required(),
 					hand.toString());
-			assertTrue(hand.evidence().contains("source=MergedBaseMixinCompat.SUPPRESSED_MIXINS"), hand.evidence().toString());
+			assertTrue(hand.evidence().contains("source=-Dforbric.suppressMixins"), hand.evidence().toString());
 			assertTrue(hand.evidence().contains("config required=true"), "the mod's own declaration is kept: " + hand.evidence());
 			var property = findings.stream().filter(f -> f.id().equals(MixinCompatibility.id(config, pkg + ".PropertyListedMixin")))
 					.findFirst().orElseThrow();
@@ -165,7 +156,8 @@ class ForbricMixinServiceTest {
 	@Test
 	void keepMixinsOverridesTheShippedSuppressionList() {
 		System.setProperty(FabricRegistryInitializationMixinAdapter.PROPERTY, "off");
-		String config = "fabric-registry-sync-v0.mixins.json";
+		String config = "discovered.mixins.json";
+        MergedBaseMixinCompat.SUPPRESSED_MIXINS.addAll(List.of(config+":BootstrapMixin",config+":MainMixin"));
 		assertTrue(ForbricMixinService.suppressedMixinsFor(config).contains("BootstrapMixin"),
 				"precondition: this entry ships in MergedBaseMixinCompat.SUPPRESSED_MIXINS");
 
@@ -190,7 +182,8 @@ class ForbricMixinServiceTest {
 	@Test
 	void keepMixinsForAnUnrelatedConfigChangesNothing() {
 		System.setProperty(FabricRegistryInitializationMixinAdapter.PROPERTY, "off");
-		String config = "fabric-registry-sync-v0.mixins.json";
+		String config = "discovered.mixins.json";
+        MergedBaseMixinCompat.SUPPRESSED_MIXINS.add(config+":BootstrapMixin");
 		System.setProperty("forbric.keepMixins", "other.mixins.json:BootstrapMixin");
 		assertTrue(ForbricMixinService.suppressedMixinsFor(config).contains("BootstrapMixin"),
 				"the config name is part of the key — a same-named mixin elsewhere must not unpin this one");

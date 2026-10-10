@@ -45,7 +45,6 @@ import net.forbric.kernel.transform.ClientPackHookInjector;
 import net.forbric.kernel.transform.ClientSmokeTickInjector;
 import net.forbric.kernel.transform.CommonNetworkInteropInjector;
 import net.forbric.kernel.transform.ForgeOverlayNeuterInjector;
-import net.forbric.kernel.transform.SodiumConfigUserBridgeInjector;
 import net.forbric.kernel.transform.DataPackHookInjector;
 import net.forbric.kernel.transform.DuplicateLambdaPruneInjector;
 import net.forbric.kernel.transform.ExitHookInjector;
@@ -57,7 +56,7 @@ import net.forbric.kernel.transform.GuestMixinPluginGuard;
 import net.forbric.kernel.transform.HudElementBridgeInjector;
 import net.forbric.kernel.transform.LifecycleHookInjector;
 import net.forbric.kernel.transform.MergedBaseFrameRecomputer;
-import net.forbric.kernel.transform.PortingLayerAbiInjector;
+import net.forbric.kernel.transform.ConfigApiAbiInjector;
 import net.forbric.kernel.transform.LoaderProbeRewriter;
 import net.forbric.kernel.transform.MethodBodyNeuter;
 import net.forbric.kernel.transform.NeoEnumExtensionInjector;
@@ -142,6 +141,9 @@ public final class KernelBoot {
 	 * (and any unrecognized token) is forwarded to the game's {@code Main.main}.
 	 */
 	public static void launch(Side side, String[] args) throws Throwable {
+		// Before any switch is read: a renamed or retired -Dforbric.* flag is named in the log even when the mechanism
+		// it controls never runs in this session.
+		net.forbric.kernel.util.ForbricSwitches.announce();
 		net.forbric.api.CompatibilityFindings.reset();
 		net.forbric.kernel.discovery.MetadataFailures.reset();
 		net.forbric.kernel.ui.CompatibilityDecision.reset();
@@ -297,6 +299,16 @@ public final class KernelBoot {
 		// Fabric mods (+ extracted JiJ children). Also Mojmap on this game version. Creates the FabricLoader.
 		List<Path> fabricJars = KernelFabricEcosystem.build(fabricScan, side.envType, gameDir, gameVersion,
 				gameArgs.toArray(new String[0]), dupes, gameJar);
+		// Which custom entrypoint keys the Fabric mods just declared only a build arbitration did NOT load would have
+		// dispatched; the lifecycle dispatches them in its place (ArbitratedAwayDispatchers says when and why).
+		try {
+			ArbitratedAwayDispatchers.record(dupes, KernelFabricEcosystem.declaredEntrypointKeys(),
+					KernelFabricEcosystem.knownModIds());
+		} catch (Throwable t) {
+			ForbricLog.warn("[Forbric/DupeId] could not work out which entrypoint keys a superseded build dispatched — "
+					+ "a Fabric mod integrating with a library whose other build loaded may go uninitialised: %s",
+					String.valueOf(t));
+		}
 
 		// Game-side bundled libraries (MixinExtras) and the kernel's own runtime jar. The latter also carries
 		// the kernel's client assets -- the Mods button's icon lives in it -- so its extracted path is handed to
@@ -340,18 +352,20 @@ public final class KernelBoot {
 		// platform-only class would otherwise get a bare NoClassDefFoundError. See ForbricClassLoader.setRescueJars
 		// for why this cannot shadow the winner, and for what it deliberately does not fix.
 		loader.setRescueJars(rescueUrls(dupes));
-		// Fabric mods declare their config screens through Mod Menu's API, which is a mod's, not Fabric's. Without Mod
-		// Menu installed, that declaration cannot even be linked and no Fabric mod has a Config button. Offered now,
-		// while the URLs are final and before any mod class can link against it. See ModMenuApiStandIn.
-		if (side == Side.CLIENT) ModMenuApiStandIn.install(loader);
-
 		// Every mod jar probes as the loader the arbiter gave it, so a mod cannot wander into a branch it never ran
 		// on its own platform — and a universal jar answers as the ONE ecosystem it was arbitrated to. Plain
 		// libraries declare no manifest and stay unowned. See LoaderProbePolicy.
 		loader.setJarFamilies(probeFamilies(fabricJars, modJars));
+		List<DiscoveredMod> transformOwners = new ArrayList<>(ModPresence.forgeFamilyMods());
+		transformOwners.addAll(ModPresence.fabricMods());
+		loader.setModOrigins(transformOwners);
+		RuntimeJarProvenance.register(loader, runtimeJars);
 		// …and a universal jar's ServiceLoader lists only the providers that loader could link, as on its own.
 		loader.setUniversalJars(universalJars(fabricJars, modJars));
 		LoaderProbePolicy.bindGuestLoader(loader);
+		// Service discovery sees the selected classpath and narrowed universal-jar declarations.
+		// Providers can offer an absent public API before any consumer links against it.
+		net.forbric.api.ProtocolExtensions.discover(loader, net.forbric.api.Side.parse(side.envType.name())).offerClasses();
 
 		// A mod that unpacks its real payload at preLaunch has no public API for adding it to the classpath and
 		// reaches into Fabric's internals for it. Installed before any mod class loads. See KernelFabricLauncher.
@@ -402,8 +416,10 @@ public final class KernelBoot {
 		// One mod's mixin config plugin must not be able to abort config preparation for every other mod. Mixin
 		// guards plugin construction but not the calls, and a throw there escapes select(). See GuestMixinPluginGuard.
 		chain.register(TransformPhase.COREMOD, new GuestMixinPluginGuard());
-		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.IrisEarlyGamePathTransformer());
-		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.CorpseNameTagAdapter(name -> {
+		// A plugin that reaches its mod's platform provider while Mixin prepares configs no longer defines game classes
+		// by verifying that provider: ForbricClassLoader defers those checks for any class defined inside a weave.
+		// See VerifierTypeDeferral.
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ZeroNameTagMigrationInjector(name -> {
 			try {
 				String binary = name.replace('/', '.');
 				if (loader.isClassLoadedByName(binary)) {
@@ -454,15 +470,24 @@ public final class KernelBoot {
 		// is still being built can see it.
 		// MinecraftForge's capability provider, composed into Entity/BlockEntity/Level the way Forge composes it into
 		// LevelChunk. BEFORE the compat transformer: its bare-return invalidateCaps/reviveCaps stubs then stand down
-		// on their own, and remain the fallback when this is switched off.
-		boolean forgeCapabilities = net.forbric.kernel.transform.ForgeCapabilityCompositionTransformer.enabled();
-		if (forgeCapabilities) {
-			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ForgeCapabilityCompositionTransformer());
-			if (transferInterop) chain.register(TransformPhase.COREMOD,
-					new net.forbric.kernel.transform.ForgeTransferCapabilityFallback());
-		} else {
-			ForbricLog.warn("[Forbric/Capabilities] -D%s=off — MinecraftForge capabilities are not composed into the merged "
-					+ "root types and ForgeCapabilities cannot initialise; storage, pipe and machine mods stay inert",
+		// on their own, and remain the fallback for a root the composition could not reach.
+		// Registered on EVERY launch, as the transformer and as the loader's ancestor-composition proof: the merged
+		// base requires those roots composed (required-ancestor-compositions.tsv) and the loader refuses to define one
+		// without a proof. -Dforbric.forgeCapabilities=off is read by the transformer and turns off only dispatch.
+		var composition = new net.forbric.kernel.transform.ForgeCapabilityCompositionTransformer(path -> {
+			try (var input = loader.getGameResourceAsStream(path)) { return input == null ? null : input.readAllBytes(); }
+			catch (java.io.IOException unavailable) { return null; }
+		}, transferInterop);
+		loader.registerAncestorComposition(composition);
+		chain.register(TransformPhase.COREMOD, composition);
+		boolean forgeCapabilities = composition.dispatches();
+		// The fallback edits the composed getCapability; the composition's proof expects it exactly when it says so.
+		if (composition.transferFallback()) chain.register(TransformPhase.COREMOD,
+				new net.forbric.kernel.transform.ForgeTransferCapabilityFallback());
+		if (!forgeCapabilities) {
+			ForbricLog.warn("[Forbric/Capabilities] -D%s=off — MinecraftForge capability dispatch is off: Entity, BlockEntity "
+					+ "and Level still carry the composed provider state their merged definition requires, but nothing is "
+					+ "attached or answered and ForgeCapabilities cannot initialise; storage, pipe and machine mods stay inert",
 					net.forbric.kernel.transform.ForgeCapabilityCompositionTransformer.PROPERTY);
 		}
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.FabricModelContextTransformer(path -> {
@@ -594,12 +619,20 @@ public final class KernelBoot {
 		chain.register(TransformPhase.COREMOD, new RegistryAliasParityInjector());
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.SoundRegistryIdentityInjector());
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ServerReloadListenerNamesInjector());
-		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.CreateWorkerWaitInjector());
-		if (loader.getResource("com/zurrtum/create/mixin/LivingEntityMixin.class") != null) {
-			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.CreateBreathingInjector());
-			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.CreateSoundQueryInjector());
-			if (side == Side.CLIENT) chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.CreateHudContextInjector());
-		}
+		java.util.function.Function<String, org.objectweb.asm.tree.ClassNode> workerDeclarations = internal -> {
+			try (var input = loader.getGameResourceAsStream(internal.replace('.', '/') + ".class")) {
+				if (input == null) return null;
+				var declaration = new org.objectweb.asm.tree.ClassNode();
+				new org.objectweb.asm.ClassReader(input.readAllBytes()).accept(declaration, 0); return declaration;
+			} catch (java.io.IOException absent) { return null; }
+		};
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.WorkerNotificationInjector(workerDeclarations));
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.WorkerResourceLifecycleInjector(workerDeclarations));
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.RegistryElementCallbackInjector(workerDeclarations));
+		// Carrier callback seams are available to every structurally compatible guest mixin.
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.BreathingCallbackInjector());
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.BlockSoundQueryInjector());
+		if (side == Side.CLIENT) chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.HudContextQueryInjector());
 
 		// …and NeoForge's configuration-phase registry sync remaps a registry through MappedRegistry fields those same
 		// wrappers never fill, so the first real client to connect was dropped with "Failed to sync registries from the
@@ -687,6 +720,12 @@ public final class KernelBoot {
 		// Inert unless -Dforbric.eventChainAudit=<report>: wraps both families' bus dispatch for gate-m41.
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.EventChainAuditInjector());
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.CompatibilityPromptTickInjector());
+		net.forbric.kernel.interop.protocol.NativeEventProtocols.register();
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.NativeDualEventInjector(path -> {
+			try (java.io.InputStream input = loader.getGameResourceAsStream(path)) {
+				return input == null ? null : input.readAllBytes();
+			} catch (java.io.IOException unavailable) { return null; }
+		}));
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.PortalSpawnInjector());
 		// After merged-base compatibility: upgrade its owner-only redirect with the proven spawn input.
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.SpawnerFinalizeInjector());
@@ -709,10 +748,9 @@ public final class KernelBoot {
 		// NeoForge's furnace tick calls MinecraftForge's instance canBurn/consumeFuel/burn as static; the ticked furnace
 		// is the receiver MinecraftForge's own tick uses.
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.FurnaceTickCallsInjector());
-		// The Ender Dragon's parts are NeoForge PartEntitys, as every part consumer in the merged game casts them.
-		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.DragonPartsInjector());
-		// The client's onTrackingStart is MinecraftForge's body: it read only MinecraftForge's getParts(), which a NeoForge
-		// mod's multipart entity leaves null, and the client disconnected on sight of one. NeoForge's parts are tracked too.
+		// When the client's onTrackingStart is MinecraftForge's body it reads only MinecraftForge's getParts(), which a
+		// NeoForge mod's multipart entity leaves null, and the client disconnected on sight of one. NeoForge's parts are
+		// tracked too. A NeoForge body already does that; the repair's claim judges the end state either way.
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ClientPartTrackingInjector());
 		// The mirror image: the server's tracking callbacks, the client's onTrackingEnd and the debug hitboxes are NeoForge-
 		// typed, and a MinecraftForge mod's multipart entity leaves NeoForge's getParts() null — adding one to a world, or
@@ -726,10 +764,13 @@ public final class KernelBoot {
 		// …and a tag a Fabric mod gave a fluid behaviour has that behaviour's fluid type where the merged
 		// EntityFluidInteraction turns tags into types, instead of the IllegalArgumentException fabric-api hit every tick.
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.FabricFluidBehaviorInjector());
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.FabricFluidBreathingInjector());
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.UntrackedFluidEyeQueryInjector());
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.PredicateGetterResultRecorder());
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.mixin.NativeTagTrackerSourceInjector());
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.mixin.NativeTagSourceFacadeInjector());
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.mixin.CrossHostPredicateIslandInjector());
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.AxeStripCallbacksInjector());
-		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.CompatPluginPlatformInjector());
-		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.SpectreConfigContractInjector());
 		// Lava placed or flowing next to water: the merged LiquidBlock.onPlace (MinecraftForge's) asked MinecraftForge's
 		// registry, which the neuter below used to empty, so only water arriving next to lava reacted. It asks it whole
 		// now, as on MinecraftForge (vanilla's rules and MinecraftForge mods'; NeoForge's own placement runs no mod's).
@@ -764,8 +805,9 @@ public final class KernelBoot {
 				catch (java.io.IOException unavailable) { return null; }
 			};
 			java.util.function.BooleanSupplier pinned = () -> net.forbric.kernel.mixin.FabricCreativePagerMixinAdapter.enabled()
-					|| net.forbric.kernel.mixin.MergedBaseMixinCompat.pinInForce(
-							net.forbric.kernel.mixin.MergedBaseMixinCompat.CREATIVE_PAGER_PIN);
+					|| net.forbric.kernel.mixin.MergedBaseMixinCompat.contractSuppressed(
+							"net/minecraft/client/gui/screens/inventory/CreativeModeInventoryScreen",
+							net.forbric.kernel.transform.CreativePagerBridgeInjector.API);
 			if (net.forbric.kernel.transform.CreativePagerBridgeInjector.enabled()) {
 				chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.CreativePagerBridgeInjector(gameClass, pinned));
 			} else if (pinned.getAsBoolean() && gameClass.apply(net.forbric.kernel.transform.CreativePagerBridgeInjector.API) != null) {
@@ -778,6 +820,10 @@ public final class KernelBoot {
 		// A MinecraftForge brewing recipe goes into the merged builder's NeoForge-typed list wrapped as NeoForge's.
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ForgeBrewingRecipesInjector());
 		// The merged game builds its fuels from NeoForge's data map; Fabric's fuel events run on that builder too.
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.NativeConstructorFacadeRestorer(path -> {
+			try (var in = loader.getGameResourceAsStream(path)) { return in == null ? null : in.readAllBytes(); }
+			catch (java.io.IOException missing) { return null; }
+		}));
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.FabricFuelValuesInjector());
 		// NeoForge's "Missing FluidModel" check runs inside the bake Fabric wraps, before Fabric adds its fluid models.
 		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.FabricFluidModelsInjector());
@@ -856,10 +902,21 @@ public final class KernelBoot {
 		// Each family's ModList.isLoaded can only see its own family's mods, and that answer is a compatibility
 		// branch far more often than a display string — a wrong "no" disables an integration in silence.
 		chain.register(TransformPhase.COREMOD, new ForeignModPresenceInjector());
+		// The same wall one step further: a library that finds its users by reading [modproperties] out of its own
+		// family's ModList never meets a Fabric mod, which is in no such list. In a class that does both, ModList
+		// also answers with the Fabric mods that declare something (CrossEcosystemDeclarations); nowhere else.
+		if (CrossEcosystemDeclarations.enabled()) {
+			chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.DeclarationReaderModListInjector());
+		} else {
+			ForbricLog.warn("[Forbric/Declarations] -D%s=off — a Forge-family library reading [modproperties] out of "
+					+ "ModList meets no Fabric mod, and a Fabric mod reading entrypoints meets no Forge-family "
+					+ "declaration (a Fabric mod's Sodium options page is missing next to a NeoForge Sodium)",
+					CrossEcosystemDeclarations.SWITCH);
+		}
 		// A Fabric "porting layer" ships its own net.neoforged.* so Fabric mods can use that API; under Forbric the
 		// carrier's copy wins, and the port's own compiled call sites then meet an API it was not built against.
 		// PortingLayerAudit reports every such skew; this adapts the one that is fatal.
-		chain.register(TransformPhase.COREMOD, new PortingLayerAbiInjector());
+		chain.register(TransformPhase.COREMOD, new ConfigApiAbiInjector(name -> readDeclaration(loader, name)));
 		// MinecraftForge builds its LoadingModList in a lazy holder that reads a field the genuine loader would have
 		// filled. A class initializer is a ONE-SHOT with no exception table, so the first caller to arrive before the
 		// kernel seeds that field NPE'd inside it and left the class permanently erroneous -- while the seeder, which
@@ -925,9 +982,9 @@ public final class KernelBoot {
 		// -Dforbric.commonNetworkInterop=off is how the two halves of this shim get told apart. Both are needed on a
 		// tri-in-one instance and they fail in opposite directions, so a single switch that removes both is the only
 		// honest way to ask "is the arbitration the cause?" of a networking symptom.
+		// Declared configuration protocols are independent of network-channel arbitration.
 		if (!"off".equalsIgnoreCase(System.getProperty("forbric.commonNetworkInterop", "on"))) {
 			chain.register(TransformPhase.COREMOD, new CommonNetworkInteropInjector());
-			chain.register(TransformPhase.COREMOD, new SodiumConfigUserBridgeInjector());
 			chain.register(TransformPhase.COREMOD, new ForgeOverlayNeuterInjector());
 		} else {
 			ForbricLog.warn("[Forbric/Net] common-networking arbitration DISABLED — a tri-in-one client will be "
@@ -997,6 +1054,17 @@ public final class KernelBoot {
 			if (tokens != null) chain.register(TransformPhase.COREMOD, tokens);
 		}
 
+		// Ordinary virtual method references expose their exact invocation for provenance-checked guest anchors.
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.LambdaInvocationThunkInjector());
+		chain.register(TransformPhase.COREMOD, new net.forbric.kernel.transform.ContextualDefaultMethodInjector(path -> {
+			try (java.io.InputStream in = loader.getGameResourceAsStream(path)) { return in == null ? null : in.readAllBytes(); }
+			catch (java.io.IOException unavailable) { return null; }
+		}));
+
+		// Extensions join the configured pipeline after the core probes and before final frame recomputation.
+		net.forbric.api.ProtocolExtensions.forLoader(loader).registerTransformers(
+				net.forbric.kernel.interop.protocol.ProtocolTransformAdapters.registry(chain));
+
 		// LAST in the chain, because it has to see every edit the coremod phase made: a transformer that adds a
 		// branch leaves a frame of its own, and the recomputation must be over the final shape. A mod compiled
 		// against one ecosystem can name a superclass the merge took off that hierarchy — MinecraftForge's
@@ -1016,7 +1084,7 @@ public final class KernelBoot {
 		// One summary, at the point where "never loaded" starts meaning something. The per-repair failures are
 		// already loud where they happen and do not wait for this.
 		chain.reportWhenLoaded(side.censusLandmark);
-		loader.setTransformer((name, bytes) -> chain.applyBeforeMixin(name, bytes, ctx));
+		loader.setTransformer((name, bytes) -> chain.applyBeforeMixin(name, bytes, loader.contextFor(name, ctx)));
 
 		Thread.currentThread().setContextClassLoader(loader);
 
@@ -1229,6 +1297,15 @@ public final class KernelBoot {
 
 		return FALLBACK_GAME_VERSION;
 	}
+
+	private static org.objectweb.asm.tree.ClassNode readDeclaration(ForbricClassLoader loader, String name) {
+		try (var input = loader.getGameResourceAsStream(name.replace('.', '/') + ".class")) {
+			if (input == null) return null;
+			var node = new org.objectweb.asm.tree.ClassNode();
+			new org.objectweb.asm.ClassReader(input.readAllBytes()).accept(node, 0); return node;
+		} catch (java.io.IOException absent) { return null; }
+	}
+
 
 	/**
 	 * Which loader family each owned mod jar probes as, for {@link LoaderProbePolicy}.

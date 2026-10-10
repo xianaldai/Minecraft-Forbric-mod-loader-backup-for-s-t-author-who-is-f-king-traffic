@@ -230,6 +230,7 @@ public final class KernelGuestMixinAdapter {
 		// The mixins the kernel leaves out by name (MergedBaseMixinCompat's hand list, -Dforbric.suppressMixins) never reach
 		// Mixin, and reportNamedSuppressions has their row: a verdict line about one, or a place in the PARTIAL count, would
 		// describe a mixin that is not there (fabric-loot-api's ReloadableServerRegistriesMixin read PARTIAL, then suppressed).
+		MergedBaseMixinCompat.discover(configName, configJson, resource);
 		List<String> named = ForbricMixinService.suppressedMixinsFor(configName);
 		Object defaultRequire = config.get(List.of("injectors", "defaultRequire"));
 		int configMinimum = defaultRequire instanceof Number n ? Math.max(0, n.intValue()) : 0;
@@ -260,11 +261,28 @@ public final class KernelGuestMixinAdapter {
 				// What the mixins Mixin applies first add to the same targets: a @Shadow of one of those members binds,
 				// on Fabric and here (moreculling's shadow of the mesh field fabric-renderer-api adds).
 				MixinAddedMembers.View added = MixinAddedMembers.before(configName, mixin, resource);
-				// Judged as Mixin will receive it: Carpet's anchor adapters run when Mixin loads the class, after this
-				// read, so an anchor they move onto the merged game is not missing (CarpetMixinAdapter.asLoaded).
-				byte[] judged = ReplacedCallRedirects.asLoaded(CarpetMixinAdapter.asLoaded(classBytes, resource), resource);
+				// Judged as Mixin will receive it: callback anchor adapters run when Mixin loads the class, after this
+				// read, so an anchor they move onto the merged game is not missing (MixinPlayerWorldCallbackAdapter.asLoaded).
+				byte[] judged = adaptedSourceProtocols(classBytes,resource);
+                judged = ForbricMixinService.absorbedCallbacksAsLoaded(judged, resource);
+                judged = MixinDecodeScopeAdapter.asLoaded(ReplacedCallRedirects.asLoaded(
+                        MixinPlayerWorldCallbackAdapter.asLoaded(judged, resource), resource), resource);
+				// …and a callback on a vanilla method the merged class no longer declares (StructureTemplate.placeEntities),
+				// which binds nothing as compiled, is judged where the adapter moves it.
+				judged = MixinStructurePlacementAdapter.asLoaded(judged, resource);
 				MixinFit.Result fit = MixinFit.evaluate(judged, resource,
 						net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added, nativeView);
+				List<String> groupFailures = MixinGroupConstraints.failures(MixinFit.parse(judged), resource, added);
+				if (!groupFailures.isEmpty()) {
+					// Give a proven carrier retarget the same opportunity as other missing anchors.
+					if (retargeted(configName, pkg, mixin, pluginClass, classBytes, required, judged, fit,
+							resource, added, configMinimum, suppress, nativeView)) continue;
+					suppress.add(mixin);
+					report(MixinCompatibility.id(configName, pkg + "." + mixin), configName, pkg, mixin, pluginClass, classBytes,
+							"guest mixin " + mixin + " has unsatisfiable injection group bounds",
+							CompatibilityFinding.Confidence.CONFIRMED, true, groupFailures);
+					continue;
+				}
 				if (judged != classBytes) {
 					MixinFit.Result unadapted = MixinFit.evaluate(classBytes, resource,
 							net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added, nativeView);
@@ -380,7 +398,7 @@ public final class KernelGuestMixinAdapter {
 					continue;
 				}
 				suppress.add(mixin);
-				String optional = OptionalMixinDependencies.absent(MixinFit.parse(classBytes), net.forbric.api.ModPresence::isLoaded);
+				String optional = OptionalMixinDependencies.absent(configName, MixinFit.parse(classBytes), net.forbric.api.ModPresence::isLoaded);
 				if (optional != null) {
 					ForbricLog.info("[Forbric/Mixin] %s:%s is an optional %s integration; that mod is absent, so the "
 							+ "integration is not applicable on this boot", MixinConfigOwners.describe(configName), mixin, optional);
@@ -417,6 +435,14 @@ public final class KernelGuestMixinAdapter {
 		MixinRetarget.Adoption adoption = MixinRetarget.adopt(judged, fit, resource, bytes -> MixinFit.evaluate(bytes, resource,
 				net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added, nativeView));
 		if (adoption == null) return false;
+		List<String> groups = MixinGroupConstraints.failures(MixinFit.parse(adoption.rewritten()), resource, added);
+		if (!groups.isEmpty()) {
+			suppress.add(mixin);
+			report(MixinCompatibility.id(configName, pkg + "." + mixin), configName, pkg, mixin, pluginClass, classBytes,
+					"guest mixin " + mixin + " has unsatisfiable injection group bounds after carrier retargeting",
+					CompatibilityFinding.Confidence.CONFIRMED, true, groups);
+			return true;
+		}
 		MixinFit.Result after = adoption.after();
 		MixinRetarget.remember(adoption.plan());
 		ForbricLog.info("[Forbric/Mixin] retargeted guest mixin %s:%s — %s; verdict %s→%s",
@@ -822,6 +848,15 @@ public final class KernelGuestMixinAdapter {
 		}
 	}
 
+    private static byte[] adaptedSourceProtocols(byte[] bytes,Function<String,byte[]> resource) {
+        ClassNode node=MixinFit.parse(bytes);
+        int changed=FabricRegistryInitializationMixinAdapter.adapt(node,n->{byte[] b=resource.apply(n+".class");return b==null?null:MixinFit.parse(b);});
+        changed+=FabricRegistryLoaderMixinAdapter.adapt(node,n->{byte[] b=resource.apply(n+".class");return b==null?null:MixinFit.parse(b);});
+        changed+=FabricCreativePagerMixinAdapter.adapt(node,n->{byte[] b=resource.apply(n+".class");return b==null?null:MixinFit.parse(b);});
+        if(changed==0)return bytes;
+        org.objectweb.asm.ClassWriter writer=new org.objectweb.asm.ClassWriter(0);node.accept(writer);return writer.toByteArray();
+    }
+
 	/** The drifted anonymous target a PARTIAL verdict names, or null. */
 	private static String driftedTarget(MixinFit.Result fit) {
 		for (String reason : fit.unresolved()) {
@@ -869,7 +904,7 @@ public final class KernelGuestMixinAdapter {
 	 */
 	private static boolean isExplicitlyKept(String configName, String mixin) {
 		String entry = configName + ":" + mixin;
-		if (MergedBaseMixinCompat.enabled() && MergedBaseMixinCompat.KEPT_MIXINS.contains(entry)) return true;
+
 
 		String csv = System.getProperty("forbric.keepMixins");
 		if (csv == null || csv.isEmpty()) return false;
@@ -910,21 +945,32 @@ public final class KernelGuestMixinAdapter {
 	}
 
 	/**
-	 * The config's {@code injectors.defaultRequire} as the mod wrote it — read here, from the bytes the mod shipped,
-	 * because the relaxation rewrites it to 0 before Mixin sees it — or 0, Mixin's default. Negative when a
-	 * {@code parent} config may supply it ({@code MixinConfig.InjectorOptions.mergeFrom} takes the parent's for a 0):
-	 * an unknown requirement never counts as none.
+	 * How many injections the config's {@code injectors.defaultRequire} makes native Mixin require of an injector that
+	 * names no {@code require} of its own and is in no {@code @Group} — read here, from the bytes the mod shipped, because
+	 * the relaxation rewrites it to 0 before Mixin sees it. 0 when the config does not say, Mixin's default.
+	 *
+	 * <p>Any value the mod wrote below 0 is 0 too, not an unknown. Mixin fails an injector only on a count above 0 that
+	 * finds no target ({@code TargetSelectors.validate}) or on fewer injections than the count
+	 * ({@code InjectionInfo.postInject}), so the {@code "defaultRequire": -1} mods write to say "my injectors may find
+	 * nothing" requires exactly nothing — and {@code MixinConfig.InjectorOptions.mergeFrom} replaces only a 0 with the
+	 * parent's, so that -1 stands in a child config as well. Read as an unknown, it made every compatibility injector
+	 * aimed at another mod's added method a loss the merge never caused, and marked the mod DEGRADED when that mod was
+	 * not installed.
+	 *
+	 * <p>{@link NativeAbsentTargets#UNKNOWN_DEFAULT_REQUIRE} only when the count cannot be known: a value that is not a
+	 * number, or a 0 — written or by omission — in a config with a {@code parent}, which may supply another. An unknown
+	 * requirement never counts as none.
 	 */
 	static int declaredDefaultRequire(UnmodifiableConfig config) {
 		Object declared;
 		try {
 			declared = config.get(List.of("injectors", "defaultRequire"));
 		} catch (RuntimeException notAnObject) {
-			return -1;
+			return NativeAbsentTargets.UNKNOWN_DEFAULT_REQUIRE;
 		}
-		if (declared != null && !(declared instanceof Number)) return -1;
+		if (declared != null && !(declared instanceof Number)) return NativeAbsentTargets.UNKNOWN_DEFAULT_REQUIRE;
 		int value = declared == null ? 0 : ((Number) declared).intValue();
-		if (value == 0 && config.get(List.of("parent")) != null) return -1;
-		return value;
+		if (value == 0 && config.get(List.of("parent")) != null) return NativeAbsentTargets.UNKNOWN_DEFAULT_REQUIRE;
+		return Math.max(0, value);
 	}
 }

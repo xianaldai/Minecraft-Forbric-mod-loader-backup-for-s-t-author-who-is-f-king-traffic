@@ -142,7 +142,7 @@ public final class MixinRetarget {
 	 * (R6) put behind a guard, {@code from} the handler and {@code to} where its body moves; or (R7) given a method of its
 	 * name that takes the replacement's arguments, {@code from} the handler and {@code to} the replacement it selects.
 	 */
-	public enum Element { SELECTOR, AT_TARGET, GUARD, PROJECT }
+	public enum Element { SELECTOR, AT_TARGET, GUARD, PROJECT, LOCAL_INDEX }
 
 	/** One rewrite inside one handler's injector annotation. */
 	public record Rewrite(String handler, Element element, String from, String to, String why) {
@@ -171,7 +171,18 @@ public final class MixinRetarget {
 
 	/** Computes R1 for {@code mixin} (parsed with code) against its targets, resolved through {@code resolver}. */
 	static Plan plan(ClassNode mixin, Function<String, byte[]> resolver) {
+		return plan(mixin, resolver, MergedBaseCalleeSwaps.sources());
+	}
+
+	/** A test may provide the verified source-class seam explicitly instead of changing process-wide readers. */
+	static Plan plan(ClassNode mixin, Function<String, byte[]> resolver,
+			java.util.function.BiFunction<net.forbric.api.Ecosystem, String, ClassNode> references) {
 		if (!enabled() || mixin.methods == null) return new Plan(mixin.name, List.of());
+		try (MergedBaseCalleeSwaps.Scope evidence = MergedBaseCalleeSwaps.using(name -> {
+			byte[] bytes = resolver.apply(name + ".class");
+			if (bytes == null) return null;
+			ClassNode node = new ClassNode(); new ClassReader(bytes).accept(node, ClassReader.SKIP_FRAMES); return node;
+		}, references)) {
 		List<Rewrite> rewrites = new ArrayList<>();
 		List<String> targets = MixinFit.mixinTargets(mixin);
 		// R4 and R5 write one target's piece or helper into the annotation every target shares: with a second target,
@@ -180,21 +191,31 @@ public final class MixinRetarget {
 		for (String targetName : targets) {
 			byte[] targetBytes = resolver.apply(targetName + ".class");
 			if (targetBytes == null) continue;
-			ClassNode target = MixinFit.parse(targetBytes);
+			ClassNode target = new ClassNode();
+			// Native/current local conservation needs the debug scopes, not just the instruction skeleton.
+			new ClassReader(targetBytes).accept(target, ClassReader.SKIP_FRAMES);
 			for (MethodNode handler : mixin.methods) {
 				AnnotationNode injector = MixinFit.injectorOf(handler);
 				if (injector == null) continue;
-				List<String> selectors = MixinFit.stringList(MixinFit.value(injector, "method"));
-				List<Rewrite> own = new ArrayList<>();
-				for (String selector : selectors) {
-					Rewrite rewrite = rewriteFor(handler, injector, selector, target, resolver);
-					if (rewrite != null) own.add(rewrite);
-				}
-				own.addAll(swappedCallees(handler, injector, selectors, target, resolver));
-				own.addAll(renamedBodies(mixin, oneTarget, handler, injector, selectors, target, resolver, true));
+					List<String> selectors = MixinFit.stringList(MixinFit.value(injector, "method"));
+					List<Rewrite> own = new ArrayList<>();
+					boolean executionPathMoved = false;
+					for (String selector : selectors) {
+						Rewrite rewrite = rewriteFor(handler, injector, selector, target, resolver);
+						if (rewrite != null) own.add(rewrite);
+					}
+					if (oneTarget && own.isEmpty()) {
+						own.addAll(MixinExecutionPathRetarget.plan(mixin, handler, injector, selectors, target,
+								references.apply(MixinStubRebind.ecosystemOf(mixin.name), target.name)));
+						executionPathMoved = !own.isEmpty();
+					}
+					if (!executionPathMoved) own.addAll(swappedCallees(mixin.name, handler, injector, selectors, target, resolver));
+					if (own.stream().noneMatch(r -> r.element() == Element.SELECTOR)) {
+						own.addAll(renamedBodies(mixin, oneTarget, handler, injector, selectors, target, resolver, true));
+					}
 				// The selector moves when the method is a stub, a rename or a split; the point moves only when the method
 				// keeps a body of its own and the call went one level down. Never both for one handler.
-				if (oneTarget && own.stream().noneMatch(r -> r.element() == Element.SELECTOR)) {
+					if (oneTarget && !executionPathMoved && own.stream().noneMatch(r -> r.element() == Element.SELECTOR)) {
 					own.addAll(movedCalls(mixin.name, handler, injector, selectors, target, resolver));
 				}
 				// Neither moved nor split: the method kept its body and the call its place, and only the callee changed.
@@ -202,13 +223,15 @@ public final class MixinRetarget {
 				// …or the method the mod names, or the one it anchors in, is a vanilla private the carrier replaced outright.
 				if (oneTarget && own.isEmpty()) own.addAll(replacedCalls(mixin.name, handler, injector, selectors, target));
 				if (oneTarget && own.isEmpty()) {
-					Rewrite blockUpdate = C2meBlockUpdateRetarget.plan(mixin.name, handler, injector, selectors, target);
+					Rewrite blockUpdate = MixinChunkStatusRetarget.plan(mixin, handler, selectors, target,
+							references.apply(MixinStubRebind.ecosystemOf(mixin.name), target.name));
 					if (blockUpdate != null) own.add(blockUpdate);
 				}
 				rewrites.addAll(own);
 			}
 		}
 		return new Plan(mixin.name, List.copyOf(rewrites));
+		}
 	}
 
 	private static Rewrite rewriteFor(MethodNode handler, AnnotationNode injector, String selector, ClassNode target,
@@ -259,7 +282,7 @@ public final class MixinRetarget {
 	 * name absent — is rewritten to the merged callee. Only {@code @At}-driven kinds: the handler's shape is the
 	 * callee's, which is identical on both sides by construction (same descriptor).
 	 */
-	private static List<Rewrite> swappedCallees(MethodNode handler, AnnotationNode injector, List<String> selectors,
+	private static List<Rewrite> swappedCallees(String mixinName, MethodNode handler, AnnotationNode injector, List<String> selectors,
 			ClassNode target, Function<String, byte[]> resolver) {
 		if (!AT_DRIVEN.contains(injector.desc)) return List.of();
 		List<MethodNode> hits = new ArrayList<>();
@@ -277,7 +300,8 @@ public final class MixinRetarget {
 			if (anywhere) continue;
 			for (MethodNode hit : hits) {
 				MergedBaseCalleeSwaps.Swap swap = MergedBaseCalleeSwaps.find(target.name, hit.name + hit.desc, want.owner(),
-						want.name(), want.desc());
+						want.name(), want.desc(), MixinStubRebind.ecosystemOf(mixinName), handler,
+						INJECT.equals(injector.desc) && plainInject(handler, injector));
 				if (swap == null) continue;
 				if (!MixinFit.containsMember(hit, swap.mergedMember())) continue;
 				out.add(new Rewrite(handler.name, Element.AT_TARGET, atTarget, swap.mergedMember(),
@@ -799,7 +823,7 @@ public final class MixinRetarget {
 	 * {@code @Group}, in a mixin with one target (the new point names that target's helper); other kinds' handlers
 	 * describe the call, and moving them would need the helper to have no other caller, which a protected override
 	 * point cannot promise. {@code -Dforbric.mixinRetarget.extractedHelper=off}
-	 * leaves the point as compiled. An AFTER point with no census row may still follow a reviewed row of
+	 * leaves the point as compiled. An AFTER point with no census row may still follow a proven extraction in
 	 * {@link MergedBaseAbsorbedCalls} ({@link #absorbedCall}).
 	 */
 	private static List<Rewrite> movedCalls(String mixinName, MethodNode handler, AnnotationNode injector,
@@ -842,12 +866,8 @@ public final class MixinRetarget {
 	}
 
 	/**
-	 * R5's reviewed tier: AFTER a call the surviving carrier absorbed into a static hook of its own
-	 * ({@link MergedBaseAbsorbedCalls}, each row with the argument for it) is AFTER the hook call. The hook does more
-	 * than the call, so no census can prove this; what is re-checked on the live bytes is the shape the review was
-	 * about: the method calls the hook once, as its last act, and the hook — read through the same resolver — makes the
-	 * call once. puzzleslib's FOG_COLOR event (FogRendererFabricMixin) sets its colour AFTER vanilla's final
-	 * {@code dest.set}, which NeoForge moved into {@code ClientHooks.getFogColor}.
+	 * A static extraction preserves AFTER only when the original call remains the hook's unconditional final
+	 * effect with the same operands. Additional event or state changes after it invalidate that correspondence.
 	 */
 	private static Rewrite absorbedCall(MethodNode handler, ClassNode target, MethodNode method, String member,
 			net.forbric.api.Ecosystem ecosystem, Function<String, byte[]> resolver) {
@@ -859,9 +879,7 @@ public final class MixinRetarget {
 		if (hookBytes == null) return null;
 		MethodNode body = CarrierHelpers.declared(MixinFit.parse(hookBytes), hook.name(), hook.desc());
 		if (body == null || CarrierHelpers.occurrences(body, row.member()) != 1) return null;
-		return new Rewrite(handler.name, Element.AT_TARGET, member, row.hook(), "the carrier absorbed the call into "
-				+ hook.owner().substring(hook.owner().lastIndexOf('/') + 1) + "." + hook.name() + ", a reviewed row of "
-				+ "MergedBaseAbsorbedCalls");
+		return new Rewrite(handler.name, Element.AT_TARGET, member, row.hook(), row.because());
 	}
 
 	/**
@@ -980,9 +998,11 @@ public final class MixinRetarget {
 		MergedBaseCalleeSwaps.Replaced named = MergedBaseCalleeSwaps.replaced(target.name, name, desc, ecosystem);
 		if (named != null && replacementOf(target, named) != null && CarrierHelpers.declared(target, name, vanillaDesc(named)) == null) {
 			if (projectable(handler, injector, named)) {
-				out.add(new Rewrite(handler.name, Element.PROJECT, handler.name + handler.desc, named.replacement(),
+				Rewrite projection = new Rewrite(handler.name, Element.PROJECT, handler.name + handler.desc, named.replacement(),
 						"the carrier replaced " + name + " with " + named.replacement().substring(0, named.replacement().indexOf('('))
-								+ "; the handler reads vanilla's arguments off its arguments"));
+								+ "; the handler reads vanilla's arguments off its arguments");
+				MergedBaseCalleeSwaps.projection(projection, named);
+				out.add(projection);
 			}
 			return out;
 		}
@@ -1116,7 +1136,7 @@ public final class MixinRetarget {
 	 * such an argument; with {@code cancelsAsBefore} (a cancel leaves the method as it did, see {@link #renamedBodies})
 	 * a cancellable {@code @Inject} or a {@code @Cancellable} callback is allowed; any other sugar is not.
 	 */
-	private static boolean movableWhole(MethodNode handler, AnnotationNode injector, boolean argumentsInPlace,
+		static boolean movableWhole(MethodNode handler, AnnotationNode injector, boolean argumentsInPlace,
 			boolean cancelsAsBefore) {
 		List<AnnotationNode> annotations = new ArrayList<>();
 		if (handler.visibleAnnotations != null) annotations.addAll(handler.visibleAnnotations);
@@ -1312,6 +1332,18 @@ public final class MixinRetarget {
 		if (node.methods == null) return 0;
 		int applied = 0;
 		for (Rewrite rewrite : plan.rewrites()) {
+			if (rewrite.element() == Element.LOCAL_INDEX) {
+				for (MethodNode handler : node.methods) if ((handler.name + handler.desc).equals(rewrite.handler())) {
+					AnnotationNode local = MixinStubRebind.sugar(handler, Integer.parseInt(rewrite.from()), LOCAL_SUGAR);
+					if (local == null) continue;
+					if (local.values == null) local.values = new ArrayList<>();
+					for (int i = local.values.size() - 2; i >= 0; i -= 2) if (Set.of("name", "ordinal", "index").contains(local.values.get(i))) {
+						local.values.remove(i + 1); local.values.remove(i);
+					}
+					local.values.addAll(List.of("index", Integer.parseInt(rewrite.to()))); applied++;
+				}
+				continue;
+			}
 			if (rewrite.element() == Element.GUARD) {
 				if (guard(node, rewrite)) applied++;
 				continue;
@@ -1321,7 +1353,7 @@ public final class MixinRetarget {
 				continue;
 			}
 			for (MethodNode m : node.methods) {
-				if (!m.name.equals(rewrite.handler())) continue;
+				if (!m.name.equals(rewrite.handler()) && !(m.name + m.desc).equals(rewrite.handler())) continue;
 				AnnotationNode injector = MixinFit.injectorOf(m);
 				if (injector == null || injector.values == null) continue;
 				if (rewrite.element() == Element.AT_TARGET) {
@@ -1421,8 +1453,7 @@ public final class MixinRetarget {
 		for (MethodNode m : mixin.methods) {
 			if ((m.name + m.desc).equals(rewrite.from()) && MixinFit.injectorOf(m) != null) handler = m;
 		}
-		MergedBaseCalleeSwaps.Replaced row = null;
-		for (MergedBaseCalleeSwaps.Replaced r : MergedBaseCalleeSwaps.REPLACED) if (r.replacement().equals(rewrite.to())) row = r;
+		MergedBaseCalleeSwaps.Replaced row = MergedBaseCalleeSwaps.projection(rewrite);
 		if (handler == null || row == null) return false;
 		AnnotationNode injector = MixinFit.injectorOf(handler);
 		boolean isStatic = (handler.access & Opcodes.ACC_STATIC) != 0;
@@ -1543,6 +1574,7 @@ public final class MixinRetarget {
 	static void reset() {
 		PLANS.clear();
 		SKIPPED.clear();
+		MergedBaseCalleeSwaps.reset();
 	}
 
 	/** Test seam: the handlers R6's guard has skipped for a {@code LinkageError}, as {@code mixin.handler}. */

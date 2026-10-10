@@ -20,35 +20,17 @@ import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LineNumberNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
-import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
-/**
- * The client tracks a multipart entity's NeoForge parts again, as NeoForge's own client does.
+/** Completes a Forge-canonical client tracking body with the other native part view. Existing
+ * identities in the native collection are retained once, so no game entity class needs a special case.
+ * A Neo-canonical body is handled by the companion Forge map repair.
  *
- * <p>The merged {@code ClientLevel$EntityCallbacks.onTrackingStart} is MinecraftForge's body. After its switch it asks
- * every entity {@code isMultipartEntity()} and puts what MinecraftForge's {@code getParts()} returns into MinecraftForge's
- * {@code partEntities}. The merged {@code Entity} has one {@code isMultipartEntity()}, shared by both families, but two
- * {@code getParts()} — one per family's {@code PartEntity} — and a mod overrides only its own. So a NeoForge mod's
- * multipart entity (Alex's Mobs') answers true and leaves MinecraftForge's {@code getParts()} at its interface default,
- * null: the client threw a NullPointerException the moment one came into view, and a single-player world closed with
- * "network protocol error" ("Failed to handle packet ClientboundBundlePacket, disconnecting"). The server's tracking
- * callbacks are NeoForge's, so only the client ever threw.
- *
- * <p>NeoForge's {@code onTrackingStart} adds those parts to {@code dragonParts}, the list {@code Level.getEntities} and
- * {@code hasEntities} find parts in, and the merged {@code onTrackingEnd} — NeoForge's body — already takes them out of
- * it again. Only the adding was missing. Two edits, each on the reviewed shape only:
- * <ul>
- *   <li>NeoForge's registration goes in at the head of MinecraftForge's {@code if (entity.isMultipartEntity())}: the
- *       entity's NeoForge parts are added to {@code dragonParts} when NeoForge's {@code getParts()} returns them. An
- *       Ender Dragon is left out, as NeoForge leaves it out (its switch makes this call in its default case only): the
- *       dragon's case just above has already added its parts.</li>
- *   <li>MinecraftForge's loop is skipped when MinecraftForge's {@code getParts()} returns null, which is what every
- *       NeoForge mod's entity returns. The Ender Dragon returns an empty array there ({@link DragonPartsInjector}).</li>
- * </ul>
- * Each family's registration now runs for the entities that answer that family's {@code getParts()}, so a MinecraftForge
- * mod's entity keeps the tracking it had. {@code -Dforbric.clientPartTracking=off} leaves the method as merged.
- */
+ * <p>The outcome is judged by {@link #CLAIM} on the class this transformer hands back, not by whether it edited.
+ * Which family's {@code onTrackingStart} the merge keeps moves with the merge tools: a Neo-canonical body already
+ * registers a NeoForge mod's parts in {@code dragonParts} and never reads MinecraftForge's array, so it needs no edit
+ * here, and that is not a missing repair. A body that neither tracks NeoForge's parts nor can be repaired reports
+ * nothing, which is the real miss. */
 public final class ClientPartTrackingInjector implements ClassTransformer {
 	public static final String PROPERTY = "forbric.clientPartTracking";
 	static final String CALLBACKS = "net.minecraft.client.multiplayer.ClientLevel$EntityCallbacks";
@@ -66,10 +48,42 @@ public final class ClientPartTrackingInjector implements ClassTransformer {
 
 	@Override public String name() { return "forbric-client-part-tracking"; }
 
+	static final String CLAIM = "forbric-client-part-tracking#neoForgePartsTracked";
+
 	@Override public AnchorSet anchors() {
 		if (!enabled()) return AnchorSet.scanned("the client's part tracking explicitly left as merged with -D" + PROPERTY + "=off");
-		return AnchorSet.of(new AnchorSet.Anchor(CALLBACKS, AnchorSet.Severity.REQUIRED,
-				"a NeoForge mod's multipart entity disconnects the client with a network protocol error when it comes into view"));
+		return AnchorSet.scanned("ClientLevel$EntityCallbacks, judged by the " + CLAIM + " claim");
+	}
+
+	@Override public List<Claim> claims() {
+		if (!enabled()) return List.of();
+		return List.of(new Claim(CLAIM, AnchorSet.of(new AnchorSet.Anchor(CALLBACKS, AnchorSet.Severity.REQUIRED,
+				"a NeoForge mod's multipart entity disconnects the client with a network protocol error when it comes into view"))));
+	}
+
+	@Override public byte[] transform(String className, byte[] bytes, TransformContext context, ClaimReporter reporter) {
+		byte[] result = transform(className, bytes, context);
+		if (enabled() && CALLBACKS.equals(className) && result != null && tracksNeoForgeParts(result)) reporter.hit(CLAIM);
+		return result;
+	}
+
+	/**
+	 * Whether {@code bytes}' {@code onTrackingStart} leaves the client tracking a NeoForge mod's multipart entity, judged
+	 * by where its values go ({@link ClientPartTrackingFlow}): what NeoForge's {@code getParts()} returns reaches an add
+	 * into {@code ClientLevel.dragonParts}, where NeoForge's own client registers the parts, and every array
+	 * MinecraftForge's {@code getParts()} returns is tested for null on every path before anything consumes it. That
+	 * array is null for every NeoForge mod's entity, and dereferencing it is what disconnected the client. Vanilla's
+	 * EnderDragon case reads {@code dragonParts} in every 26.2 body, so reading the list is not the question; NeoForge's
+	 * parts arriving in it is. True on NeoForge's own body, on this repair's edit of MinecraftForge's, and on any merge
+	 * that already composes the two however it is written; false on MinecraftForge's unrepaired body and on a body that
+	 * reads NeoForge's parts without registering them.
+	 */
+	static boolean tracksNeoForgeParts(byte[] bytes) {
+		ClassNode node = new ClassNode();
+		try { new ClassReader(bytes).accept(node, ClassReader.SKIP_FRAMES); } catch (RuntimeException unreadable) { return false; }
+		if (!CALLBACKS_INTERNAL.equals(node.name)) return false;
+		MethodNode start = method(node, "onTrackingStart", TRACKING_START_DESC);
+		return start != null && ClientPartTrackingFlow.tracksNeoForgeParts(node, start);
 	}
 
 	@Override public byte[] transform(String className, byte[] bytes, TransformContext context) {
@@ -133,9 +147,6 @@ public final class ClientPartTrackingInjector implements ClassTransformer {
 		LabelNode forge = new LabelNode();
 		InsnList neo = new InsnList();
 		neo.add(new VarInsnNode(Opcodes.ALOAD, 1));
-		neo.add(new TypeInsnNode(Opcodes.INSTANCEOF, DRAGON));
-		neo.add(new JumpInsnNode(Opcodes.IFNE, forge));
-		neo.add(new VarInsnNode(Opcodes.ALOAD, 1));
 		neo.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, ENTITY, "getParts", NEO_GET_PARTS, false));
 		neo.add(new VarInsnNode(Opcodes.ASTORE, parts.var));
 		neo.add(new VarInsnNode(Opcodes.ALOAD, parts.var));
@@ -144,9 +155,7 @@ public final class ClientPartTrackingInjector implements ClassTransformer {
 		neo.add(new FieldInsnNode(Opcodes.GETFIELD, level.owner, level.name, level.desc));
 		neo.add(new FieldInsnNode(Opcodes.GETFIELD, dragonParts.owner, dragonParts.name, dragonParts.desc));
 		neo.add(new VarInsnNode(Opcodes.ALOAD, parts.var));
-		neo.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "java/util/Arrays", "asList", "([Ljava/lang/Object;)Ljava/util/List;", false));
-		neo.add(new MethodInsnNode(Opcodes.INVOKEINTERFACE, "java/util/List", "addAll", "(Ljava/util/Collection;)Z", true));
-		neo.add(new InsnNode(Opcodes.POP));
+		neo.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "net/forbric/kernel/runtime/KernelMultipartViews", "addDistinct", "(Ljava/util/List;[L" + ENTITY + ";)V", false));
 		neo.add(forge);
 		neo.add(new FrameNode(Opcodes.F_NEW, 2, new Object[] {CALLBACKS_INTERNAL, ENTITY}, 0, new Object[0]));
 		start.instructions.insert(test, neo);
@@ -178,7 +187,7 @@ public final class ClientPartTrackingInjector implements ClassTransformer {
 	}
 
 	private static AbstractInsnNode next(AbstractInsnNode insn) {
-		AbstractInsnNode at = insn.getNext();
+		AbstractInsnNode at = insn == null ? null : insn.getNext();
 		while (at != null && at.getOpcode() < 0) at = at.getNext();
 		return at;
 	}

@@ -1,6 +1,8 @@
 package net.forbric.kernel.mixin;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -95,7 +97,7 @@ class MixinFitLivenessCensusStagedTest {
 			"apoli.mixins.json:legacy.hud_power.HudMixin FIT -> PARTIAL",
 			"architectury.mixins.json:MixinServerExplosion PARTIAL -> PARTIAL",
 			"balm.fabric.mixins.json:FabricCropBlockMixin PARTIAL -> PARTIAL",
-			"bettermounthud.mixins.json:HudMixin FIT -> PARTIAL",
+			"bettermounthud.mixins.json:HudMixin FIT -> FIT",
 			"configapi-fabric.mixins.json:event.ServerExplosionMixin PARTIAL -> PARTIAL",
 			"fabric-block-api-v1.mixins.json:LivingEntityMixin FIT -> PARTIAL",
 			"fabric-renderer-api-v1.mixins.json:block.particle.ScreenEffectRendererMixin FIT -> PARTIAL",
@@ -386,23 +388,20 @@ class MixinFitLivenessCensusStagedTest {
 	 * names that bind a lambda the handler was not written for, which Mixin rejects: loot-api's
 	 * {@code ReloadableServerRegistriesMixin} (suppressed by name; KernelLootBridge serves its callbacks) and
 	 * resource-conditions' {@code SimpleJsonResourceReloadListenerMixin} (SupersededMixins; KernelFabricConditions judges
-	 * the conditions at ConditionalOps' funnel). Both read FIT until the verdict asked whether the handler fits. The decorator
-	 * line is the anchor CreativeCore's required redirect also lost, but it is pinned here as fabric-networking's accepted
-	 * loss (its wrap stays unbound on purpose: PayloadInterop serves the play-phase channels), so this set could never have
-	 * flagged CreativeCore: a third-party mod's lost anchor shows only in the report of a corpus someone names.
+	 * the conditions at ConditionalOps' funnel). Both read FIT until the verdict asked whether the handler fits. Global widened-call contracts now retain networking wrappers and explicitly scoped sugar captures in tag generation.
+	 * A third-party mod's lost anchor shows only in the report of a corpus someone names.
 	 * A new line fails this, and so does one that stops being lost: delete it then.
 	 */
 	static final Set<String> FABRIC_API_LOST = Set.of(
+			"fabric-content-registries-v0.client.mixins.json:HudMixin | @At(INVOKE) net.minecraft.world.entity.player.Player.isEyeInFluid in Hud.extractAirBubbles",
+			"fabric-data-generation-api-v1.mixins.json:TagsProviderMixin | @At(INVOKE) net.minecraft.data.DataProvider.saveStable in TagsProvider.lambda$run$5",
+			"fabric-data-generation-api-v1.mixins.json:TagsProviderMixin | @At(INVOKE) net.minecraft.tags.TagFile.<init> in TagsProvider.lambda$run$5",
 			"fabric-content-registries-v0.mixins.json:FuelValuesMixin | @At(INVOKE) net.minecraft.world.level.block.entity.FuelValues$Builder.remove in FuelValues.vanillaBurnTimes",
 			"fabric-content-registries-v0.mixins.json:fluid.AbstractBoatMixin | @At(INVOKE) net.minecraft.world.level.material.FluidState.is in AbstractBoat.checkInWater",
 			"fabric-content-registries-v0.mixins.json:fluid.EntityMixin | @At(INVOKE) Entity.isUnderWater in updateSwimming",
 			"fabric-content-registries-v0.mixins.json:fluid.EntityMixin | @At(INVOKE) net.minecraft.world.level.material.FluidState.is in Entity.updateSwimming",
 			"fabric-content-registries-v0.mixins.json:fluid.LivingEntityMixin | @At(INVOKE) LivingEntity.isEyeInFluid in baseTick",
-			"fabric-content-registries-v0.mixins.json:fluid.LivingEntityMixin | @At(INVOKE) LivingEntity.travelInLava in travelInFluid",
 			"fabric-crash-report-info-v1.mixins.json:ServerWatchdogMixin | @At(INVOKE) java.lang.StringBuilder.append in ServerWatchdog.createWatchdogCrashReport",
-			"fabric-data-generation-api-v1.client.mixins.json:ModelProviderMixin | @At(INVOKE) net.minecraft.client.data.models.BlockModelGenerators.run in ModelProvider.run",
-			"fabric-data-generation-api-v1.client.mixins.json:ModelProviderMixin | @At(INVOKE) net.minecraft.client.data.models.ItemModelGenerators.run in ModelProvider.run",
-			"fabric-data-generation-api-v1.mixins.json:TagsProviderMixin | @At(INVOKE) net.minecraft.tags.TagFile.<init> in TagsProvider.lambda$run$5",
 			"fabric-entity-events-v1.mixins.json:LivingEntityMixin | @At(INVOKE) net.minecraft.world.level.Level.setBlock in LivingEntity.lambda$stopSleeping$0",
 			"fabric-entity-events-v1.mixins.json:LivingEntityMixin | @At(INVOKE) net.minecraft.world.level.block.BedBlock.getBedOrientation in LivingEntity.getBedOrientation",
 			"fabric-entity-events-v1.mixins.json:effect.LivingEntityMixin | @At(INVOKE) LivingEntity.canBeAffected in forceAddEffect",
@@ -427,13 +426,10 @@ class MixinFitLivenessCensusStagedTest {
 			"fabric-loot-api-v3.mixins.json:ReloadableServerRegistriesMixin | @Inject target ReloadableServerRegistries.lambda$scheduleRegistryLoad$0 binds lambda$scheduleRegistryLoad$0(Lnet/minecraft/world/level/storage/loot/LootDataType;Lnet/minecraft/resources/RegistryOps;Lnet/minecraft/server/packs/resources/ResourceManager;)Lnet/minecraft/core/WritableRegistry;, which the handler was not written for",
 			"fabric-model-loading-api-v1.mixins.json:ModelManagerMixin | @At(INVOKE) net.minecraft.client.resources.model.cuboid.CuboidModel.fromStream in ModelManager.lambda$loadBlockModels$2",
 			"fabric-networking-api-v1.mixins.json:ClientboundCustomPayloadPacketMixin | @At(INVOKE) net.minecraft.network.protocol.common.custom.CustomPacketPayload.codec in ClientboundCustomPayloadPacket.<clinit>",
-			"fabric-networking-api-v1.mixins.json:ServerConfigurationPacketListenerImplMixin | @At(INVOKE) net.minecraft.network.RegistryFriendlyByteBuf.decorator in ServerConfigurationPacketListenerImpl.handleConfigurationFinished",
-			"fabric-networking-api-v1.mixins.json:ServerboundCustomPayloadPacketMixin | @At(INVOKE) net.minecraft.network.protocol.common.custom.CustomPacketPayload.codec in ServerboundCustomPayloadPacket.<clinit>",
 			"fabric-object-builder-v1.client.mixins.json:HangingSignEditScreenMixin | @At(INVOKE) net.minecraft.resources.Identifier.withDefaultNamespace in HangingSignEditScreen.<init>",
 			"fabric-object-builder-v1.client.mixins.json:SignEditScreenMixin | @At(INVOKE) net.minecraft.resources.Identifier.withDefaultNamespace in SignEditScreen.<init>",
 			"fabric-registry-sync-v0.mixins.json:RegistryDataLoaderMixin | @At(INVOKE) RegistryDataLoader.load in load",
 			"fabric-registry-sync-v0.mixins.json:RegistryPatchGeneratorMixin | @At(FIELD) net.minecraft.resources.RegistryDataLoader.WORLDGEN_REGISTRIES in RegistryPatchGenerator.lambda$createLookup$0",
-			"fabric-renderer-api-v1.mixins.json:block.model.SimpleModelWrapperMixin | @At(INVOKE) SimpleModelWrapper.findNonBlockSprites in bake",
 			"fabric-renderer-api-v1.mixins.json:block.render.LevelExtractorMixin | @At(INVOKE) net.minecraft.client.renderer.block.dispatch.BlockStateModel.hasMaterialFlag in LevelExtractor.extractBlockOutline",
 			"fabric-renderer-api-v1.mixins.json:block.render.LevelRendererMixin | @At(INVOKE) net.minecraft.client.renderer.block.dispatch.BlockStateModel.collectParts in LevelRenderer.submitBlockDestroyAnimation",
 			"fabric-renderer-api-v1.mixins.json:block.render.SectionCompilerMixin | @At(INVOKE) net.minecraft.client.renderer.block.ModelBlockRenderer.tesselateBlock in SectionCompiler.compile",
@@ -452,7 +448,6 @@ class MixinFitLivenessCensusStagedTest {
 			"fabric-rendering-v1.mixins.json:HudMixin | @At(INVOKE) Hud.extractTabList in extractRenderState",
 			"fabric-rendering-v1.mixins.json:HudMixin | @At(INVOKE) Hud.extractTitle in extractRenderState",
 			"fabric-rendering-v1.mixins.json:RenderPipelineBuilderMixin | @At(NEW) RenderPipeline$Builder.RenderPipeline$Snippet: handler wraps a 11-arg constructor, the call site constructs with 12 in buildSnippet",
-			"fabric-resource-conditions-api-v1.mixins.json:RegistryLoadTaskPendingRegistrationMixin | @At(INVOKE) com.mojang.serialization.Decoder.parse in RegistryLoadTask$PendingRegistration.loadFromResource",
 			"fabric-resource-conditions-api-v1.mixins.json:SimpleJsonResourceReloadListenerMixin | @Inject target SimpleJsonResourceReloadListener.lambda$scanDirectory$0 binds lambda$scanDirectory$0(Lnet/minecraft/resources/Identifier;Lnet/minecraft/resources/Identifier;Ljava/util/Map;Ljava/util/Optional;)V, which the handler was not written for",
 			"fabric-resource-loader-v1.mixins.json:server.LanguageMixin | @At(INVOKE) java.util.Map.copyOf in Language.loadDefault",
 			"fabric-screen-api-v1.mixins.json:GuiMixin | @At(INVOKE) net.minecraft.client.gui.screens.Screen.extractRenderStateWithTooltipAndSubtitles in Gui.extractRenderState",
@@ -518,6 +513,22 @@ class MixinFitLivenessCensusStagedTest {
 		assertEquals(FABRIC_API_LOST, lost.get("fabric-api"), report.toString());
 	}
 
+    @Test void theNewRawRowsNameActualNativePredicateAndAbiChangesWithoutInventingEquivalence()throws Exception {
+        ClassNode vanillaHud=StagedFabricMixinFixture.game("net/minecraft/client/gui/Hud",true),hud=StagedFabricMixinFixture.game("net/minecraft/client/gui/Hud",false);
+        String water="Lnet/minecraft/world/entity/player/Player;isEyeInFluid(Lnet/minecraft/tags/TagKey;)Z";
+        MethodNode original=StagedFabricMixinFixture.method(vanillaHud,"extractAirBubbles"),current=StagedFabricMixinFixture.method(hud,"extractAirBubbles");
+        assertTrue(MixinFit.containsMember(original,water));assertFalse(MixinFit.containsMember(current,water));
+        assertTrue(java.util.Arrays.stream(current.instructions.toArray()).anyMatch(instruction->instruction instanceof org.objectweb.asm.tree.MethodInsnNode call&&call.name.equals("isEyeInFluidMatching")&&call.desc.contains("InFluidPredicate;")));
+        assertTrue(hud.methods.stream().flatMap(method->java.util.Arrays.stream(method.instructions.toArray())).anyMatch(instruction->instruction instanceof org.objectweb.asm.tree.MethodInsnNode call&&call.name.equals("canDrownInFluidType")),"the native predicate tests drowning ability, which is not the source water tag");
+        ClassNode tags=StagedFabricMixinFixture.game("net/minecraft/data/tags/TagsProvider",false);
+        MethodNode writer=tags.methods.stream().filter(method->method.name.equals("lambda$run$5")&&method.desc.endsWith("Ljava/util/Map$Entry;)Ljava/util/concurrent/CompletableFuture;")).findFirst().orElseThrow();
+        assertTrue(MixinFit.containsMember(writer,"Lnet/minecraft/tags/TagFile;<init>(Ljava/util/List;ZLjava/util/List;)V"),"the current native file includes removal entries");
+        assertTrue(MixinFit.containsMember(writer,"Lnet/minecraft/data/DataProvider;saveStable(Lnet/minecraft/data/CachedOutput;Lnet/minecraft/core/HolderLookup$Provider;Lcom/mojang/serialization/Codec;Ljava/lang/Object;Ljava/nio/file/Path;)Ljava/util/concurrent/CompletableFuture;"),"the actual provider carries the registry context");
+        ClassNode source=StagedFabricMixinFixture.mixin("fabric-data-generation-api-v1","net/fabricmc/fabric/mixin/datagen/TagsProviderMixin");
+        MixinStubRebind.noteEcosystem(source.name,Ecosystem.FABRIC);
+        byte[] before=StagedFabricMixinFixture.bytes(source);assertFalse(lostAnchors(before,vanillaResolver(TestFixtures.vanillaJar()),mergedResolver()).isEmpty(),"unadapted raw ABI anchors stay visible to the diagnostic");
+    }
+
 	/**
 	 * The census can fail: debugify's MC-121706 shape, the anchor lost to the field the merge widened, is a census line
 	 * exactly when MixinSubtypeOwnerRetarget's widened-field rule is off.
@@ -552,7 +563,7 @@ class MixinFitLivenessCensusStagedTest {
 		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(vanilla), vanilla + " required");
 		Function<String, byte[]> before = vanillaResolver(vanilla), after = mergedResolver();
 		byte[] head = moogsHeadShaped();
-		MergedBaseCalleeSwaps.Replaced row = MergedBaseCalleeSwaps.REPLACED.getFirst();
+		MergedBaseCalleeSwaps.Replaced row = NativeCallTestEvidence.structureRow();
 		String template = row.owner().substring(row.owner().lastIndexOf('/') + 1);
 		String bound = MixinFit.parse(after.apply(row.owner() + ".class")).methods.stream()
 				.filter(m -> m.name.equals("placeEntities")).findFirst().orElseThrow().desc;
@@ -577,7 +588,7 @@ class MixinFitLivenessCensusStagedTest {
 
 	/** MoogsStructureLib's EntityProcessorMixin with only its HEAD injector, as compiled: placeEntities by name. */
 	private static byte[] moogsHeadShaped() {
-		MergedBaseCalleeSwaps.Replaced row = MergedBaseCalleeSwaps.REPLACED.getFirst();
+		MergedBaseCalleeSwaps.Replaced row = NativeCallTestEvidence.structureRow();
 		ClassNode mixin = new ClassNode();
 		mixin.version = org.objectweb.asm.Opcodes.V21;
 		mixin.access = org.objectweb.asm.Opcodes.ACC_PUBLIC;
@@ -611,7 +622,9 @@ class MixinFitLivenessCensusStagedTest {
 		System.setProperty(MixinFit.LIVENESS_PROPERTY, "off");
 		Set<String> natively = new LinkedHashSet<>(MixinFit.evaluate(mixin, vanilla).unresolved());
 		List<String> out = new ArrayList<>();
-		for (String anchor : judge(mixin, merged, "off").unresolved()) if (!natively.contains(anchor) && !out.contains(anchor)) out.add(anchor);
+        try (var evidence = NativeCallTestEvidence.scope(merged)) {
+		    for (String anchor : judge(mixin, merged, "off").unresolved()) if (!natively.contains(anchor) && !out.contains(anchor)) out.add(anchor);
+        }
 		return out;
 	}
 

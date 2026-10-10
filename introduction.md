@@ -386,6 +386,13 @@ classpath (first-URL-wins would otherwise let it shadow the winner and contribut
 - **Residuals** — the losing ecosystem gets a presence-only alias so `isLoaded(id)` still answers
   (`Decision.aliases`); the other ecosystem's build of a mod that did load may lend a missing class as a last
   resort (`rescueJars`); `ArbitratedAwayClasses` measures what the losing build had that the winner lacks.
+  `ArbitratedAwayDispatchers` covers the one behaviour such a build takes with it: a custom Fabric entrypoint key
+  only the losing Fabric build dispatched (`EntrypointDispatchScan` reads key, type, invoked method and the
+  lifecycle phase that reaches it from that build's bytecode) is dispatched by the kernel in its place, and only
+  when the winner does not name the key itself. A key reached from `main`, `client` or `server` runs among that
+  phase's entrypoints where the losing build's own entrypoint would have run: in Fabric Loader's order, where the
+  library's id sorts (`ArbitratedAwayDispatchers.place`). A declared key the losing build holds while one of its
+  queries asks for a key or type that is no constant is reported as a SUSPECTED finding instead of being guessed at.
   `MergeReport` writes `.forbric-kernel/merge-report.txt` explaining each decision.
 - `-Dforbric.crossJarArbitration=off` disables it entirely.
 
@@ -459,8 +466,11 @@ classpath (first-URL-wins would otherwise let it shadow the winner and contribut
 - **Capabilities** — the merge put `Entity`/`BlockEntity`/`Level` under NeoForge's attachment hierarchy, so
   `transform.ForgeCapabilityCompositionTransformer` composes MinecraftForge's `CapabilityProvider` into those root
   types and `ForgeCapabilityTokenInjector` drives Forge's `CapabilityTokenSubclass` plugin
-  (`-Dforbric.forgeCapabilities=off`). `CapabilityUseAudit` lists the jars that use MinecraftForge capabilities and
-  marks them DEGRADED if the composition is off or did not land on every root type.
+  (`-Dforbric.forgeCapabilities=off`). The switch turns off dispatch only: the merged base lists those three roots in
+  `required-ancestor-compositions.tsv` and the loader refuses to define one without the composition's proof, so off
+  still composes them, with an inert provider that fires no `AttachCapabilitiesEvent` and answers every ask empty.
+  `CapabilityUseAudit` lists the jars that use MinecraftForge capabilities and marks them DEGRADED if dispatch is off
+  or the composition did not land on every root type.
 - **Enum extensions** — `ForgeEnumExtensionInjector` drives MinecraftForge's own processor (unconditional; it
   declines everything unless Forge's mod list holds more than two mods).
 - **Configs** — `KernelForgeConfigLoad` opens genuine MinecraftForge configs one at a time, keeping Forge's reader,
@@ -723,10 +733,16 @@ where they read as fitting. Those four no longer move by R3: ViaFabricPlus 5.0.2
 replaced in place, which `ReplacedCallRedirects` moves instead (below). `-Dforbric.mixinRetarget.renameCensus=off` moves on
 the bytes alone again, `-Dforbric.mixinRetarget.renameCensus.leftExit=off` keeps every handler that can cancel out of a
 piece, and `-Dforbric.mixinRetarget.renameCensus.uncalled=off` keeps every injector out of the `UNCALLED` body), and per-surface Fabric adapters
-(`FabricBlockBreakMixinAdapter`, `FabricEntityMixinAnchors`, `FabricClientMixinAnchors` — which also stands any Fabric
-`@Inject` just before or after `Gui.extractRenderState`'s screen draw at NeoForge's `ClientHooks.extractScreen`, where the
-merged body draws the screen; LiquidBounce draws its whole browser menu there — `FabricEnchantmentMixinAdapter`,
-`FabricMiningMixinAdapter`, `FabricSoundMixinAdapter`, `FabricServerLanguageMixinAdapter`), and `ReplacedCallRedirects`: a
+(`FabricBlockBreakMixinAdapter`, `FabricEntityMixinAnchors`, `FabricClientMixinAnchors`, `FabricEnchantmentMixinAdapter`,
+`FabricMiningMixinAdapter`, `FabricSoundMixinAdapter`, `FabricServerLanguageMixinAdapter`), and `MixinOperationSeamTransport`:
+a Fabric callback just before or after a call the mod's own game makes in the host method, where the merged host makes it
+through an inherited gateway instead (`Gui.extractRenderState`'s screen draw, which the merged `Gui` makes through
+`ForgeLayerInstance.drawScreen`), keeps its whole body and runs around that one call inside the gateway. A MixinExtras
+`@Local` it takes goes with it only when the mod's own game proves the value: the host's own untouched argument, or the
+very slot the call's operand was loaded from, where the carrier passes that operand from the gateway to the call
+unchanged; the callback then receives what the merged host hands the gateway. LiquidBounce draws its whole browser menu
+there, with the draw's canvas as a `@Local`; `-Dforbric.operationSeams.locals=off` leaves such callbacks where they were
+written. And `ReplacedCallRedirects`: a
 `@Redirect` of a vanilla call the carrier replaced in place with its own, whose handler only puts a condition around
 forwarding the vanilla call, moves onto the carrier's call and forwards that one, along a row that says where the two
 stand for each other, which operands carry the same values and why (ViaFabricPlus' hotbar keys —

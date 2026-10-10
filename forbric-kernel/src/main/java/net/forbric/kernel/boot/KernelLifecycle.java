@@ -66,7 +66,12 @@ public final class KernelLifecycle {
 	private KernelLifecycle() {
 	}
 
-	/** Installed by the boot orchestrator so the injected game-side call can reach the transforming loader. */
+	/** The game class identity shared by lifecycle callbacks and protocol extensions. */
+	public static ClassLoader gameLoader() {
+		return gameLoader != null ? gameLoader : Thread.currentThread().getContextClassLoader();
+	}
+
+	/** Installed by the boot orchestrator before any injected lifecycle callback runs. */
 	public static void bind(ClassLoader loader) {
 		gameLoader = loader;
 	}
@@ -295,9 +300,10 @@ public final class KernelLifecycle {
 		// Same moment, same reason: vanilla fills every block state's cache in Bootstrap, before any mod has
 		// registered a block, and the kernel drives registration itself.
 		contentCall(cl, "initialiseBlockStateCaches", "initialise the block state caches");
-		// Third, and AFTER the id map is whole, because the mod pass it re-runs walks that map: a mod whose own
-		// "every block exists now" pass ran before the kernel's last wave of registrations never saw those blocks.
-		contentCall(cl, "initialiseBlockInfoCaches", "re-run the mods' whole-registry block passes");
+		// Third, and AFTER the id map is whole, because the completion walks those registries: a mod whose own
+		// "every element exists now" pass ran before the kernel's last wave of registrations never saw those elements,
+		// so each element registered since gets that pass's per-element callback now, once.
+		contentCall(cl, "initialiseBlockInfoCaches", "complete the mods' whole-registry passes for late registrations");
 	}
 
 	/**
@@ -768,9 +774,18 @@ public final class KernelLifecycle {
 			// areRegistriesLoaded() refuse to register render layers. The only report was one WARN saying the
 			// registration window "could not register ecosystem content", which names none of that.
 			closeWindow = true;
+			// Every Forge-family mod is constructed and no registry event has fired: the point a library's winning
+			// Forge-family build has seen its own consumers declare themselves and has not yet read what they declared.
+			// A custom key only its losing Fabric build dispatched from preLaunch is dispatched here, before any main.
+			try {
+				KernelFabricEcosystem.dispatchArbitratedAwayKeys(net.forbric.kernel.fabric.EntrypointDispatchScan.Phase.PRE_INIT);
+			} catch (Throwable t) {
+				ForbricLog.warn("[Forbric/Lifecycle] could not dispatch the entrypoint keys a superseded build dispatched",
+						unwrap(t));
+			}
 			// MOD buses only — buses.get(0) is the baseline, whose registries PassiveSeeder already registered at
 			// seed time; posting there re-collects them and fill() dies on "Attempted duplicate registration".
-			KernelFabricEcosystem.initializeSpectreConfigs();
+			net.forbric.api.ProtocolExtensions.forLoader(cl).beforeConfigurationLoading();
 			postNeoNewRegistryEvent(cl, buses.subList(1, buses.size()));
 			// Isolated for the same reason KernelEventSubscribers.registerAll above is, and this one is wider.
 			// fireRegisterEvents resolves a GAME-side class reflectively, so a LinkageError inside it escapes to
@@ -2546,160 +2561,6 @@ public final class KernelLifecycle {
 		int n = CREATIVE_SKIPS.incrementAndGet();
 		if (n <= 3 || n % 50 == 0) {
 			ForbricLog.warn("[Forbric/Creative] skipped %d empty creative-tab stack(s) so far", n);
-		}
-	}
-
-	/**
-	 * The key both ecosystems spell the same, in different files: a Fabric entrypoint in {@code fabric.mod.json},
-	 * a {@code [modproperties.<id>]} entry in {@code neoforge.mods.toml}. Not a {@link ForeignType} — it is one
-	 * literal owned by Sodium, not a concept with a twin under each Forge family.
-	 */
-	private static final String SODIUM_CONFIG_USER_KEY = "sodium:config_api_user";
-	private static final String SODIUM_CONFIG_MANAGER = "net.caffeinemc.mods.sodium.client.config.ConfigManager";
-
-	/**
-	 * Called from the end of Sodium's {@code ConfigLoaderForge.collectConfigEntryPoints}: registers the Fabric
-	 * mods that declared a Sodium config entry point, which that method structurally cannot see.
-	 *
-	 * <p>Sodium's NeoForge build finds its config users two ways, both NeoForge-only — it walks
-	 * {@code ModList.getMods()} reading {@code sodium:config_api_user} out of each {@code getModProperties()}, and
-	 * it walks {@code ModList.getAllScanData()} for {@code @ConfigEntryPointForge}. A Fabric mod declares the same
-	 * thing as a Fabric ENTRYPOINT, has no {@code IModInfo}, and is not in {@code ModList} at all, so neither walk
-	 * reaches it. On this instance that was voxy: the page simply did not exist in Video Settings, with no warning
-	 * anywhere, because nothing had looked. (iris was a different defect with the same symptom — it declares the
-	 * property in its own {@code neoforge.mods.toml} and the kernel was returning an empty map for it.)
-	 *
-	 * <p>Only the mod id and the DECLARED class name cross over. Sodium does its own {@code Class.forName}, its own
-	 * type check and its own construction, and keeps its three warning paths; handing it an instance the kernel
-	 * built would answer for a class Sodium never accepted.
-	 *
-	 * <p>A mod already in {@code ModList} is skipped — it is reachable by Sodium's own walk, and registering it
-	 * twice is how the page gets built twice. Note that Sodium's duplicate check is on {@code ModOptions.configId()},
-	 * not on the mod id, and the kernel cannot know a configId before the entry point runs: two mods that pick the
-	 * same configId still crash Sodium, exactly as they would on NeoForge.
-	 *
-	 * <p>Every failure is contained. {@code collectConfigEntryPoints} carries NO exception table and runs inside
-	 * {@code Minecraft.<init>}, so a Throwable escaping this method is not a missing options page, it is a boot
-	 * crash. {@code -Dforbric.sodiumConfigUsers=off} skips it entirely.
-	 */
-	public static void onSodiumConfigUsers() {
-		if ("off".equalsIgnoreCase(System.getProperty("forbric.sodiumConfigUsers", "on"))) {
-			ForbricLog.warn("[Forbric/Sodium] -Dforbric.sodiumConfigUsers=off — a Fabric mod's Sodium options page "
-					+ "will not appear in Video Settings");
-			return;
-		}
-		try {
-			KernelFabricLoader loader = KernelFabricLoader.getInstanceOrNull();
-			if (loader == null) return;
-			Map<String, String> declared = loader.declaredEntrypoints(SODIUM_CONFIG_USER_KEY);
-			if (declared.isEmpty()) return;
-
-			ClassLoader cl = gameLoader;
-			Class<?> configManager = Class.forName(SODIUM_CONFIG_MANAGER, false, cl);
-			Method register = configManager.getMethod("registerConfigEntryPoint", String.class, String.class);
-			Object modList = Class.forName(ForeignType.MOD_LIST.binary(Ecosystem.NEOFORGE), false, cl)
-					.getMethod("get").invoke(null);
-			Method byId = modList == null ? null : modList.getClass().getMethod("getModContainerById", String.class);
-
-			List<String> bridged = new ArrayList<>();
-			for (Map.Entry<String, String> entry : declared.entrySet()) {
-				String modId = entry.getKey();
-				try {
-					if (byId != null && !((java.util.Optional<?>) byId.invoke(modList, modId)).isEmpty()) continue;
-					register.invoke(null, entry.getValue(), modId);
-					bridged.add(modId);
-				} catch (Throwable perMod) {
-					ModCatalog.mark(modId, ModCatalog.Status.DEGRADED, "its Sodium options page is missing — the "
-							+ "kernel could not hand " + entry.getValue() + " to Sodium's config registry");
-					ForbricLog.warn("[Forbric/Sodium] could not register %s's config entry point %s", unwrap(perMod),
-							modId, entry.getValue());
-				}
-			}
-			if (!bridged.isEmpty()) {
-				teachSodiumAboutFabricMods(configManager, loader);
-				ForbricLog.info("[Forbric/Sodium] handed %d Fabric mod(s) to Sodium's config registry %s — Sodium's "
-						+ "NeoForge build finds config users only through ModList, which a Fabric mod is not in, so "
-						+ "their Video Settings pages did not exist", bridged.size(), bridged);
-			}
-		} catch (Throwable t) {
-			// Never rethrow: the caller has no exception table and runs inside Minecraft.<init>.
-			ForbricLog.warn("[Forbric/Sodium] could not bridge the Fabric mods that declare a Sodium config entry "
-					+ "point — their options pages will be missing from Video Settings", unwrap(t));
-		}
-	}
-
-	/**
-	 * Makes Sodium's "who is this mod" lookup survive a mod that is not in {@code ModList}.
-	 *
-	 * <p>Registering the entry point is only half of it. When a bridged mod's page calls the ONE-argument
-	 * {@code ConfigBuilder.registerModOptions(String)} — continuity's {@code registerOwnModOptions()} does —
-	 * Sodium resolves the name and version through {@code ConfigManager.modInfoFunction}, which on this build is
-	 * {@code ConfigLoaderForge::getModMetadata}: {@code ModList.get().getModContainerById(id).orElseThrow(...)}.
-	 * For a Fabric mod that throws, and it throws INSIDE {@code registerConfigsLate} during the loading overlay,
-	 * which is a crash to desktop:
-	 *   Description: Mod 'continuity' failed while registering config options.
-	 *   java.lang.NullPointerException: Mod with id continuity not found in ModList
-	 * Measured, on a live boot, from bridging one mod more than the one that was asked for.
-	 *
-	 * <p>So the existing function is WRAPPED rather than replaced: NeoForge mods keep resolving exactly as they
-	 * did, and only an id it cannot answer for falls through to the kernel's own view of that mod. It must never
-	 * return null — Sodium does {@code checkcast} then {@code modName()} with no null check — so an id neither
-	 * side knows rethrows the original failure instead of inventing a mod.
-	 *
-	 * <p>The version carries {@code KernelModMetadata}'s placeholder rule: a jar whose metadata still says
-	 * {@code ${version}} expects its loader to substitute it, and that string would otherwise be rendered
-	 * verbatim on the Video Settings page.
-	 */
-	@SuppressWarnings("unchecked")
-	private static void teachSodiumAboutFabricMods(Class<?> configManager, KernelFabricLoader loader) {
-		try {
-			Field field = configManager.getDeclaredField("modInfoFunction");
-			field.setAccessible(true);
-			java.util.function.Function<String, Object> delegate =
-					(java.util.function.Function<String, Object>) field.get(null);
-			if (delegate == null) return;
-
-			Constructor<?> metadata = Class.forName(SODIUM_CONFIG_MANAGER + "$ModMetadata", false, gameLoader)
-					.getConstructor(String.class, String.class);
-
-			field.set(null, (java.util.function.Function<String, Object>) modId -> {
-				try {
-					Object known = delegate.apply(modId);
-					if (known != null) return known;
-				} catch (RuntimeException notInModList) {
-					Object mine = fabricModMetadata(metadata, loader, modId);
-					// Neither side knows it: rethrow rather than hand Sodium a mod that does not exist.
-					if (mine == null) throw notInModList;
-					return mine;
-				}
-				Object mine = fabricModMetadata(metadata, loader, modId);
-				if (mine == null) throw new IllegalStateException("no metadata for mod id " + modId);
-				return mine;
-			});
-			ForbricLog.info("[Forbric/Sodium] Sodium's mod-name lookup now falls back to the kernel for an id that "
-					+ "is not in ModList — its NeoForge build resolves names through ModList alone and throws for a "
-					+ "Fabric mod, inside registerConfigsLate, which ends the game rather than the page");
-		} catch (Throwable t) {
-			ForbricLog.warn("[Forbric/Sodium] could not extend Sodium's mod-name lookup — a bridged mod whose page "
-					+ "asks for its own name may still fail to register", unwrap(t));
-		}
-	}
-
-	/** One bridged mod as Sodium's {@code ModMetadata}, or null when the kernel does not know the id either. */
-	private static Object fabricModMetadata(Constructor<?> metadata, KernelFabricLoader loader, String modId) {
-		try {
-			var container = loader.getModContainer(modId);
-			if (container.isEmpty()) return null;
-			var meta = container.get().getMetadata();
-			String name = meta.getName() == null || meta.getName().isBlank() ? modId : meta.getName();
-			String version = meta.getVersion() == null ? null : meta.getVersion().getFriendlyString();
-			// Same rule as KernelModMetadata.versionOf: an unresolved placeholder is worse than "unknown", and
-			// this string is rendered on the Video Settings page.
-			if (version == null || version.isBlank() || version.contains("${")) version = "0.0";
-			return metadata.newInstance(name, version);
-		} catch (Throwable t) {
-			ForbricLog.debug("[Forbric/Sodium] no kernel metadata for %s — %s", modId, String.valueOf(unwrap(t)));
-			return null;
 		}
 	}
 

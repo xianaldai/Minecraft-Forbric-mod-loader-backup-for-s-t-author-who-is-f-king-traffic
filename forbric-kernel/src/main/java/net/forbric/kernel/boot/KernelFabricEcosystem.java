@@ -42,6 +42,7 @@ import net.forbric.api.Side;
 import net.forbric.api.DiscoveredMod;
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ModPresence;
+import net.forbric.kernel.fabric.EntrypointDispatchScan;
 import net.forbric.kernel.fabric.FabricModDiscovery;
 import net.forbric.kernel.mixin.MixinConfigOwners;
 import net.forbric.kernel.fabric.KernelFabricLoader;
@@ -223,7 +224,8 @@ public final class KernelFabricEcosystem {
 		// entrypoints, no mixins, no assets, all of which the winner already provides.
 		for (DuplicateModArbiter.Alias alias : dupes.aliasesFor(Ecosystem.FABRIC)) {
 			fabric.register(KernelModContainer.presence(KernelModMetadata.builtin(alias.modId(), alias.version(),
-					alias.modId(), foreignCustomValues(alias.modId())), presenceSource(alias.modId(), dupes)));
+					alias.modId(), foreignCustomValues(alias.modId()), foreignEntrypoints(alias.modId())),
+					presenceSource(alias.modId(), dupes)));
 			ForbricLog.info("[Forbric/Fabric] presence alias '%s' %s — its Fabric jar lost arbitration, but the "
 					+ "winning jar supplies the classes; isModLoaded now answers", alias.modId(), alias.version());
 		}
@@ -231,17 +233,27 @@ public final class KernelFabricEcosystem {
 		// The same identity problem across ECOSYSTEMS. A Fabric mod asking isModLoaded("jei") next to a NeoForge
 		// JEI was told no, because each loader only ever knew its own family's mods; the answer is almost always a
 		// compatibility branch, so a wrong no silently disables an integration that would have worked. Presence
-		// only, exactly like the arbitration aliases above: identity, no entrypoints, no mixins, no assets — the
-		// mod is really loaded, by the other family's lifecycle, which owns everything else about it.
+		// only, exactly like the arbitration aliases above: identity, no lifecycle entrypoints, no mixins, no assets —
+		// the mod is really loaded, by the other family's lifecycle, which owns everything else about it. What it
+		// DECLARES to other mods does cross, in Fabric's spelling: its [modproperties] as custom values, and the
+		// classes of its own jar it names under a namespaced key as entrypoints of that key (CrossEcosystemDeclarations).
 		int foreign = 0;
+		int declaring = 0;
 		for (DiscoveredMod mod : ModPresence.forgeFamilyMods()) {
 			if (mod.getId() == null || mod.getId().isBlank()) continue;
 			if (fabric.getModContainer(mod.getId()).isPresent()) continue;
+			Map<String, List<KernelModMetadata.EntrypointDecl>> entrypoints =
+					CrossEcosystemDeclarations.fabricEntrypoints(mod);
 			fabric.register(KernelModContainer.presence(KernelModMetadata.builtin(mod.getId(),
 					mod.getVersion() == null ? "0" : mod.getVersion(),
 					mod.getDisplayName() == null ? mod.getId() : mod.getDisplayName(),
-					customValuesOf(mod)), loadedFrom(mod)));
+					customValuesOf(mod), entrypoints), loadedFrom(mod)));
 			foreign++;
+			if (!entrypoints.isEmpty()) declaring++;
+		}
+		if (declaring > 0) {
+			ForbricLog.info("[Forbric/Fabric] %d Forge-family mod(s) name a class under a namespaced [modproperties] "
+					+ "key; a Fabric mod reading that key's entrypoints now meets them", declaring);
 		}
 		if (foreign > 0) {
 			ForbricLog.info("[Forbric/Fabric] %d Forge-family mod(s) registered for presence only — a Fabric mod "
@@ -264,6 +276,8 @@ public final class KernelFabricEcosystem {
 		// graph's input decides where a Forge-family mod waiting on it lands. Handing it the Fabric order would
 		// reorder NeoForge and MinecraftForge mods as a side effect.
 		List<DiscoveredMod> fabricMods = new ArrayList<>();
+		Map<String, Map<String, Object>> entrypointNames = new LinkedHashMap<>();
+		int declaringFabric = 0;
 		for (ModContainer container : registered) {
 			if (!(container instanceof KernelModContainer kernel) || kernel.getJar() == null) continue;
 			String id = kernel.getMetadata().getId();
@@ -272,12 +286,26 @@ public final class KernelFabricEcosystem {
 			if (id == null || id.isBlank() || ModPresence.isLoaded(id)) continue;
 			// The provides aliases ride along. FabricLoader resolves them itself, but the Forge-family lists and
 			// ModPresence are built from THIS list, and every LibJF module is named through an alias.
+			// So does what the mod declares to other mods, in the [modproperties] spelling a Forge-family reader asks
+			// for: its custom values here, and its entrypoint names beside them (CrossEcosystemDeclarations decides
+			// under which keys those are offered). The seeded LoadingModList and every kernel-built IModInfo describe
+			// the mod from this object.
+			Map<String, Object> declared = CrossEcosystemDeclarations.customProperties(kernel.getMetadata().getCustomValues());
+			Map<String, Object> names = CrossEcosystemDeclarations.entrypointNames(kernel.getMetadata().getEntrypoints());
+			if (!names.isEmpty()) entrypointNames.put(id, names);
+			if (!declared.isEmpty() || !names.isEmpty()) declaringFabric++;
 			fabricMods.add(new DiscoveredMod(Ecosystem.FABRIC, id,
 					String.valueOf(kernel.getMetadata().getVersion()), kernel.getMetadata().getName(),
 					unifiedDependencies(kernel.getMetadata()), List.of(), null, kernel.getJar().toString())
-					.withAliases(List.copyOf(kernel.getMetadata().getProvides())));
+					.withAliases(List.copyOf(kernel.getMetadata().getProvides()))
+					.withModProperties(declared));
 		}
+		CrossEcosystemDeclarations.publishFabricEntrypointNames(entrypointNames);
 		ModPresence.publishFabric(fabricMods);
+		if (declaringFabric > 0) {
+			ForbricLog.info("[Forbric/Fabric] %d Fabric mod(s) declare custom values or namespaced entrypoints; a "
+					+ "Forge-family mod reading [modproperties] now reads them there", declaringFabric);
+		}
 
 		List<Path> jars = new ArrayList<>();
 		for (Path jar : discovery.getClasspathJars()) {
@@ -460,7 +488,7 @@ public final class KernelFabricEcosystem {
 
 		EnvType envType = loader.getEnvironmentType();
 		PHASES_RAN.add("main");
-		int main = invoke("main", ModInitializer.class, ModInitializer::onInitialize);
+		int main = invokePhase("main", ModInitializer.class, ModInitializer::onInitialize, EntrypointDispatchScan.Phase.MAIN);
 
 		if (envType == EnvType.CLIENT) {
 			ForbricLog.info("[Forbric/Fabric] invoked %d Fabric main entrypoint(s) in the %s window", main,
@@ -471,8 +499,8 @@ public final class KernelFabricEcosystem {
 			// before main dropped such an entry with a warning that it came too late.
 			adoptFabricStorage();
 			PHASES_RAN.add("server");
-			int server = invoke("server", DedicatedServerModInitializer.class,
-					DedicatedServerModInitializer::onInitializeServer);
+			int server = invokePhase("server", DedicatedServerModInitializer.class,
+					DedicatedServerModInitializer::onInitializeServer, EntrypointDispatchScan.Phase.SERVER);
 			ForbricLog.info("[Forbric/Fabric] invoked %d Fabric main entrypoint(s) + %d server entrypoint(s)",
 					main, server);
 		}
@@ -614,7 +642,8 @@ public final class KernelFabricEcosystem {
 		if (!CLIENTS_RAN.compareAndSet(false, true)) return false;
 		PHASES_RAN.add("client");
 
-		int client = invoke("client", ClientModInitializer.class, ClientModInitializer::onInitializeClient);
+		int client = invokePhase("client", ClientModInitializer.class, ClientModInitializer::onInitializeClient,
+				EntrypointDispatchScan.Phase.CLIENT);
 		ForbricLog.info("[Forbric/Fabric] invoked %d Fabric client entrypoint(s) (Minecraft.<init> window)", client);
 		reportActiveRenderer();
 		return true;
@@ -685,47 +714,195 @@ public final class KernelFabricEcosystem {
 		return !"off".equalsIgnoreCase(System.getProperty(MAIN_WINDOW_SWITCH, "on"));
 	}
 
+	/** Every entrypoint key a discovered Fabric mod declares, for working out which of them nothing dispatches. */
+	public static Set<String> declaredEntrypointKeys() {
+		KernelFabricLoader current = loader;
+		return current == null ? Set.of() : current.entrypointKeys();
+	}
+
+	/**
+	 * Every mod id and {@code provides} alias the Fabric side knows, the presence-only identities of the other
+	 * ecosystems' mods included.
+	 */
+	public static Set<String> knownModIds() {
+		KernelFabricLoader current = loader;
+		if (current == null) return Set.of();
+		Set<String> ids = new java.util.LinkedHashSet<>();
+		for (ModContainer mod : current.getAllMods()) {
+			ids.add(mod.getMetadata().getId());
+			ids.addAll(mod.getMetadata().getProvides());
+		}
+		return ids;
+	}
+
+	/**
+	 * Dispatches, at {@code phase}, the custom keys only a library build that lost arbitration would have dispatched
+	 * (see {@link ArbitratedAwayDispatchers}): each declared entrypoint of the key that is of the losing build's
+	 * entrypoint type gets the call that build made on it. Failures are the entrypoint's own, as for {@code main}.
+	 *
+	 * <p>All of them at once, here: the phase that has no entrypoints of its own to run among ({@code PRE_INIT}). The
+	 * {@code main}, {@code client} and {@code server} phases place each one among their entrypoints instead
+	 * ({@link #invokePhase}).
+	 *
+	 * @return how many entrypoints were invoked
+	 */
+	public static int dispatchArbitratedAwayKeys(EntrypointDispatchScan.Phase phase) {
+		KernelFabricLoader current = loader;
+		if (current == null) return 0;
+		int total = 0;
+		for (ArbitratedAwayDispatchers.Orphan orphan : dueArbitratedAway(current, phase)) {
+			total += dispatchOrphan(current, orphan, "");
+		}
+		return total;
+	}
+
+	private static List<ArbitratedAwayDispatchers.Orphan> dueArbitratedAway(KernelFabricLoader current,
+			EntrypointDispatchScan.Phase phase) {
+		List<ArbitratedAwayDispatchers.Orphan> due = new ArrayList<>();
+		for (ArbitratedAwayDispatchers.Orphan orphan
+				: ArbitratedAwayDispatchers.due(phase, current.getEnvironmentType() == EnvType.CLIENT)) {
+			if (current.hasEntrypoints(orphan.key())) due.add(orphan);
+		}
+		return due;
+	}
+
+	/**
+	 * Runs one lifecycle phase's entrypoints, and the custom keys a losing library build dispatched from that phase
+	 * where that build's own entrypoint of the phase would have run ({@link ArbitratedAwayDispatchers#place}).
+	 *
+	 * <p>They used to run after every entrypoint of the phase. The library's own entrypoint is what dispatched them, so
+	 * on Fabric a consumer whose entrypoint comes after the library's has had its declaration called by the time its
+	 * own {@code onInitialize} runs, and reads what that set up (its config, typically) from there. Run last, it read
+	 * it unset.
+	 *
+	 * @return how many of the phase's own entrypoints were invoked, the dispatched keys' not counted
+	 */
+	static <T> int invokePhase(String key, Class<T> type, java.util.function.Consumer<T> action,
+			EntrypointDispatchScan.Phase phase) {
+		KernelFabricLoader current = loader;
+		if (current == null) return 0;
+		List<EntrypointContainer<T>> containers = current.getEntrypointContainers(key, type);
+		List<ArbitratedAwayDispatchers.Orphan> due = dueArbitratedAway(current, phase);
+		if (due.isEmpty()) return invokeEntrypoints(key, containers, action);
+
+		List<ModMetadata> providers = new ArrayList<>(containers.size());
+		for (EntrypointContainer<T> container : containers) providers.add(container.getProvider().getMetadata());
+		List<ArbitratedAwayDispatchers.Place> places = new ArrayList<>(due.size());
+		try {
+			boolean fabricOrder = FabricLoadOrder.enabled();
+			for (ArbitratedAwayDispatchers.Orphan orphan : due) {
+				places.add(ArbitratedAwayDispatchers.place(orphan, providers, fabricOrder));
+			}
+		} catch (Throwable t) {
+			// Placing them is an improvement on running them last, never a reason for the phase not to run.
+			ForbricLog.warn("[Forbric/Fabric] could not work out where among the %s entrypoints a superseded build's keys "
+					+ "belong; they run after all of them: %s", key, String.valueOf(t));
+			places.clear();
+			for (int j = 0; j < due.size(); j++) places.add(new ArbitratedAwayDispatchers.Place(containers.size(), "unplaced"));
+		}
+		int count = 0;
+		for (int i = 0; i <= containers.size(); i++) {
+			for (int j = 0; j < due.size(); j++) {
+				if (places.get(j).before() != i) continue;
+				String where = i < containers.size()
+						? "before " + providers.get(i).getId() + "'s " + key + " entrypoint, " + places.get(j).why()
+						: "after every " + key + " entrypoint, " + places.get(j).why();
+				try {
+					dispatchOrphan(current, due.get(j), " " + where);
+				} catch (Throwable t) {
+					ForbricLog.warn("[Forbric/Fabric] could not dispatch the '%s' entrypoints of %s's losing build: %s",
+							due.get(j).key(), due.get(j).library(), String.valueOf(t));
+				}
+			}
+			if (i < containers.size() && invokeOne(key, containers.get(i), action)) count++;
+		}
+		KernelForeignShimContext.report();
+		return count;
+	}
+
+	private static int dispatchOrphan(KernelFabricLoader current, ArbitratedAwayDispatchers.Orphan orphan, String where) {
+		EntrypointDispatchScan.Dispatch dispatch = orphan.dispatch();
+		Class<?> type;
+		java.lang.reflect.Method contract;
+		try {
+			// Through the loader the entrypoints link against: a type only the losing build has is served from it there.
+			type = Class.forName(dispatch.type().replace('/', '.'), false, current.entrypointLoader());
+			contract = type.getMethod(dispatch.method());
+			try {
+				contract.setAccessible(true);
+			} catch (RuntimeException closed) {
+				// A public method of a public type needs none; anything else fails on invoke, per entrypoint.
+			}
+		} catch (Throwable t) {
+			ForbricLog.warn("[Forbric/Fabric] could not dispatch the '%s' entrypoints %s's losing build dispatched: %s",
+					dispatch.key(), orphan.library(), String.valueOf(t));
+			return 0;
+		}
+		int count = invokeContract(dispatch.key(), type, contract);
+		ForbricLog.info("[Forbric/Fabric] dispatched %d '%s' entrypoint(s) through %s.%s in place of %s's losing build "
+				+ "(%s)%s", count, dispatch.key(), type.getSimpleName(), contract.getName(), orphan.library(),
+				orphan.losingBuild().getFileName(), where);
+		return count;
+	}
+
+	private static <T> int invokeContract(String key, Class<T> type, java.lang.reflect.Method contract) {
+		return invokeEntrypoints(key, type, entrypoint -> {
+			try {
+				contract.invoke(entrypoint);
+			} catch (java.lang.reflect.InvocationTargetException failure) {
+				throw KernelFabricEcosystem.<RuntimeException>rethrow(failure.getCause());
+			} catch (IllegalAccessException denied) {
+				throw new IllegalStateException(denied);
+			}
+		});
+	}
+
+	@SuppressWarnings("unchecked")
+	private static <E extends Throwable> E rethrow(Throwable failure) throws E {
+		throw (E) failure;
+	}
+
 	/**
 	 * Invokes one entrypoint key, isolating failures per mod: a mod whose {@code onInitialize} throws is reported
 	 * and skipped rather than aborting the remaining mods' initialization (and with them the whole server boot).
 	 */
-	/** Spectre's NeoForge global-load phase does not discover Fabric's custom config entries. */
-	static void initializeSpectreConfigs() {
-		if (!net.forbric.kernel.transform.SpectreConfigContractInjector.needed()) return;
-		int count = invoke("spectrelib-config", net.forbric.kernel.interop.SpectreConfigInitializer.class,
-				net.forbric.kernel.interop.SpectreConfigInitializer::onInitializeConfig);
-		if (count > 0) ForbricLog.info("[Forbric/Spectre] initialized %d Fabric config entrypoint(s) before the selected NeoForge library loads global configs", count);
+	public static <T> int invokeEntrypoints(String key, Class<T> type, java.util.function.Consumer<T> action) {
+		if (loader == null) return 0;
+		return invokeEntrypoints(key, loader.getEntrypointContainers(key, type), action);
 	}
 
-	private static <T> int invoke(String key, Class<T> type, java.util.function.Consumer<T> action) {
+	private static <T> int invokeEntrypoints(String key, List<EntrypointContainer<T>> containers,
+			java.util.function.Consumer<T> action) {
 		int count = 0;
-
-		for (EntrypointContainer<T> c : loader.getEntrypointContainers(key, type)) {
-			String id = c.getProvider().getMetadata().getId();
-
-			try {
-				T entrypoint = c.getEntrypoint();
-				// With a NeoForge ModContainer active for THIS mod, because a Fabric mod can be holding the
-				// NeoForge build of a multi-loader library: only one copy of a class exists, so the build the
-				// nested-jar arbitration kept is the build every host gets. Without this, EntityCulling's
-				// onInitializeClient asked tr7zw's TRansition to register a keybind, that build asked
-				// ModLoadingContext for the active container, got NeoForge's "minecraft" fallback whose
-				// getEventBus() is null by design, and threw out of its first line — losing the whole entrypoint.
-				// The MOD's loader, not the kernel's: the runtime half and NeoForge itself are transform-loaded,
-				// and the kernel's own boot classloader cannot see either of them.
-				KernelForeignShimContext.with(entrypoint.getClass().getClassLoader(), id,
-						() -> action.accept(entrypoint));
-				count++;
-				ForbricLog.info("[Forbric/Fabric] invoked %s entrypoint of %s", key, id);
-				reportSwallowedFailure(key, id, entrypoint);
-			} catch (Throwable t) {
-				ForbricLog.error("[Forbric/Fabric] " + key + " entrypoint of " + id + " failed", t);
-				ModCatalog.mark(id, ModCatalog.Status.FAILED, "its " + key + " entrypoint threw");
-			}
-		}
-
+		for (EntrypointContainer<T> c : containers) if (invokeOne(key, c, action)) count++;
 		KernelForeignShimContext.report();
 		return count;
+	}
+
+	/** One entrypoint, its failure reported and kept to its mod. True when it ran to completion. */
+	private static <T> boolean invokeOne(String key, EntrypointContainer<T> c, java.util.function.Consumer<T> action) {
+		String id = c.getProvider().getMetadata().getId();
+		boolean ran = false;
+		try {
+			T entrypoint = c.getEntrypoint();
+			// With a NeoForge ModContainer active for THIS mod, because a Fabric mod can be holding the
+			// NeoForge build of a multi-loader library: only one copy of a class exists, so the build the
+			// nested-jar arbitration kept is the build every host gets. Without this, EntityCulling's
+			// onInitializeClient asked tr7zw's TRansition to register a keybind, that build asked
+			// ModLoadingContext for the active container, got NeoForge's "minecraft" fallback whose
+			// getEventBus() is null by design, and threw out of its first line — losing the whole entrypoint.
+			// The MOD's loader, not the kernel's: the runtime half and NeoForge itself are transform-loaded,
+			// and the kernel's own boot classloader cannot see either of them.
+			KernelForeignShimContext.with(entrypoint.getClass().getClassLoader(), id,
+					() -> action.accept(entrypoint));
+			ran = true;
+			ForbricLog.info("[Forbric/Fabric] invoked %s entrypoint of %s", key, id);
+			reportSwallowedFailure(key, id, entrypoint);
+		} catch (Throwable t) {
+			ForbricLog.error("[Forbric/Fabric] " + key + " entrypoint of " + id + " failed", t);
+			ModCatalog.mark(id, ModCatalog.Status.FAILED, "its " + key + " entrypoint threw");
+		}
+		return ran;
 	}
 
 	/**
@@ -854,6 +1031,15 @@ public final class KernelFabricEcosystem {
 		if (id == null) return Map.of();
 		for (DiscoveredMod mod : ModPresence.forgeFamilyMods()) {
 			if (id.equals(mod.getId())) return customValuesOf(mod);
+		}
+		return Map.of();
+	}
+
+	/** The winning Forge-family jar's declared entrypoints, for an alias; see {@link CrossEcosystemDeclarations}. */
+	private static Map<String, List<KernelModMetadata.EntrypointDecl>> foreignEntrypoints(String id) {
+		if (id == null) return Map.of();
+		for (DiscoveredMod mod : ModPresence.forgeFamilyMods()) {
+			if (id.equals(mod.getId())) return CrossEcosystemDeclarations.fabricEntrypoints(mod);
 		}
 		return Map.of();
 	}

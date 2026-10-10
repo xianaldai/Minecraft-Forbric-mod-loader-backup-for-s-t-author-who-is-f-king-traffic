@@ -89,7 +89,9 @@ public final class ForbricMixinService
 	/** Points the service at the transforming loader + side. Must be called before {@code MixinBootstrap.init()}. */
 	public static void bind(ForbricClassLoader loader, EnvType side) {
 		gameLoader = loader;
+		ADAPTER_CLASS_CACHE.clear();
 		envType = side;
+		NativeGameReferences.bind(loader);
 	}
 
 	/** The weaver Mixin handed us via {@link #offer}, or {@code null} before bootstrap. */
@@ -103,12 +105,36 @@ public final class ForbricMixinService
 
 		return l;
 	}
+	/** Late structural plans register against their derived target, never a table of target names. Both bytecode
+	 * views share the loader's generation, so an in-flight old adapter reader cannot republish stale bytes. */
+	public static boolean registerBeforeDefinition(String target,Runnable registration){java.util.Objects.requireNonNull(registration);String binary=target.replace('/','.');ForbricClassLoader current=loader();return current.registerBeforeDefinition(binary,()->{try{registration.run();}finally{ADAPTER_CLASS_CACHE.remove(binary.replace('.','/')+".class");}});}
+	/** Preflight and the actual weaver must see the same offered callback transport. */
+	static byte[] absorbedCallbacksAsLoaded(byte[] bytes, java.util.function.Function<String,byte[]> resource) {
+		if(gameLoader==null||bytes==null)return bytes;
+		ClassNode source=new ClassNode();new ClassReader(bytes).accept(source,ClassReader.EXPAND_FRAMES);
+		int changed=MixinAbsorbedCallbackTransport.adapt(source,owner->{byte[] current=resource.apply(owner+".class");return current==null?null:MixinFit.parse(current);},
+			owner->NativeGameReferences.reference(MixinStubRebind.ecosystemOf(source.name),owner),loader());
+		changed+=MixinOperationSeamTransport.adapt(source,owner->{byte[] current=resource.apply(owner+".class");return current==null?null:MixinFit.parse(current);},NativeGameReferences::reference,loader());
+		if(changed==0)return bytes;org.objectweb.asm.ClassWriter out=new org.objectweb.asm.ClassWriter(0);source.accept(out);return out.toByteArray();
+	}
 
 	// --- IMixinService ---
 
+    /** Claims a complete original callback group against the actual current caller/bridge contract before config removal. */
+    public static boolean registerSourceCallbacks(ClassNode source) {
+        if(source==null||!MergedBaseMixinCompat.sourceMayBeClaimed(source.name))return false;
+        try { return net.forbric.kernel.boot.LootSourceCallbacks.offer(loader(),source,ForbricMixinService::readAdapterClass); }
+        catch(RuntimeException unavailable){ForbricLog.debug("[Forbric/Mixin] original callback group remains unclaimed: %s",unavailable.toString());return false;}
+    }
+
+	/**
+	 * {@code "Forbric"} to Mixin, the kernel and anything else without a platform of its own; to a mod's code, and to
+	 * unowned code such as a bundled library that a mod's code drives, the name the mod's platform's service reports.
+	 * See {@link MixinPlatformIdentity}.
+	 */
 	@Override
 	public String getName() {
-		return "Forbric";
+		return MixinPlatformIdentity.serviceName();
 	}
 
 	@Override
@@ -283,19 +309,19 @@ public final class ForbricMixinService
 		// …and a single-point injector compiled with an array-valued `at` (another Mixin fork's shape) is given the
 		// shape this Mixin declares, before MixinExtras' pre-apply transformer casts it.
 		MixinAtShape.normalise(node);
-		CreateInjectionAdapters.adapt(node, this::mergedBaseNodeWithCode);
-		CreateContextualBlockAdapters.adapt(node, this::mergedBaseNodeWithCode);
-		CreateInteractionMixinAdapters.adapt(node, this::mergedBaseNodeWithCode);
-		CreateBreathingMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		CreateEntitySoundMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		CreateHudMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinCarrierCallbackAdapters.adapt(node, this::mergedBaseNodeWithCode);
+		MixinBlockQueryAdapters.adapt(node, this::mergedBaseNodeWithCode);
+		MixinBlockInteractionAdapters.adapt(node, this::mergedBaseNodeWithCode);
+		MixinBreathingCallbackAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinEntitySoundCallbackAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinHudContextAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		FabricRegistryLoaderMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		FabricRegistryInitializationMixinAdapter.adapt(node);
+		FabricRegistryInitializationMixinAdapter.adapt(node, this::mergedBaseNode);
 		FabricFreezeHookMixinAdapter.adapt(node, this::mergedBaseNode);
-		FabricCreativePagerMixinAdapter.adapt(node);
+		FabricCreativePagerMixinAdapter.adapt(node, this::mergedBaseNode);
 		KernelClientHookMixinAnchors.adapt(node, this::mergedBaseNodeWithCode);
-		GuiItemCaptureMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		BarrelRollCameraAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinGuiItemCaptureAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinCameraRollAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		// …and a redirect of a vanilla call the carrier replaced at the same place, whose handler only conditions it,
 		// forwards the carrier's call there instead.
 		ReplacedCallRedirects.adapt(node, this::mergedBaseNodeWithCode);
@@ -309,10 +335,38 @@ public final class ForbricMixinService
 		// …and an injection point on a call the kernel relocated out of its method (MinecraftForge's ItemStack.useOn)
 		// selects the one-call relay that now makes it.
 		MixinRelocatedCall.adapt(node, this::mergedBaseNodeWithCode);
-		// …and a reviewed @WrapOperation whose call the surviving carrier reordered or widened is wrapped, so it binds
+		// …and any structurally proven @WrapOperation whose call the carrier reordered or widened is wrapped, so it binds
 		// to the merged call and its handler still receives the arguments it was written for (never a @Redirect: it
 		// would replace the carrier's call).
 		MixinWrapOperationShim.adapt(node, this::mergedBaseNodeWithCode);
+		// A redirected collection source follows only a proved copy-prefix into a pure stream composition.
+		MixinCollectionSourceAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		// A copied shared value is preserved at the same proved result consumer, never replaced by a live value.
+		MixinSharedResultTransport.adapt(node, MixinStubRebind.ecosystemOf(node.name), this::mergedBaseNodeWithCode);
+		// A default predicate is transported only while its actual virtual dispatch and final body remain proved.
+		MixinDefaultPredicateAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinDefaultPredicateTransport.adapt(node, MixinStubRebind.ecosystemOf(node.name), this::mergedBaseNodeWithCode);
+		MixinReturnDecorationAdapter.adapt(node, MixinStubRebind.ecosystemOf(node.name), this::mergedBaseNodeWithCode);
+		MixinDefaultCallbackTransport.adapt(node, MixinStubRebind.ecosystemOf(node.name), this::mergedBaseNodeWithCode);
+		MixinNativePredicateSeam.adapt(node, this::mergedBaseNodeWithCode,
+				owner -> NativeGameReferences.reference(MixinStubRebind.ecosystemOf(node.name), owner));
+		MixinAbsorbedCallbackTransport.adapt(node, this::mergedBaseNodeWithCode,
+			owner -> NativeGameReferences.reference(MixinStubRebind.ecosystemOf(node.name), owner), loader());
+		MixinOperationSeamTransport.adapt(node, this::mergedBaseNodeWithCode,NativeGameReferences::reference,loader());
+		MixinSharedPredicateSeam.adapt(node, this::mergedBaseNodeWithCode,
+				owner -> NativeGameReferences.reference(MixinStubRebind.ecosystemOf(node.name), owner),
+				owner -> {
+					ClassNode original = NativeGameReferences.reference(net.forbric.api.Ecosystem.NEOFORGE, owner);
+					return original != null ? original : NativeGameReferences.runtime(net.forbric.api.Ecosystem.NEOFORGE, owner);
+				});
+		MixinCrossHostPredicateIsland.adapt(node, this::mergedBaseNodeWithCode,
+				owner -> NativeGameReferences.reference(MixinStubRebind.ecosystemOf(node.name), owner),
+				ForbricMixinService::registerBeforeDefinition);
+		MixinPredicateDelegateAdapter.adapt(node, MixinStubRebind.ecosystemOf(node.name), this::mergedBaseNodeWithCode);
+		MixinResourceContinuationAdapter.adapt(node, MixinStubRebind.ecosystemOf(node.name), this::mergedBaseNodeWithCode);
+		MixinUnusedArgumentObserverAdapter.adapt(node, MixinStubRebind.ecosystemOf(node.name), this::mergedBaseNodeWithCode);
+		MixinNullableCompositeCallback.adapt(node, MixinStubRebind.ecosystemOf(node.name), this::mergedBaseNodeWithCode);
+		MixinDecodeScopeAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		// …and a Fabric mod's wrap of vanilla's is(Items.SHEARS) also answers the carrier's canPerformAction(SHEARS_*)
 		// that replaced it in six merged bodies (BCLib's tag-based shears), with the carrier's answer as its original.
 		MixinShearsRelay.adapt(node, this::mergedBaseNodeWithCode);
@@ -339,15 +393,15 @@ public final class ForbricMixinService
 		FabricBlockBreakMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		FabricClientMixinAnchors.adapt(node, this::mergedBaseNodeWithCode);
 		FabricSoundMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		ContinuitySpriteMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinSpriteLoaderCallbackAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		FabricFluidFlowMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		CreateFluidMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		CreateKeyboardMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		CreateStructureMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinFluidInteractionAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinKeyActionAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinStructurePlacementAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		FabricSectionCompilerMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		FabricBlockStateCodecMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		CarpetMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		CarpetFluidMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinPlayerWorldCallbackAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinFluidReactionAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		// …and an @Inject anchored on a call the merged body makes through a subtype of the same method
 		// (Decoder.parse → Codec.parse: lithostitched's Fabric load predicates) moves to that one call.
 		MixinSubtypeOwnerRetarget.adapt(node, this::mergedBaseNodeWithCode);
@@ -371,6 +425,9 @@ public final class ForbricMixinService
 		net.forbric.kernel.transform.GuestInjectorPruner.pruneRefused(node,
 				(mixin, handler) -> MixinFit.stillRejected(mixin, handler, this::mergedBaseNodeWithCode));
 		FinalMixinApplications.remember(node);
+		// The call sites its injectors take, as they will apply: a raw post-Mixin patch of another mod that finds one
+		// gone is reported as a contention between the two (ContendedCallSites), not arbitrated.
+		ContendedCallSites.remember(node);
 		// …and, after remember has the author's own counts, an injector-level require/allow on a relaxed guest mixin
 		// stops being able to abandon the whole target class: the mod is reported, the class is defined.
 		if (!DIAGNOSTICS) MixinLocalsCapture.softenRequirements(node, ForbricMixinService::allOwnersRelaxed);
@@ -459,6 +516,7 @@ public final class ForbricMixinService
 		InputStream in = loader().getGameResourceAsStream(name);
 		if (in == null) return null;
 
+		if(isMixinConfigName(name))MergedBaseMixinCompat.discoverAll(ForbricMixinService::readGameResource);
 		boolean relax = isRelaxedConfig(name);
 		List<String> named = suppressedMixinsFor(name);
 		List<String> drop = new ArrayList<>(named);
@@ -471,6 +529,8 @@ public final class ForbricMixinService
 			byte[] bytes = source.readAllBytes();
 			String json = new String(bytes, StandardCharsets.UTF_8);
 			MixinCompatibility.rememberOriginalConfig(name, bytes);
+            MergedBaseMixinCompat.discover(name,bytes,ForbricMixinService::readGameResource);
+            named=suppressedMixinsFor(name);drop=new ArrayList<>(named);
 
 			if (scanForOwned) {
 				// Derive, from THIS config, the mixins that target a Forge/NeoForge-owned merged class — the general
@@ -513,8 +573,8 @@ public final class ForbricMixinService
 				//
 				// DIAGNOSTICS (-Dforbric.mixinDiagnostics): keep the injection requirements STRICT so every
 				// misfitting injection is reported, while still setting required=false so the launch survives to
-				// collect them all. Relaxing defaultRequire makes a non-matching injection SILENT, which is how a
-				// half-applied mixin (fabric-registry-sync's ScopedValue re-bind) hid until it crashed at runtime.
+				// collect them all. Mixin itself stays silent about a relaxed, non-matching injection; the final
+				// class audit emits a WARN with its owner, handler and target instead (FinalMixinApplications).
 				if (!DIAGNOSTICS) {
 					json = json.replaceAll("(\"requireAnnotations\"\\s*:\\s*)true", "$1false")
 							.replaceAll("(\"defaultRequire\"\\s*:\\s*)\\d+", "$10");
@@ -592,7 +652,8 @@ public final class ForbricMixinService
 	private static final java.util.Map<java.nio.file.Path, String> BASE_DIGESTS = new java.util.concurrent.ConcurrentHashMap<>();
 
 	/** Cache for {@link #readAdapterClass}: ~70 configs re-request the same merged targets. */
-	private static final java.util.Map<String, byte[]> ADAPTER_CLASS_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+	private record AdapterClass(ForbricClassLoader loader,ForbricClassLoader.BytecodeGeneration generation,byte[] bytes){}
+	private static final java.util.Map<String, AdapterClass> ADAPTER_CLASS_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
 	private static final byte[] NOT_FOUND = new byte[0];
 
 	/**
@@ -609,22 +670,21 @@ public final class ForbricMixinService
 	 * <p>Falls back to the raw resource for a MIXIN's own class, which is not a game class and so is not transformed.
 	 */
 	private static byte[] readAdapterClass(String resourcePath) {
-		byte[] cached = ADAPTER_CLASS_CACHE.get(resourcePath);
-		if (cached != null) return cached == NOT_FOUND ? null : cached;
-
-		byte[] bytes = null;
-		if (resourcePath.endsWith(".class")) {
-			String className = resourcePath.substring(0, resourcePath.length() - ".class".length()).replace('/', '.');
-			try {
-				bytes = loader().getPreMixinClassBytes(className);
-			} catch (Throwable notAGameClass) {
-				bytes = null;
-			}
+		String className=resourcePath.endsWith(".class")?resourcePath.substring(0,resourcePath.length()-6).replace('/','.'):null;
+		String path=className==null?resourcePath:className.replace('.','/')+".class";
+		for(;;){ForbricClassLoader current=loader();var generation=className==null?null:current.bytecodeGeneration(className);
+			AdapterClass cached=ADAPTER_CLASS_CACHE.get(path);
+			if(cached!=null&&cached.loader==current&&java.util.Objects.equals(cached.generation,generation)&&current==gameLoader&&(className==null||current.isBytecodeGenerationCurrent(className,generation)))return cached.bytes==NOT_FOUND?null:cached.bytes;
+			byte[] bytes=null;
+			if(className!=null){try{bytes=current.getPreMixinClassBytes(className);}catch(Throwable notAGameClass){bytes=null;}}
+			if(bytes==null){try(InputStream input=current.getGameResourceAsStream(path)){bytes=input==null?null:input.readAllBytes();}catch(IOException unavailable){bytes=null;}}
+			if(current!=gameLoader||className!=null&&!current.isBytecodeGenerationCurrent(className,generation))continue;
+			AdapterClass entry=new AdapterClass(current,generation,bytes==null?NOT_FOUND:bytes);ADAPTER_CLASS_CACHE.put(path,entry);
+			if(current!=gameLoader||className!=null&&!current.isBytecodeGenerationCurrent(className,generation)){ADAPTER_CLASS_CACHE.remove(path,entry);continue;}
+			if(bytes!=null&&className!=null){ClassNode source=new ClassNode();new ClassReader(bytes).accept(source,ClassReader.EXPAND_FRAMES);if(MergedBaseMixinCompat.sourceMayBeClaimed(source.name))net.forbric.kernel.boot.LootSourceCallbacks.offer(current,source,ForbricMixinService::readAdapterClass);}
+			if(current==gameLoader&&(className==null||current.isBytecodeGenerationCurrent(className,generation)))return bytes;
+			ADAPTER_CLASS_CACHE.remove(path,entry);
 		}
-		if (bytes == null) bytes = readGameResource(resourcePath);
-
-		ADAPTER_CLASS_CACHE.put(resourcePath, bytes == null ? NOT_FOUND : bytes);
-		return bytes;
 	}
 
 	/** Whether {@code name} looks like a mixin config file — the only resources the owned-target scan should read. */
@@ -655,21 +715,7 @@ public final class ForbricMixinService
 
 		if (MergedBaseMixinCompat.enabled()) {
 			collectSuppressed(MergedBaseMixinCompat.SUPPRESSED_MIXINS, configName, out);
-			if (FabricRegistryLoaderMixinAdapter.enabled() && configName.equals("fabric-registry-sync-v0.mixins.json")) {
-				out.remove("RegistryDataLoaderMixin");
-			}
-			if (FabricRegistryInitializationMixinAdapter.enabled()) {
-				if (configName.equals("fabric-registry-sync-v0.mixins.json")) out.removeAll(List.of("BootstrapMixin","MainMixin"));
-				if (configName.equals("fabric-registry-sync-v0.client.mixins.json")) out.remove("MinecraftMixin");
-			}
-			if (FabricCreativePagerMixinAdapter.enabled() && configName.equals("fabric-creative-tab-api-v1.client.mixins.json")) {
-				out.remove("CreativeModeInventoryScreenMixin");
-			}
-			// The pruner trims these to the injectors that fit; switched off, the whole-mixin pin comes back so the
-			// kill switch reproduces the OLD behaviour and never the half-applied one.
-			if (!net.forbric.kernel.transform.GuestInjectorPruner.enabled()) {
-				collectSuppressed(MergedBaseMixinCompat.SUPPRESSED_UNLESS_PRUNED, configName, out);
-			}
+
 		}
 
 		String csv = System.getProperty("forbric.suppressMixins");
@@ -691,11 +737,9 @@ public final class ForbricMixinService
 	static String suppressionSource(String configName, String mixin) {
 		String entry = configName + ":" + mixin;
 		if (MergedBaseMixinCompat.enabled() && MergedBaseMixinCompat.SUPPRESSED_MIXINS.contains(entry)) {
-			return "MergedBaseMixinCompat.SUPPRESSED_MIXINS";
+			return "source protocol: " + MergedBaseMixinCompat.reason(configName,mixin);
 		}
-		if (MergedBaseMixinCompat.enabled() && MergedBaseMixinCompat.SUPPRESSED_UNLESS_PRUNED.contains(entry)) {
-			return "MergedBaseMixinCompat.SUPPRESSED_UNLESS_PRUNED (the injector pruner is off)";
-		}
+
 		return "-Dforbric.suppressMixins";
 	}
 
@@ -743,6 +787,7 @@ public final class ForbricMixinService
 	 * differential oracle, which relaxes every discovered guest mod's configs and excludes only infrastructure.)
 	 */
 	public static void setGuestConfigs(Collection<String> configs) {
+        MergedBaseMixinCompat.reset();
 		// Recorded BEFORE the relax gate, and unconditionally: this list is also what tells the guest-mixin adapter
 		// which classes some OTHER mod's mixin will add members to (see ForeignMixinTargets). That question is
 		// independent of whether configs are relaxed, so -Dforbric.relaxGuestMixins=off must not empty it.

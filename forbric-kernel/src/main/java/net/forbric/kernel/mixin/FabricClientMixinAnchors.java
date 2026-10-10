@@ -5,107 +5,20 @@ import java.util.function.Function;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.*;
-/** Proven moved block-entity removal, a context-expanded call whose Fabric redirect is strictly a no-op, Fabric's
- * per-screen draw events around NeoForge's screen-stack call, and any Fabric mod's callback before or after that draw. */
+/** Proved map removal, and any empty redirect of a call the carrier widened, discovered from source contracts without private SDK names. */
 public final class FabricClientMixinAnchors {
  public static final String PROPERTY="forbric.fabricClientAnchors";
  private FabricClientMixinAnchors(){}
  public static int adapt(ClassNode mixin,Function<String,ClassNode> targets){
   if("off".equalsIgnoreCase(System.getProperty(PROPERTY,"on")))return 0;
-  if(mixin.name.equals("net/fabricmc/fabric/mixin/event/lifecycle/client/LevelChunkMixin")
-    ||mixin.name.equals("net/fabricmc/fabric/mixin/event/lifecycle/server/LevelChunkMixin"))return removal(mixin,targets);
-  if(mixin.name.equals("net/fabricmc/fabric/mixin/client/renderer/block/render/LevelRendererMixin"))return render(mixin,targets);
-  if(mixin.name.equals("net/fabricmc/fabric/mixin/screen/GuiMixin"))return screenExtract(mixin,targets);
-  return screenDraw(mixin,targets);
+  return removal(mixin,targets)+render(mixin,targets);
  }
- private static final String SCREEN="net/minecraft/client/gui/screens/Screen",GRAPHICS="Lnet/minecraft/client/gui/GuiGraphicsExtractor;";
- private static final String OPERATION="com/llamalad7/mixinextras/injector/wrapoperation/Operation";
- private static final String EVENTS="net/fabricmc/fabric/api/client/screen/v1/ScreenEvents";
- private static final String STACK_CALL="(L"+SCREEN+";Ljava/util/Stack;"+GRAPHICS+"IIF)V";
- /** fabric-screen-api's ScreenEvents.beforeExtract/afterExtract (Jade's overlay on an open screen). Fabric wraps
-  * Gui.extractRenderState's call of screen.extractRenderStateWithTooltipAndSubtitles; NeoForge's body instead hands
-  * the top screen and its layer stack to ClientHooks.extractScreen, which draws the layers and then the screen from
-  * another class, so the wrap bound nothing and neither event ever fired. The same handler now wraps that one call:
-  * before-extract, the NeoForge screen draw (layers included), after-extract, on the screen Gui passes as the top. */
- private static int screenExtract(ClassNode mixin,Function<String,ClassNode> targets){
-  String handlerDesc="(L"+SCREEN+";"+GRAPHICS+"IIFL"+OPERATION+";)V";
-  MethodNode handler=find(mixin,"onExtractGui",handlerDesc);if(handler==null||group(handler))return 0;
-  AnnotationNode wrap=MixinFit.injectorOf(handler);
-  if(wrap==null||!wrap.desc.equals("Lcom/llamalad7/mixinextras/injector/wrapoperation/WrapOperation;")
-    ||!MixinFit.stringList(MixinFit.value(wrap,"method")).equals(List.of("extractRenderState"))||MixinFit.value(wrap,"slice")!=null)return 0;
-  List<AnnotationNode> ats=MixinFit.atNodes(wrap);
-  if(ats.size()!=1||!"INVOKE".equals(MixinFit.value(ats.getFirst(),"value"))||MixinFit.value(ats.getFirst(),"ordinal")!=null
-    ||!("L"+SCREEN+";extractRenderStateWithTooltipAndSubtitles("+GRAPHICS+"IIF)V").equals(MixinFit.value(ats.getFirst(),"target")))return 0;
-  // The handler this reproduces: before-extract, the one draw, after-extract — no cancel, nothing else.
-  if(calls(handler,EVENTS,"beforeExtract")!=1||calls(handler,EVENTS,"afterExtract")!=1||calls(handler,OPERATION,"call")!=1)return 0;
-  ClassNode gui=targets.apply("net/minecraft/client/gui/Gui");if(gui==null)return 0;
-  List<MethodNode> hosts=gui.methods.stream().filter(m->m.name.equals("extractRenderState")).toList();
-  int direct=0,stacked=0;for(MethodNode host:hosts){direct+=calls(host,SCREEN,"extractRenderStateWithTooltipAndSubtitles");
-   for(var i:host.instructions)if(i instanceof MethodInsnNode c&&c.owner.equals("net/neoforged/neoforge/client/ClientHooks")&&c.name.equals("extractScreen")&&c.desc.equals(STACK_CALL))stacked++;}
-  // Fabric's own anchor still present means its wrap binds as written; two stack calls would bracket twice.
-  if(direct!=0||stacked!=1)return 0;
-  String desc="(L"+SCREEN+";Ljava/util/Stack;"+GRAPHICS+"IIFL"+OPERATION+";)V";
-  if(find(mixin,"forbric$onExtractScreens",desc)!=null)return 0;
-  MethodNode moved=new MethodNode(Opcodes.ACC_PRIVATE,"forbric$onExtractScreens",desc,null,null);
-  moved.visibleAnnotations=new ArrayList<>(List.of(wrap));
-  if(handler.visibleAnnotations!=null)handler.visibleAnnotations.remove(wrap);if(handler.invisibleAnnotations!=null)handler.invisibleAnnotations.remove(wrap);
-  set(ats.getFirst(),"target","Lnet/neoforged/neoforge/client/ClientHooks;extractScreen"+STACK_CALL);
-  InsnList code=moved.instructions;
-  event(code,"beforeExtract","BeforeExtract");
-  code.add(new VarInsnNode(Opcodes.ALOAD,7));code.add(new IntInsnNode(Opcodes.BIPUSH,6));code.add(new TypeInsnNode(Opcodes.ANEWARRAY,"java/lang/Object"));
-  Object[][] args={{Opcodes.ALOAD,1,null},{Opcodes.ALOAD,2,null},{Opcodes.ALOAD,3,null},{Opcodes.ILOAD,4,"java/lang/Integer:(I)"},{Opcodes.ILOAD,5,"java/lang/Integer:(I)"},{Opcodes.FLOAD,6,"java/lang/Float:(F)"}};
-  for(int i=0;i<args.length;i++){code.add(new InsnNode(Opcodes.DUP));code.add(new IntInsnNode(Opcodes.BIPUSH,i));code.add(new VarInsnNode((Integer)args[i][0],(Integer)args[i][1]));
-   if(args[i][2] instanceof String box){String[] p=box.split(":");code.add(new MethodInsnNode(Opcodes.INVOKESTATIC,p[0],"valueOf",p[1]+"L"+p[0]+";",false));}
-   code.add(new InsnNode(Opcodes.AASTORE));}
-  code.add(new MethodInsnNode(Opcodes.INVOKEINTERFACE,OPERATION,"call","([Ljava/lang/Object;)Ljava/lang/Object;",true));code.add(new InsnNode(Opcodes.POP));
-  event(code,"afterExtract","AfterExtract");
-  code.add(new InsnNode(Opcodes.RETURN));moved.maxStack=7;moved.maxLocals=8;mixin.methods.add(moved);return 1;
- }
- /** A Fabric mod's {@code @Inject} just before or after Gui.extractRenderState's call of
-  * screen.extractRenderStateWithTooltipAndSubtitles. NeoForge's body draws the screen through ClientHooks.extractScreen
-  * instead (its layers, then the top screen), so the point bound nothing: LiquidBounce draws its whole browser menu
-  * there, and on Forbric the title screen showed its background and no menu. Before and after that one call are the
-  * points the mod meant — the screen about to be drawn, and drawn — and a callback's signature is the host method's, not
-  * the call's, so only the target moves. Only where the merged host makes that call once and the vanilla one not at all. */
- private static int screenDraw(ClassNode mixin,Function<String,ClassNode> targets){
-  if(!List.of("net/minecraft/client/gui/Gui").equals(MixinFit.mixinTargets(mixin))||MixinStubRebind.ecosystemOf(mixin.name)!=net.forbric.api.Ecosystem.FABRIC)return 0;
-  String vanilla="L"+SCREEN+";extractRenderStateWithTooltipAndSubtitles("+GRAPHICS+"IIF)V",host="extractRenderState(Lnet/minecraft/client/DeltaTracker;ZZ)V";
-  List<AnnotationNode> points=new ArrayList<>();
-  for(MethodNode handler:mixin.methods){
-   AnnotationNode inject=MixinFit.injectorOf(handler);
-   if(inject==null||!inject.desc.equals("Lorg/spongepowered/asm/mixin/injection/Inject;")||group(handler)||MixinFit.value(inject,"slice")!=null)continue;
-   List<String> selectors=MixinFit.stringList(MixinFit.value(inject,"method"));
-   if(selectors.size()!=1||!(selectors.getFirst().equals("extractRenderState")||selectors.getFirst().equals(host)))continue;
-   List<AnnotationNode> ats=MixinFit.atNodes(inject);if(ats.size()!=1)continue;AnnotationNode at=ats.getFirst();
-   if(!"INVOKE".equals(MixinFit.value(at,"value"))||!vanilla.equals(MixinFit.value(at,"target"))||MixinFit.value(at,"by")!=null)continue;
-   Object ordinal=MixinFit.value(at,"ordinal"),shift=MixinFit.value(at,"shift");
-   if(ordinal!=null&&!Integer.valueOf(0).equals(ordinal)&&!Integer.valueOf(-1).equals(ordinal))continue;
-   if(shift!=null&&!(shift instanceof String[] e&&e.length==2&&(e[1].equals("BEFORE")||e[1].equals("AFTER"))))continue;
-   points.add(at);
-  }
-  if(points.isEmpty())return 0;
-  ClassNode gui=targets.apply("net/minecraft/client/gui/Gui");MethodNode drawing=gui==null?null:find(gui,"extractRenderState","(Lnet/minecraft/client/DeltaTracker;ZZ)V");
-  if(drawing==null||calls(drawing,SCREEN,"extractRenderStateWithTooltipAndSubtitles")!=0)return 0;
-  int stacked=0;for(var i:drawing.instructions)if(i instanceof MethodInsnNode c&&c.owner.equals("net/neoforged/neoforge/client/ClientHooks")&&c.name.equals("extractScreen")&&c.desc.equals(STACK_CALL))stacked++;
-  if(stacked!=1)return 0;
-  for(AnnotationNode at:points)set(at,"target","Lnet/neoforged/neoforge/client/ClientHooks;extractScreen"+STACK_CALL);
-  net.forbric.kernel.util.ForbricLog.info("[Forbric/Mixin] %s: %d injector(s) before or after the screen draw in Gui.extractRenderState now "
-    +"stand at NeoForge's ClientHooks.extractScreen, which draws the screen there",mixin.name.replace('/','.'),points.size());
-  return points.size();
- }
- /** {@code ScreenEvents.<name>(screen).invoker().<name>(screen, graphics, mouseX, mouseY, partialTick)} */
- private static void event(InsnList code,String name,String type){
-  String callback=EVENTS+"$"+type;
-  code.add(new VarInsnNode(Opcodes.ALOAD,1));code.add(new MethodInsnNode(Opcodes.INVOKESTATIC,EVENTS,name,"(L"+SCREEN+";)Lnet/fabricmc/fabric/api/event/Event;",false));
-  code.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL,"net/fabricmc/fabric/api/event/Event","invoker","()Ljava/lang/Object;",false));code.add(new TypeInsnNode(Opcodes.CHECKCAST,callback));
-  code.add(new VarInsnNode(Opcodes.ALOAD,1));code.add(new VarInsnNode(Opcodes.ALOAD,3));code.add(new VarInsnNode(Opcodes.ILOAD,4));code.add(new VarInsnNode(Opcodes.ILOAD,5));code.add(new VarInsnNode(Opcodes.FLOAD,6));
-  code.add(new MethodInsnNode(Opcodes.INVOKEINTERFACE,callback,name,"(L"+SCREEN+";"+GRAPHICS+"IIF)V",true));
- }
- private static int calls(MethodNode m,String owner,String name){int n=0;for(var i:m.instructions)if(i instanceof MethodInsnNode c&&c.owner.equals(owner)&&c.name.equals(name))n++;return n;}
  private static int removal(ClassNode mixin,Function<String,ClassNode> targets){
   String owner="net/minecraft/world/level/chunk/LevelChunk",desc="(Lnet/minecraft/core/BlockPos;L"+owner+"$EntityCreationType;)Lnet/minecraft/world/level/block/entity/BlockEntity;";
-  MethodNode handler=find(mixin,"onRemoveBlockEntity","(Ljava/util/Map;Ljava/lang/Object;)Ljava/lang/Object;");ClassNode target=targets.apply(owner);
-  if(handler==null||target==null||group(handler))return 0;MethodNode host=find(target,"getBlockEntity",desc);if(host==null)return 0;
+  if(!MixinCallbackShape.targets(mixin,owner))return 0;
+  MethodNode handler=MixinCallbackShape.unique(mixin,method->method.desc.equals("(Ljava/util/Map;Ljava/lang/Object;)Ljava/lang/Object;")&&MixinFit.injectorOf(method)!=null&&MixinFit.injectorOf(method).desc.equals("Lorg/spongepowered/asm/mixin/injection/Redirect;"));
+  if(handler==null||group(handler))return 0;ClassNode target=targets.apply(owner); // the handler first, then the target's code
+  if(target==null)return 0;MethodNode host=find(target,"getBlockEntity",desc);if(host==null)return 0;
   AnnotationNode injector=MixinFit.injectorOf(handler);if(injector==null||!injector.desc.equals("Lorg/spongepowered/asm/mixin/injection/Redirect;"))return 0;
   if(!MixinFit.stringList(MixinFit.value(injector,"method")).equals(List.of("getBlockEntity"+desc)))return 0;
   Object slice=MixinFit.value(injector,"slice");
@@ -124,16 +37,87 @@ public final class FabricClientMixinAnchors {
    if(matches!=1||factories!=1||selectedInstruction>=factory)return 0;set(ats.getFirst(),"ordinal",selected);remove(injector,"slice");return 1;
   }catch(AnalyzerException malformed){return 0;}
  }
+ /**
+  * A {@code @Redirect} whose handler is nothing but {@code return}, on a void call the surviving carrier widened.
+  *
+  * <p>Such a redirect says "this call does not happen here". When the carrier replaced the call in the selected body
+  * with the same method taking more context (NeoForge's {@code collectParts(BlockAndTintGetter, BlockPos, BlockState,
+  * RandomSource, List)} for vanilla's {@code collectParts(RandomSource, List)}), the replaced call is the one to skip, and
+  * since the handler reads none of its arguments it can take the wider argument list unchanged. Any mixin, any target
+  * and any host its own selector names: the call the guest named must be absent from every selected body, and each must
+  * make exactly one call of one widened descriptor of it (same owner, name, kind and void return, the named parameters
+  * an ordered part of the wider list). A handler with a body, a value to return, a group or a slice is not touched.
+  */
  private static int render(ClassNode mixin,Function<String,ClassNode> targets){
-  String model="net/minecraft/client/renderer/block/dispatch/BlockStateModel",tail="Lnet/minecraft/util/RandomSource;Ljava/util/List;)V";
-  MethodNode handler=find(mixin,"cancelCollectParts","(L"+model+";"+tail);if(handler==null||group(handler))return 0;
-  List<AbstractInsnNode> code=new ArrayList<>();for(var i:handler.instructions)if(i.getOpcode()>=0)code.add(i);if(code.size()!=1||code.getFirst().getOpcode()!=Opcodes.RETURN)return 0;
-  ClassNode target=targets.apply("net/minecraft/client/renderer/LevelRenderer");if(target==null)return 0;
-  MethodNode host=find(target,"submitBlockDestroyAnimation","(Lcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/SubmitNodeCollector;Lnet/minecraft/client/renderer/state/level/LevelRenderState;)V");if(host==null)return 0;
-  String extended="(Lnet/minecraft/client/renderer/block/BlockAndTintGetter;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;"+tail;
-  int matches=0;for(var i:host.instructions)if(i instanceof MethodInsnNode c&&c.owner.equals(model)&&c.name.equals("collectParts")){if(c.desc.equals("("+tail))return 0;if(c.desc.equals(extended))matches++;}if(matches!=1)return 0;
-  AnnotationNode redirect=MixinFit.injectorOf(handler);if(redirect==null||MixinFit.atNodes(redirect).size()!=1)return 0;AnnotationNode at=MixinFit.atNodes(redirect).getFirst();if(!("L"+model+";collectParts("+tail).equals(MixinFit.value(at,"target")))return 0;
-  set(at,"target","L"+model+";collectParts"+extended);handler.desc="(L"+model+";"+extended.substring(1);handler.signature=null;handler.parameters=null;handler.visibleParameterAnnotations=null;handler.invisibleParameterAnnotations=null;handler.localVariables=null;handler.maxLocals=7;return 1;
+  // The handlers first: resolving a target with code is the expensive part, and almost no mixin has an empty redirect.
+  List<EmptyRedirect> empty=new ArrayList<>();
+  for(MethodNode handler:mixin.methods){
+   if(!MixinCallbackShape.kind(handler,"Redirect")||group(handler))continue;
+   List<AbstractInsnNode> code=new ArrayList<>();for(var i:handler.instructions)if(i.getOpcode()>=0)code.add(i);
+   if(code.size()!=1||code.getFirst().getOpcode()!=Opcodes.RETURN)continue;
+   AnnotationNode redirect=MixinFit.injectorOf(handler);List<AnnotationNode> ats=MixinFit.atNodes(redirect);
+   if(ats.size()!=1||!"INVOKE".equals(MixinFit.value(ats.getFirst(),"value")))continue;
+   AnnotationNode at=ats.getFirst();boolean plain=true;
+   for(String key:List.of("ordinal","shift","by","args","opcode"))if(MixinFit.value(at,key)!=null)plain=false;
+   MixinAtWidenedCall.Member named=MixinAtWidenedCall.parse((String)MixinFit.value(at,"target"));
+   if(!plain||named==null||Type.getReturnType(named.descriptor()).getSort()!=Type.VOID)continue;
+   empty.add(new EmptyRedirect(handler,redirect,at,named));
+  }
+  if(empty.isEmpty())return 0;
+  List<ClassNode> classes=new ArrayList<>();
+  for(String name:MixinFit.mixinTargets(mixin)){ClassNode target=targets.apply(name);if(target!=null)classes.add(target);}
+  if(classes.isEmpty())return 0;
+  int moved=0;
+  for(EmptyRedirect candidate:empty){
+   MethodNode handler=candidate.handler();AnnotationNode redirect=candidate.redirect(),at=candidate.at();MixinAtWidenedCall.Member named=candidate.named();
+   List<MethodNode> hosts=new ArrayList<>();
+   for(String selector:MixinFit.stringList(MixinFit.value(redirect,"method")))for(ClassNode target:classes){MethodNode host=selected(target,selector);if(host!=null&&!hosts.contains(host))hosts.add(host);}
+   if(hosts.isEmpty())continue;
+   MethodInsnNode wide=null;boolean fits=true;
+   for(MethodNode host:hosts){
+    int matches=0;
+    for(var i:host.instructions)if(i instanceof MethodInsnNode c&&c.owner.equals(named.owner())&&c.name.equals(named.name())){
+     if(c.desc.equals(named.descriptor())){fits=false;break;}
+     if(!within(named.descriptor(),c.desc))continue;
+     if(wide!=null&&(!wide.desc.equals(c.desc)||wide.getOpcode()!=c.getOpcode())){fits=false;break;}
+     wide=c;matches++;
+    }
+    if(matches!=1)fits=false;
+    if(!fits)break;
+   }
+   if(!fits||wide==null)continue;
+   boolean instance=wide.getOpcode()!=Opcodes.INVOKESTATIC;
+   Type[] params=Type.getArgumentTypes(handler.desc),own=Type.getArgumentTypes(named.descriptor()),widened=Type.getArgumentTypes(wide.desc);
+   int lead=instance?1:0;if(params.length<lead+own.length)continue;
+   boolean describes=true;for(int i=0;i<own.length;i++)if(!params[lead+i].equals(own[i]))describes=false;
+   if(!describes)continue;
+   List<Type> shaped=new ArrayList<>();if(instance)shaped.add(params[0]);shaped.addAll(List.of(widened));
+   for(int i=lead+own.length;i<params.length;i++)shaped.add(params[i]); // the host's arguments the handler captured
+   set(at,"target","L"+named.owner()+";"+named.name()+wide.desc);
+   handler.desc=Type.getMethodDescriptor(Type.VOID_TYPE,shaped.toArray(Type[]::new));handler.signature=null;handler.parameters=null;
+   handler.visibleParameterAnnotations=null;handler.invisibleParameterAnnotations=null;handler.visibleAnnotableParameterCount=0;handler.invisibleAnnotableParameterCount=0;
+   handler.localVariables=null;handler.maxLocals=(Type.getArgumentsAndReturnSizes(handler.desc)>>2)-((handler.access&Opcodes.ACC_STATIC)!=0?1:0);
+   net.forbric.kernel.util.ForbricLog.info("[Forbric/Mixin] %s.%s: an empty @Redirect of %s.%s%s now skips the carrier's %s%s in %s, the call that "
+     +"replaced it",mixin.name.replace('/','.'),handler.name,named.owner().replace('/','.'),named.name(),named.descriptor(),named.name(),wide.desc,
+     hosts.stream().map(h->h.name).distinct().toList());
+   moved++;
+  }
+  return moved;
+ }
+ /** A handler that is nothing but {@code return}, redirecting one plain INVOKE of a void call. */
+ private record EmptyRedirect(MethodNode handler,AnnotationNode redirect,AnnotationNode at,MixinAtWidenedCall.Member named){}
+ /** Whether {@code wide} takes {@code named}'s parameters, in order, among more. */
+ private static boolean within(String named,String wide){
+  Type[] own=Type.getArgumentTypes(named),all=Type.getArgumentTypes(wide);
+  if(all.length<=own.length||!Type.getReturnType(named).equals(Type.getReturnType(wide)))return false;
+  int j=0;for(Type t:all)if(j<own.length&&t.equals(own[j]))j++;
+  return j==own.length;
+ }
+ /** What Mixin binds a selector to: the method of that name and descriptor, or the first of that name. */
+ private static MethodNode selected(ClassNode target,String selector){
+  int paren=selector.indexOf('(');
+  for(MethodNode m:target.methods)if(paren<0?m.name.equals(selector):(m.name+m.desc).equals(selector))return m;
+  return null;
  }
  private static boolean group(MethodNode m){for(var list:Arrays.asList(m.visibleAnnotations,m.invisibleAnnotations))if(list!=null&&list.stream().anyMatch(a->a.desc.equals("Lorg/spongepowered/asm/mixin/injection/Group;")))return true;return false;}
  private static MethodNode find(ClassNode c,String n,String d){return c.methods.stream().filter(m->m.name.equals(n)&&m.desc.equals(d)).findFirst().orElse(null);}

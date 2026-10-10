@@ -32,6 +32,9 @@ import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 
 import net.forbric.kernel.util.ForbricLog;
+import net.forbric.api.DiscoveredMod;
+import net.forbric.api.Ecosystem;
+import net.forbric.kernel.transform.TransformContext;
 
 /**
  * The kernel's single sovereign transforming class loader — the one and only loader that defines the game +
@@ -54,16 +57,137 @@ public final class ForbricClassLoader extends URLClassLoader {
 	private final ClassLoader parent;
 	private volatile ClassLoader fallbackClassLoader;
 	private final DefinedClassEvidence definitionEvidence = new DefinedClassEvidence();
+	private final RequiredAncestorCompositions ancestorCompositions = new RequiredAncestorCompositions();
+	private final PlatformAncestorBridges ancestorBridges = new PlatformAncestorBridges();
+
+	/** Registers a source-protocol proof checked against the final bytes before defining a required class. */
+	public void registerAncestorComposition(net.forbric.api.AncestorComposition proof) {
+		ancestorCompositions.register(proof);
+	}
 
 	/** One {@link ProtectionDomain} per owned jar, keyed by the jar URL's spelling. See {@link #domainFor}. */
 	private final Map<String, ProtectionDomain> domains = new ConcurrentHashMap<>();
+	public record ModOrigin(Ecosystem ecosystem, String modId) { }
+	private volatile Map<String, ModOrigin> modOrigins = Map.of();
+
+	/**
+	 * Fabric's Knot keeps its weaver at {@code KnotClassLoader.delegate.mixinTransformer}, and a Fabric mod that
+	 * decorates the weaver reaches it by reflection on whatever loader defined its classes: this field by name, then
+	 * that field on the object it holds. Same name here, holding an object with Knot's field, which the class pipeline
+	 * reads back. See {@link net.forbric.kernel.mixin.MixinPlatformIdentity}.
+	 */
+	private final net.forbric.kernel.mixin.MixinPlatformIdentity.KnotDelegate delegate =
+			new net.forbric.kernel.mixin.MixinPlatformIdentity.KnotDelegate();
+
+	/** What {@code delegate} holds, for the Mixin bootstrap to attach once the weaver exists. */
+	public net.forbric.kernel.mixin.MixinPlatformIdentity.KnotDelegate knotDelegate() {
+		return delegate;
+	}
 
 	private volatile BiFunction<String, byte[], byte[]> transformer = (n, b) -> b;
 	private volatile BiFunction<String, byte[], byte[]> mixinTransformer = (n, b) -> b;
+	private final java.util.concurrent.atomic.AtomicLong bytecodeConfiguration = new java.util.concurrent.atomic.AtomicLong();
+	private record ClassEpoch(long version,Thread registration){}
+	private final ConcurrentHashMap<String,java.util.concurrent.atomic.AtomicReference<ClassEpoch>> bytecodeEpochs=new ConcurrentHashMap<>();
+	private final Set<String> activeDefinitions=ConcurrentHashMap.newKeySet();
+	/**
+	 * {@code -Dforbric.deferLinkTimeTypes=off}: a class defined while a Mixin weave is open is defined exactly as
+	 * written, and verifying it may define game classes before any mixin can reach them. See {@link VerifierTypeDeferral}.
+	 */
+	public static final String DEFER_LINK_TIME_TYPES = "forbric.deferLinkTimeTypes";
+	/** A Mixin weave open on this thread, and what the classes defined inside it had deferred. */
+	private static final class OpenWeave {
+		final String name;
+		final List<String> classes = new java.util.ArrayList<>();
+		final Set<String> types = new java.util.TreeSet<>();
+		int casts;
+
+		OpenWeave(String name) {
+			this.name = name;
+		}
+	}
+	/** The Mixin weaves open on this thread, innermost last. Per loader: another loader's weave is not ours. */
+	private final ThreadLocal<java.util.ArrayDeque<OpenWeave>> weaving = ThreadLocal.withInitial(java.util.ArrayDeque::new);
+	public record BytecodeGeneration(long configuration,Object target){}
+	private record PreMixinEntry(BytecodeGeneration generation,java.lang.ref.SoftReference<byte[]> bytes){}
 
 	public ForbricClassLoader(URL[] ownedJars, ClassLoader parent) {
 		super("forbric", ownedJars, parent);
 		this.parent = parent;
+	}
+
+	@Override
+	public void close() throws IOException {
+		try { super.close(); }
+		finally { net.forbric.api.ProtocolExtensions.release(this); net.forbric.api.VirtualProperties.release(this); net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.release(this); net.forbric.kernel.mixin.MixinOperationSeamTransport.release(this); }
+	}
+
+	/** Records the selected metadata, not package prefixes, as the source of transform provenance. */
+	public void setModOrigins(java.util.Collection<DiscoveredMod> mods) {
+		Map<String, ModOrigin> origins = new java.util.LinkedHashMap<>();
+		Set<String> ambiguous = new java.util.HashSet<>();
+		for (DiscoveredMod mod : mods) {
+			if (mod == null || mod.getSource() == null || mod.getSource().isBlank()) continue;
+			try {
+				String source = java.nio.file.Path.of(mod.getSource()).toAbsolutePath().normalize().toUri().toURL().toString();
+				if (ambiguous.contains(source)) continue;
+				ModOrigin origin = new ModOrigin(mod.getEcosystem(), mod.getId());
+				ModOrigin previous = origins.get(source);
+				if (previous != null && previous.ecosystem() != origin.ecosystem()) {
+					origins.remove(source); ambiguous.add(source);
+				} else if (previous != null && !java.util.Objects.equals(previous.modId(), origin.modId())) {
+					origins.put(source, new ModOrigin(origin.ecosystem(), null));
+				} else origins.put(source, origin);
+			} catch (java.net.MalformedURLException | java.nio.file.InvalidPathException ignored) {
+				// An unknown source remains unattributed; it must never be guessed from a class name.
+			}
+		}
+		modOrigins = Map.copyOf(origins);
+		bytecodeConfiguration.incrementAndGet();
+		preMixin.clear();
+	}
+
+	/** The actual winner of classpath lookup, equally available before definition and during Mixin inspection. */
+	public ModOrigin originOfResource(String binaryName) {
+		String path = binaryName.replace('.', '/') + ".class";
+		URL resource = findResource(path);
+		if (resource == null) resource = rescueResource(path);
+		if (resource == null) return null;
+		String source = jarUrlOf(resource);
+		ModOrigin jar = modOrigins.get(source);
+		if (jar != null || "jar".equals(resource.getProtocol())) return jar;
+		// Directory-backed development mods are attributed to their root, not to an individual class URL.
+		String url = resource.toString();
+		return url.endsWith(path) ? modOrigins.get(url.substring(0, url.length() - path.length())) : null;
+	}
+
+	public Ecosystem ecosystemOfResource(String binaryName) {
+		ModOrigin origin = originOfResource(binaryName);
+		return origin == null ? null : origin.ecosystem();
+	}
+
+	/**
+	 * The ecosystem whose code a class this loader defined is: the arbitrated family of the jar it was defined from
+	 * ({@link #familyOfClass}), else the selected mod that owns its class file ({@link #ecosystemOfResource}). Null for
+	 * a class another loader defined, and for one no single ecosystem owns — the merged base, a runtime carrier, a
+	 * library, a jar two ecosystems claim.
+	 */
+	public Ecosystem ecosystemOfClass(Class<?> type) {
+		if (type == null || type.getClassLoader() != this) return null;
+		LoaderProbePolicy.Family family = familyOfClass(type.getName());
+		if (family != null) {
+			return switch (family) {
+				case FABRIC -> Ecosystem.FABRIC;
+				case FORGE -> Ecosystem.FORGE;
+				case NEOFORGE -> Ecosystem.NEOFORGE;
+			};
+		}
+		return ecosystemOfResource(type.getName());
+	}
+
+	public TransformContext contextFor(String binaryName, TransformContext base) {
+		ModOrigin origin = originOfResource(binaryName);
+		return base.withSource(origin == null ? null : origin.ecosystem(), origin == null ? null : origin.modId());
 	}
 
 	/**
@@ -97,12 +221,14 @@ public final class ForbricClassLoader extends URLClassLoader {
 		}
 		for (URL url : urls.getURLs()) addURL(url);
 		fallbackClassLoader = fallback;
+		bytecodeConfiguration.incrementAndGet();
 		preMixin.clear();
 	}
 
 	/** Installs the pre-mixin transform chain (Access, compat, the kernel redirectors). Call once, before any load. */
 	public void setTransformer(BiFunction<String, byte[], byte[]> transformer) {
 		this.transformer = transformer == null ? (n, b) -> b : transformer;
+		bytecodeConfiguration.incrementAndGet();
 		// Anything remembered before the chain existed was remembered UNTRANSFORMED. Mixin would then inspect
 		// bytes that do not match the ones this loader defines, which is the one way this cache could be wrong.
 		preMixin.clear();
@@ -120,21 +246,37 @@ public final class ForbricClassLoader extends URLClassLoader {
 	 * bounded by anything the kernel controls, so the JVM is left free to drop them under memory pressure. A drop
 	 * costs one rebuild, which is what every call used to cost.
 	 */
-	private final java.util.Map<String, java.lang.ref.SoftReference<byte[]>> preMixin = new ConcurrentHashMap<>();
+	private final java.util.Map<String, PreMixinEntry> preMixin = new ConcurrentHashMap<>();
 
 	/** False until the transform chain is installed; see {@link #setTransformer}. */
 	private volatile boolean chainInstalled;
 
-	private byte[] rememberedPreMixin(String name) {
-		java.lang.ref.SoftReference<byte[]> held = preMixin.get(name);
-		return held == null ? null : held.get();
+	private byte[] rememberedPreMixin(String name,BytecodeGeneration generation) {
+		PreMixinEntry held = preMixin.get(name);
+		return held == null || !held.generation.equals(generation) ? null : held.bytes.get();
 	}
 
-	private void rememberPreMixin(String name, byte[] bytes) {
+	private void rememberPreMixin(String name, byte[] bytes,BytecodeGeneration generation) {
 		// Never before the chain is installed: the answer would be the untransformed class, and it would then be
 		// handed out for the rest of the run.
-		if (chainInstalled) preMixin.put(name, new java.lang.ref.SoftReference<>(bytes));
+		if (chainInstalled) {
+			PreMixinEntry entry=new PreMixinEntry(generation,new java.lang.ref.SoftReference<>(bytes));preMixin.put(name,entry);
+			if(!isBytecodeGenerationCurrent(name,generation))preMixin.remove(name,entry);
+		}
 	}
+	private java.util.concurrent.atomic.AtomicReference<ClassEpoch> epoch(String name){return bytecodeEpochs.computeIfAbsent(name,ignored->new java.util.concurrent.atomic.AtomicReference<>(new ClassEpoch(0,null)));}
+	/** A lock-free inspection generation. Transform work must never hold a target's class-loading lock. */
+	public BytecodeGeneration bytecodeGeneration(String requested){String name=requested.replace('/','.');for(;;){ClassEpoch state=epoch(name).get();if(state.registration!=null){if(state.registration==Thread.currentThread())throw new IllegalStateException("Class-byte inspection during registration of "+name);java.util.concurrent.locks.LockSupport.parkNanos(100_000);continue;}long configuration=bytecodeConfiguration.get();if(epoch(name).get()==state)return new BytecodeGeneration(configuration,state);}}
+	public boolean isBytecodeGenerationCurrent(String requested,BytecodeGeneration generation){if(generation==null)return false;ClassEpoch state=epoch(requested.replace('/','.')).get();return state.registration==null&&generation.configuration==bytecodeConfiguration.get()&&generation.target==state;}
+	private void invalidateBytecode(String name){epoch(name).updateAndGet(state->new ClassEpoch(state.version+1,state.registration));preMixin.remove(name);}
+	/** Register metadata only while this loader has not defined/initiated the target. The callback must publish
+	 * its own plan atomically; arbitrary Runnable side effects cannot be rolled back by a bytecode cache. Even
+	 * when it throws, every reader built during the attempt is invalidated before inspection can resume. */
+	public boolean registerBeforeDefinition(String requested,Runnable registration){String name=requested.replace('/','.');java.util.Objects.requireNonNull(registration);synchronized(getClassLoadingLock(name)){
+		if(findLoadedClass(name)!=null||activeDefinitions.contains(name))return false;var epoch=epoch(name);ClassEpoch before=epoch.get();if(before.registration!=null)throw new IllegalStateException("Nested registration of "+name);
+		epoch.set(new ClassEpoch(before.version+1,Thread.currentThread()));preMixin.remove(name);
+		try{registration.run();return true;}finally{epoch.updateAndGet(state->new ClassEpoch(state.version+1,null));preMixin.remove(name);}
+	}}
 
 	/**
 	 * Jars that were SUPERSEDED by another copy of the same mod, consulted ONLY when a class is in no owned jar.
@@ -180,7 +322,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 		String binary = internalName.replace('/', '.');
 		generatedClasses.put(binary, bytes);
 		// Whatever Mixin was shown for this name before is no longer what the loader will define.
-		preMixin.remove(binary);
+		invalidateBytecode(binary);
 	}
 
 	/**
@@ -206,8 +348,13 @@ public final class ForbricClassLoader extends URLClassLoader {
 		// transformers compare binary names, so a slashed name would silently skip every repair and the caller
 		// would be handed bytes the game never runs — and the cache would hold two entries for one class.
 		String name = requested.replace('/', '.');
-		byte[] remembered = rememberedPreMixin(name);
-		if (remembered != null) return remembered;
+		for(;;){BytecodeGeneration generation=bytecodeGeneration(name);byte[] remembered=rememberedPreMixin(name,generation);
+			if(remembered!=null&&isBytecodeGenerationCurrent(name,generation))return remembered;
+			byte[] result=buildPreMixinClassBytes(name);if(!isBytecodeGenerationCurrent(name,generation))continue;
+			if(result!=null)rememberPreMixin(name,result,generation);if(isBytecodeGenerationCurrent(name,generation))return result;
+		}
+	}
+	private byte[] buildPreMixinClassBytes(String name){
 
 		String path = name.replace('.', '/') + ".class";
 		URL resource = findResource(path);
@@ -228,8 +375,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 
 			byte[] transformed = transformer.apply(name, raw);
 			byte[] result = transformed == null ? raw : transformed;
-			rememberPreMixin(name, result);
-			return result;
+			return net.forbric.kernel.mixin.MixinOperationSeamTransport.transform(this, name, net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.transform(this, name, result));
 		}
 
 		try (InputStream in = parent.getResourceAsStream(path)) {
@@ -278,6 +424,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 		synchronized (getClassLoadingLock(binaryName)) {
 			Class<?> existing = findLoadedClass(binaryName);
 			if (existing != null) return existing;
+			if(epoch(binaryName).get().registration!=null)throw new IllegalStateException("Class definition during registration of "+binaryName);
 			definePackageIfNeeded(binaryName, null); // generated class, no owning jar
 			return define(binaryName, bytes, null);
 		}
@@ -324,6 +471,10 @@ public final class ForbricClassLoader extends URLClassLoader {
 	 * not generate it either, this returns {@code null} and the caller falls back to the parent.
 	 */
 	private Class<?> tryDefineGameClass(String name) {
+		if(epoch(name).get().registration!=null)throw new IllegalStateException("Class definition during registration of "+name);
+		boolean outer=activeDefinitions.add(name);try{return buildAndDefineGameClass(name);}finally{if(outer)activeDefinitions.remove(name);}
+	}
+	private Class<?> buildAndDefineGameClass(String name) {
 		String path = name.replace('.', '/') + ".class";
 		URL resource = findResource(path); // this loader's own URLs only
 		byte[] bytes = null;
@@ -364,12 +515,92 @@ public final class ForbricClassLoader extends URLClassLoader {
 			}
 		}
 
-		byte[] woven = mixinTransformer.apply(name, bytes);
+		bytes = net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.transform(this, name, bytes);
+		bytes = net.forbric.kernel.mixin.MixinOperationSeamTransport.transform(this, name, bytes);
+		java.util.ArrayDeque<OpenWeave> open = weaving.get();
+		OpenWeave weave = new OpenWeave(name);
+		open.addLast(weave);
+		byte[] woven;
+		try {
+			woven = mixinTransformer.apply(name, bytes);
+		} finally {
+			open.removeLast();
+		}
+		if (!weave.classes.isEmpty()) reportDeferrals(weave);
 		if (woven != null) bytes = woven;
 		if (bytes == null) return null;
+		// Defined from inside another class's weave -- where Mixin builds and consults every config plugin, and where
+		// it refuses to weave anything else. Verifying this class must not define classes Mixin cannot weave yet.
+		if (!open.isEmpty()) bytes = deferLinkTimeTypes(bytes, open.peekLast(), name);
 
 		definePackageIfNeeded(name, resource);
-		return define(name, bytes, domainFor(resource));
+		Class<?> defined = define(name, bytes, domainFor(resource));
+		// A platform carrier's class whose superclass another platform's carrier serves: the merged base's proved
+		// ancestor bridge, reported once as it takes effect. See PlatformAncestorBridges.
+		if (resource != null && !runtimeJarFamilies.isEmpty())
+			ancestorBridges.observe(bytes, familyOfUrl(resource, runtimeJarFamilies), this::carrierOfClass);
+		return defined;
+	}
+
+	/**
+	 * {@code bytes} rewritten so that verifying it resolves no class this loader has yet to define. Reached only for a
+	 * class defined while {@code weave} is open on this thread; what it deferred is reported with that weave.
+	 */
+	private byte[] deferLinkTimeTypes(byte[] bytes, OpenWeave weave, String name) {
+		if ("off".equalsIgnoreCase(net.forbric.kernel.util.ForbricSwitches.get(DEFER_LINK_TIME_TYPES, "on"))) return bytes;
+		VerifierTypeDeferral.Result result = VerifierTypeDeferral.rewrite(bytes, this::notYetDefined, this::supertypesOf);
+		if (!result.changed()) return bytes;
+		weave.classes.add(name);
+		for (String type : result.deferred()) weave.types.add(type.replace('/', '.'));
+		weave.casts += result.casts();
+		return result.bytes();
+	}
+
+	/** One line per weave that had classes defined inside it whose verification would have defined others. */
+	private static void reportDeferrals(OpenWeave weave) {
+		ForbricLog.info("[Forbric/Mixin] while Mixin wove %s (it weaves nothing else until that returns, and the first "
+				+ "weave is where it builds every config plugin), %d class(es) were defined whose verification could have "
+				+ "defined %s, which Mixin would have had to leave unwoven. Those checks now run with the code (%d cast(s)), "
+				+ "so those classes are defined later, with their mixins. Deferred in: %s", weave.name, weave.classes.size(),
+				abbreviate(weave.types), weave.casts, abbreviate(weave.classes));
+	}
+
+	private static String abbreviate(java.util.Collection<String> names) {
+		List<String> all = List.copyOf(names);
+		return all.size() <= 12 ? all.toString() : all.subList(0, 12) + " and " + (all.size() - 12) + " more";
+	}
+
+	/** A class this loader would define from its own jars and has not defined yet. Internal name. */
+	private boolean notYetDefined(String internalName) {
+		return findLoadedClass(internalName.replace('/', '.')) == null && findResource(internalName + ".class") != null;
+	}
+
+	/** The direct supertypes of a class in this loader's own jars, read from its bytes without defining it. */
+	private String[] supertypesOf(String internalName) {
+		URL resource = findResource(internalName + ".class");
+		byte[] bytes = resource == null ? null : read(resource);
+		if (bytes == null) return null;
+		try {
+			org.objectweb.asm.ClassReader reader = new org.objectweb.asm.ClassReader(bytes);
+			String[] interfaces = reader.getInterfaces();
+			String[] all = new String[interfaces.length + 1];
+			all[0] = reader.getSuperName();
+			System.arraycopy(interfaces, 0, all, 1, interfaces.length);
+			return all;
+		} catch (RuntimeException unreadable) {
+			return null;
+		}
+	}
+
+	/** The platform runtime carrier this loader serves {@code internalName} from, or null. */
+	private LoaderProbePolicy.Family carrierOfClass(String internalName) {
+		URL resource = findResource(internalName + ".class");
+		return resource == null ? null : familyOfUrl(resource, runtimeJarFamilies);
+	}
+
+	/** The cross-platform ancestor edges this loader has defined so far. */
+	java.util.List<PlatformAncestorBridges.Bridge> platformAncestorBridges() {
+		return ancestorBridges.observed();
 	}
 
 	/**
@@ -396,11 +627,21 @@ public final class ForbricClassLoader extends URLClassLoader {
 	 */
 	private Class<?> define(String name, byte[] bytes, ProtectionDomain domain) {
 		traceDefine(name);
+		ancestorCompositions.verify(name, bytes, path -> {
+			try (InputStream input = getGameResourceAsStream(path)) { return input == null ? null : input.readAllBytes(); }
+			catch (IOException unavailable) { return null; }
+		});
 		try {
 			Class<?> defined = defineClass(name, bytes, 0, bytes.length, domain);
+			DefinedGetterFields.observe(this, name, bytes);
 			definitionEvidence.defined(name, bytes);
+			net.forbric.kernel.boot.DefinedMethodContracts.observe(this, name, bytes);
+			net.forbric.kernel.boot.SharedFinalSourceContracts.observeDefinition(this, name, bytes);
+			net.forbric.kernel.mixin.MixinCrossHostPredicateIsland.observeDefinition(name, bytes);
+			net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.observeDefinition(this, name, bytes);
+			net.forbric.kernel.mixin.MixinOperationSeamTransport.observeDefinition(this, name, bytes);
 			net.forbric.kernel.mixin.FinalMixinApplications.onClassDefined(name, bytes);
-			net.forbric.kernel.mixin.SupersededMixins.observeDefinition(name, bytes);
+			net.forbric.kernel.mixin.SupersededMixins.observeDefinition(this, name, bytes);
 			net.forbric.kernel.boot.KernelHudBridge.observeDefinition(name, bytes);
 			return defined;
 		} catch (LinkageError duplicate) {

@@ -16,10 +16,10 @@ import org.objectweb.asm.tree.MethodNode;
 
 import net.fabricmc.api.EnvType;
 import net.forbric.api.Ecosystem;
-import net.forbric.kernel.mixin.CreateStructureMixinAdapter;
+import net.forbric.kernel.mixin.MixinStructurePlacementAdapter;
 
 /**
- * {@code CreateStructureMixinAdapter} through the real weave: Create Fly's three StructureTemplate hooks, written for
+ * {@code MixinStructurePlacementAdapter} through the real weave: Create Fly's three StructureTemplate hooks, written for
  * vanilla's {@code placeEntities}, on a merged StructureTemplate whose placeInWorld hands its entities to NeoForge's
  * {@code addEntitiesToWorld} instead.
  *
@@ -27,7 +27,7 @@ import net.forbric.kernel.mixin.CreateStructureMixinAdapter;
  * code says whether all three hooks moved together: the processor is picked up before the entities are added
  * ({@code setProcessors}), applied to them while they are iterated ({@code getIterator}), and dropped afterwards
  * ({@code clearProcessors}) — a second placement that still sees it would mean the cleanup stayed behind. With
- * {@code -Dforbric.createStructureMixin=off} none of the three binds: both placements add plain entities and each
+ * {@code -Dforbric.structurePlacementCallbacks=off} none of the three binds: both placements add plain entities and each
  * hook is the mod's required loss — with MixinRetarget's R7 off too, since R7 now moves the two {@code @Inject}s (the
  * pickup's point, the cleanup's selector) along MergedBaseCalleeSwaps' REPLACED row for any Fabric mod. With only the
  * adapter off, R7 binds those two and the iterator wrap inside the method, this adapter's own move, is the one loss.
@@ -51,7 +51,7 @@ class CreateStructureMixinAdapterWeaveTest {
 
 	@BeforeAll static void weave() throws Exception {
 		String structure = "net/minecraft/world/level/levelgen/structure/templatesystem/";
-		fixture = WeaveHarness.fixture(work, "createstructure", List.of(
+		List<Path> sources = new java.util.ArrayList<>(List.of(
 				SOURCES.resolve("net/minecraft/world/level/ServerLevelAccessor.java"),
 				SOURCES.resolve("net/minecraft/world/level/Level.java"),
 				SOURCES.resolve("net/minecraft/core/BlockPos.java"),
@@ -62,11 +62,18 @@ class CreateStructureMixinAdapterWeaveTest {
 				SOURCES.resolve(structure + "StructureTemplate.java"),
 				SOURCES.resolve("fixture/createstructure/ControlProcessor.java"),
 				SOURCES.resolve("fixture/createstructure/Probe.java"),
-				SOURCES.resolve("com/zurrtum/create/mixin/StructureTemplateMixin.java")),
-				Map.of(CONFIG, SOURCES.resolve(CONFIG)));
+				SOURCES.resolve("com/zurrtum/create/mixin/StructureTemplateMixin.java")));
+        Path shared=Path.of("src/test/resources/weave/replacedcall");sources.addAll(List.of(shared.resolve("net/minecraft/world/level/block/Mirror.java"),shared.resolve("net/minecraft/world/level/block/Rotation.java"),shared.resolve("net/minecraft/world/level/levelgen/structure/BoundingBox.java")));
+        fixture=WeaveHarness.fixture(work,"createstructure",sources,Map.of(CONFIG,SOURCES.resolve(CONFIG)));
+        Path target=SOURCES.resolve(structure+"StructureTemplate.java"),nativeTarget=work.resolve("native/StructureTemplate.java");java.nio.file.Files.createDirectories(nativeTarget.getParent());
+        String nativeCode=java.nio.file.Files.readString(target)
+            .replace("addEntitiesToWorld(level, pos, settings, new ProblemReporter())", "placeEntities(level,pos,settings.getMirror(),settings.getRotation(),settings.getRotationPivot(),settings.getBoundingBox(),settings.shouldFinalizeEntities(),new ProblemReporter())")
+            .replace("private void addEntitiesToWorld(ServerLevelAccessor level, BlockPos pos, StructurePlaceSettings settings, ProblemReporter reporter)","private void placeEntities(ServerLevelAccessor level,BlockPos pos,net.minecraft.world.level.block.Mirror mirror,net.minecraft.world.level.block.Rotation rotation,BlockPos pivot,net.minecraft.world.level.levelgen.structure.BoundingBox box,boolean fin,ProblemReporter reporter)");
+        java.nio.file.Files.writeString(nativeTarget,nativeCode);List<Path> originalSources=new java.util.ArrayList<>(sources);originalSources.remove(target);originalSources.add(nativeTarget);
+        Path original=WeaveHarness.fixture(work,"original",originalSources,Map.of());fixture=NativeWeaveReferences.with(work,fixture,NativeWeaveReferences.classes(original));
 		adapted = run("adapted", Map.of());
-		off = run("adapter-off", Map.of(CreateStructureMixinAdapter.PROPERTY, "off", "forbric.mixinRetarget.replacedCall", "off"));
-		r7Only = run("r7-only", Map.of(CreateStructureMixinAdapter.PROPERTY, "off"));
+		off = run("adapter-off", Map.of(MixinStructurePlacementAdapter.PROPERTY, "off", "forbric.mixinRetarget.replacedCall", "off"));
+		r7Only = run("r7-only", Map.of(MixinStructurePlacementAdapter.PROPERTY, "off"));
 	}
 
 	/** R7 alone: the pickup and the cleanup follow the replaced call, the iterator wrap is the adapter's and is lost. */

@@ -73,13 +73,15 @@ step "launch the client into $WORLD via quick-play ($(ls -1 "$RUNDIR/mods"/*.jar
 #   -Dforbric.blockStateCaches=off -> 1 red ("every block state's cache is computed"). Off, a block a mod
 #                                      registered carries an uninitialised cache all run. Vanilla computes it
 #                                      lazily, so this is a hot-path repair, not a crash repair — the Lithium
-#                                      crash it was once credited with is forbric.blockInfoCaches, below.
-#   -Dforbric.blockInfoCaches=off  -> 1 red ("a mod's whole-registry block pass covers the late wave too"). Off,
-#                                      every block the kernel registers after Lithium's one pass (fired from
-#                                      FuelValues.vanillaBurnTimes) misses it, and Lithium throws rather than
-#                                      computing a missed state's flags later: verified on Windows as "Could not
-#                                      initialize block state flags for Block{biomesoplenty:fir_leaves}" during
-#                                      feature placement. The blockstate→id map half is M26's.
+#                                      crash it was once credited with is forbric.registryElementCallbacks, below.
+#   -Dforbric.registryElementCallbacks=off  -> 1 red ("a closed block-state walk is instrumented"). Off, a block
+#                                      registered after Lithium's one pass (fired from FuelValues.vanillaBurnTimes)
+#                                      misses it, and Lithium throws rather than computing a missed state's flags
+#                                      later: verified on Windows as "Could not initialize block state flags for
+#                                      Block{biomesoplenty:fir_leaves}" during feature placement. In THIS pack the
+#                                      pass now fires at world start, after the last registration, so there is no
+#                                      late wave for the switch to lose — see the check itself, below.
+#                                      The blockstate→id map half is M26's.
 #   -Dforbric.splitterPacketContext=off -> 2 red ("NeoForge's splitter encodes in Fabric's packet context",
 #                                      and the anchor census noticing a repair that was handed its target and
 #                                      declined — which is the switch working, said twice).
@@ -141,13 +143,15 @@ check_absent "no repair was handed its target and declined" "Forbric/Anchor\] .*
 # pack: 23 matched nothing — 16 AT lines naming members this Minecraft does not have at all (journeymap's
 # SRG-named fields and 1.x members), 6 AT methods whose name is there under another descriptor (an overload this
 # Minecraft lacks or a merge re-typing — not judged: bagus_lib's Model.animate, YACL's and Jade's constructors,
-# sophisticatedcore's recipe builders), all of which a native loader ignores the same and which mark nobody — and
-# The featuresPerStep request initially misses before COREMOD restores its descriptor. The access-only replay
-# now applies the missed directive to the actual restored member before Mixin; require that evidence and no
-# remaining ecosystem re-typing, rather than pinning the former unresolved diagnostic as a success.
+# sophisticatedcore's recipe builders), all of which a native loader ignores the same and which mark nobody.
+# Every access WIDENER found its member. fabric-biome-api's featuresPerStep one used to miss at ACCESS and be
+# replayed after a COREMOD repair gave the field vanilla's descriptor back; the merged base now keeps both
+# descriptors itself, so it matches first time and nothing is replayed. "0 AW" holds either way, which is the
+# point: it asserts the outcome (no widener left unmatched), not which path got it there. The replay itself is
+# RestoredAccessTransformerTest's.
 check        "the access census ran"               "Forbric/Access\] [0-9]+ directive\(s\) matched nothing across [1-9][0-9]* transformed class" "$LOG"
 check        "no directive remains re-typed by an ecosystem" "Forbric/Access\] [0-9]+ directive\(s\) matched nothing.*: 0 re-typed by an ecosystem" "$LOG"
-check        "access rules reached restored members" "Forbric/Access\] replayed [1-9][0-9]* previously unmatched directive" "$LOG"
+check        "every access widener reached its member" "Forbric/Access\] [0-9]+ directive\(s\) matched nothing across [0-9]+ transformed class\(es\) \([0-9]+ AT, 0 AW\)" "$LOG"
 check "the window title was read"      "ClientSmoke\] window title: Minecraft"     "$LOG"
 check_absent "…and it names no single loader" "ClientSmoke\] window title: .*(NeoForge|Forge|Fabric)" "$LOG"
 check "left the world cleanly"        "ClientSmoke\] clean disconnect observed"    "$LOG"
@@ -160,8 +164,11 @@ step "the merge did not leave one ecosystem's opt-out binding the other two (cli
 # (NeoForge) has an 8x8 sprite in its own atlas, so the GPU refused the upload, the FIRST resource reload died,
 # Minecraft dropped every pack, reloaded into the same failure -- and the client rendered a BLACK SCREEN for the
 # rest of the run with no crash report and no further log line. That is the worst report shape there is.
+# The repair keeps MinecraftForge's getter and bounds the level SpriteLoader hands the Stitcher by the image-size
+# limit the method itself computed (found by a dataflow proof, not by name). It says so once per bounded method;
+# if the proof ever rejects SpriteLoader, its REQUIRED anchor makes the census above say "made no edit" instead.
 check "an atlas may lower its mip level again" \
-  'Forbric/MergedBaseCompat\] SpriteLoader lowers an atlas' "$LOG"
+  'Forbric/MergedBaseCompat\] net\.minecraft\.client\.renderer\.texture\.SpriteLoader\.[^ ]+ bounds the mip level it allocates' "$LOG"
 check_absent "no resource reload was abandoned" 'Caught error loading resourcepacks' "$LOG"
 check_absent "no atlas was refused by the GPU" 'mipLevels must be at most' "$LOG"
 # MinecraftForge writes a modified binding as key.keyboard.o:CONTROL_OR_COMMAND and then hands that whole string
@@ -360,28 +367,54 @@ check "loot-modifier scan ran and hid the two indexes" "loot-modifier directory 
 # rule); a mod compiled against another NeoForge/MinecraftForge would be named here and DEGRADED on its row.
 check "abi audit ran and found no dangling Forge-family reference" "AbiAudit\] scanned [1-9][0-9]* jar\(s\) in [0-9]+ ms: 0 with dangling" "$LOG"
 check_absent "join negotiation succeeded"   "Network Protocol Error"                           "$LOG"
-# Same treatment for "was loaded too early": pin the SET, because two are upstream behaviour and a third would be
-# ours. Mixin's select() runs selectConfigs -> Extensions.select -> prepareConfigs, so EVERY guest config plugin
+# Same treatment for "was loaded too early": pin the SET, so a new name is a decision rather than a line nobody reads. Mixin's select() runs selectConfigs -> Extensions.select -> prepareConfigs, so EVERY guest config plugin
 # is constructed before ANY config is prepared. A game class that a plugin's static initialiser loads therefore
 # misses every mixin — on any Mixin platform, genuine Fabric and NeoForge included. Measured here with
 # -Dforbric.traceClassDefine=net.minecraft.world.level.BlockGetter, which named the chain Mixin will not:
 #   PluginHandle.<init> -> IrisMixinPlugin.<clinit> -> IrisPlatformHelpers.<clinit> -> ServiceLoader.findFirst()
 #   -> defining IrisForgeHelpers -> loadClass(BlockGetter).
-# Cost is lithium's raycast optimisation and a duck interface nothing in this pack calls. The kernel could defer
-# plugin construction behind a lazy proxy and beat upstream here — deliberately not done: no real loader does
-# that, and fidelity to the genuine contract is worth more than two recovered mixins.
+# On the genuine platforms that costs lithium's raycast optimisation. Under the kernel it no longer happens: a class
+# defined while Mixin is weaving (IrisForgeHelpers here) has the types it only mentions deferred to link time
+# (VerifierTypeDeferral) instead of loaded by the verifier, so BlockGetter is not loaded early and the set is empty.
+# Plugin construction itself is still the genuine contract; any name that appears here now is ours.
 TOO_EARLY=$(grep -aoE 'Critical problem: [^ ]+ from mod' "$LOG" | sed -E 's/Critical problem: (.*) from mod/\1/' | sort -u | paste -sd, -)
-assert_eq "only the known plugin-clinit casualties load too early" \
-  "lithium.mixins.json:world.raycast.BlockGetterMixin" \
+assert_eq "no plugin-clinit casualty loads too early" \
+  "" \
   "$TOO_EARLY"
 check_absent "no registry load failure"     "Failed to load registries due to errors"          "$LOG"
 check_absent "no crash report"              "Preparing crash report"                           "$LOG"
 # Raw-ASM bytecode patching, the kind CustomSkinLoader does instead of Mixin, fails SILENTLY at WARN and takes a
-# whole feature with it. Two ways it has happened here, both fixed and both invisible without this line: the
-# protocol version reading 0 so it picked a pre-1.20.2 patch variant (see run/game-metadata-jar.sh), and Shoulder
-# Surfing's @Redirect DELETING the call site the cape patch scans for (see MergedBaseMixinCompat). Any new one is
-# a mod losing a feature, so it must be a decision rather than a line nobody reads.
-check_absent "no bytecode patch failed"     "did not modify any bytecode"                      "$LOG"
+# whole feature with it, so the SET of patches that found nothing to change is pinned: a new one must be a decision
+# rather than a line nobody reads. The protocol version reading 0 (a pre-1.20.2 patch variant, see
+# run/game-metadata-jar.sh) was the first; it is fixed and stays out.
+#
+# One is expected, and it is not Forbric's to settle. Shoulder Surfing's @Redirect takes the RenderTypes.entitySolid
+# call in CapeLayer.submit, and CustomSkinLoader's cape patch runs from its mixin config plugin's postApply, which
+# Mixin calls only after every injector has been applied. A Fabric game with both mods weaves the same bytes, and so
+# does a NeoForge one: CustomSkinLoader's NeoForge class processor runs after FML's simple-processor group, which runs
+# after neoforge:mixin. This pack used to pin Shoulder Surfing's mixin out by name, which was a built-in mod priority
+# list; now ContendedCallSites names the two mods and the call instead. The capes lose CustomSkinLoader's alpha here
+# exactly as they do with both mods on either loader. CustomSkinLoader says it twice, once for the submit variant and
+# once for the cape-layer group that variant belongs to; nothing else in its render patch may join them.
+PATCH_NOOPS=$(grep -aoE "Patch '[^']+' matched protocol [0-9]+ but did not modify any bytecode" "$LOG" \
+  | sed -E "s/Patch '([^']+)'.*/\1/" | sort -u | paste -sd, -)
+assert_eq "only the reported cape contention leaves a bytecode patch with nothing to change" \
+  "customskinloader:render-patch:cape-layer,customskinloader:render-patch:cape-layer.submit.v2" "$PATCH_NOOPS"
+check "the cape call site contention is reported, naming both mods" \
+  "Forbric/CallSite\] contended call site net\.minecraft\.client\.renderer\.entity\.layers\.CapeLayer\.submit -> RenderTypes\.entitySolid: shouldersurfing's @Redirect .* before customskinloader-bootstrap's post-Mixin patch" "$LOG"
+python3 - "$RUNDIR/.forbric-kernel/compatibility-report.json" <<'PY_CONTENTION'
+import json, pathlib, sys
+report = json.loads(pathlib.Path(sys.argv[1]).read_text())
+rows = [row for row in report['findings'] if row['source'] == 'ContendedCallSites']
+want = 'call-site-contention:net.minecraft.client.renderer.entity.layers.CapeLayer.submit'
+ok = (sorted(row['modId'] for row in rows) == ['customskinloader-bootstrap', 'shouldersurfing']
+      and all(row['id'].startswith(want) and 'RenderTypes;entitySolid' in row['id'] for row in rows)
+      and all(row['confidence'] == 'SUSPECTED' and not row['required'] for row in rows))
+print('[kernel] PASS the contention is in the compatibility report once per mod, as a suspicion' if ok
+      else '[kernel] FAIL the contention is not reported once per mod as a suspicion: ' + str(rows))
+raise SystemExit(0 if ok else 1)
+PY_CONTENTION
+[ $? -eq 0 ] || FAIL=1
 
 step "the pack is honestly provisioned (must PASS)"
 # A genuine NeoForge refuses to launch when a mod's versionRange on neoforge is not satisfied. The kernel parses
@@ -422,7 +455,7 @@ fi
 
 step "the lost BlockGetter interface injection still has no consumer (must PASS)"
 # fabric-block-getter-api-v2's BlockGetterMixin is one of the two mixins lost to a plugin <clinit> loading its
-# target early (pinned in the set above). It is an EMPTY interface-injection mixin: its whole job is to make
+# target early on the genuine platforms (see the set above). It is an EMPTY interface-injection mixin: its whole job is to make
 # net.minecraft.world.level.BlockGetter implement FabricBlockGetter (getBlockEntityRenderData, hasBiomes,
 # getBiomeFabric). Losing it costs nothing while nothing casts to that interface — and today nothing does. The
 # only jar in this pack that implements it is Fabric Sodium's LevelSliceMixin, and Fabric Sodium LOSES
@@ -660,14 +693,15 @@ PY_MALILIB
 
 step "an access directive the kernel already satisfies does not mark its mod (must PASS)"
 # fabric-biome-api's widener asks for ChunkGenerator.featuresPerStep as vanilla's Supplier. MinecraftForge
-# re-typed that field to its own ClearableLazy so refreshFeaturesPerStep() has something to invalidate, and the
-# merge kept only that declaration — so the widener matches nothing and the mod was marked.
+# re-typed that field to its own ClearableLazy so refreshFeaturesPerStep() has something to invalidate, and a
+# merge that kept only that declaration left the widener matching nothing and the mod marked.
 #
-# It loses nothing: the COREMOD repair gives the field vanilla's descriptor back AND makes it public non-final,
-# which is the widener's whole job. The ACCESS phase simply runs first. Both halves are asserted because either
-# alone passes with the judgement broken — the line must SAY what the field is now, and no row may be marked.
-check "the restored directive was replayed" \
-  "Forbric/Access\] replayed [1-9][0-9]* previously unmatched directive" "$LOG"
+# The merged base now keeps BOTH descriptors (the Supplier view reads the live provider cell), so the widener
+# matches at ACCESS and makes the field public non-final, which is its whole job. There is no replay left to
+# count -- a "replayed >= 1" check here would be pinning the old two-step path, not the outcome. Asserted: the
+# directive is not reported unmatched in any form, and no row is marked for it.
+check_absent "fabric-biome-api's widener is not left unmatched" \
+  "Forbric/Access\] AW directive from [^ ]*fabric-biome-api" "$LOG"
 check_absent "and its mod is not marked for it" \
   "Forbric/Access\] AW directive from fabric-biome-api.*the mod is marked" "$LOG"
 
@@ -776,11 +810,26 @@ check "every block state's cache is computed" \
   "\[Forbric/Lifecycle\] initialised [1-9][0-9]* block state cache\(s\)" "$LOG"
 
 # Lithium computes its per-state flags in ONE pass, fired from FuelValues.vanillaBurnTimes, and throws rather
-# than computing a state it missed later. The kernel registers blocks after that point, so the pass has to run
-# again over the whole map. (This pack has no traditional-Forge mod, so it has no SECOND wave of registrations:
-# that half, and the blockstate→id map it also broke, are asserted in M26, which does.)
-check "a mod's whole-registry block pass covers the late wave too" \
-  "\[Forbric/Lifecycle\] re-ran Lithium's block-info pass over all [1-9][0-9]* mapped block state\(s\)" "$LOG"
+# than computing a state it missed later. Any state registered after that pass needs the same callback. The
+# kernel does not know whose pass it is: it recognises any closed per-element walk of a platform registry, proved
+# from data and control flow (RegistryWalkProof) whatever loop the mod wrote -- an iterator loop, an index loop
+# over size()/byId, or forEach on the registry or its sequential stream -- that gives every element the same
+# public no-argument interface callback(s) exactly once and unconditionally, and after which the method does
+# nothing observable but further walks. It records which elements each walk reached, and at each registration
+# close runs the same callback on the ones it did not ("[Forbric/Lifecycle] completed N registry element
+# callback(s) for late registrations"). In this pack the walker is Lithium's, over the block-state registry,
+# which is the one the check below names.
+#
+# Measured on this pack (2026-10-09): the pass fires at WORLD START, from the kernel's fuel bridge running
+# vanillaBurnTimes' return hooks, i.e. after the last registration window. So every state exists when it walks,
+# nothing is late, and the completion line correctly never appears here — the old "re-ran Lithium's pass over
+# all N states" check only passed because the old repair ran Lithium's pass itself, early. What this pack CAN
+# assert is that the walk is recognised and that Lithium never meets a state without its flags. The late
+# completion itself, and the line it prints, are M9MechanismLinesContractTest's.
+check "a closed block-state walk is instrumented" \
+  "\[Forbric/RegistryCallbacks\] [^ ]+ is a closed walk of the block-state registry with [1-9][0-9]* per-element callback\(s\)" "$LOG"
+check_absent "no block state is left without a mod's per-state flags" \
+  "Could not initialize block state flags" "$LOG"
 
 check "NeoForge's splitter encodes in Fabric's packet context" \
   "\[Forbric/Net\] .*GenericPacketSplitter.encode now runs inside the connection's Fabric packet context" "$LOG"

@@ -303,6 +303,11 @@ public final class MixinFit {
 			java.util.function.Predicate<String> gameClass, MixinAddedMembers.View added,
 			NativeAbsentTargets.Context nativeView) {
 		ClassNode mixin = read(mixinBytes, false);
+		// Most checks need only annotation metadata. A same-mixin target also needs the body Mixin will add.
+		if (mixin.methods.stream().anyMatch(MixinFit::selfAddedCandidate)) {
+			mixin = new ClassNode();
+			new ClassReader(mixinBytes).accept(mixin, ClassReader.SKIP_FRAMES);
+		}
 		List<String> targets = mixinTargets(mixin);
 		if (targets.isEmpty()) return new Result(Verdict.FIT, List.of(), 0, 0, List.of());
 
@@ -471,6 +476,7 @@ public final class MixinFit {
 
 	private static List<Anchor> anchorsOf(ClassNode mixin, ClassNode target, Function<String, byte[]> resolver,
 			MixinAddedMembers.View added, String declared, NativeAbsentTargets.Context nativeView) {
+		ClassNode injectionTarget = withSelfAddedMethods(mixin, target);
 		// The target again with its local variable tables, read once and only if an injector needs it.
 		Supplier<ClassNode> withLocals = new Supplier<>() {
 			private ClassNode read;
@@ -482,6 +488,7 @@ public final class MixinFit {
 					if (bytes != null) {
 						read = new ClassNode();
 						new ClassReader(bytes).accept(read, ClassReader.SKIP_FRAMES);
+						read = withSelfAddedMethods(mixin, read);
 					}
 				}
 				return read;
@@ -534,13 +541,44 @@ public final class MixinFit {
 			AnnotationNode injector = injectorOf(m);
 			if (injector == null) continue;
 			int first = out.size();
-			injectorAnchors(mixin, m, injector, target, resolver, withLocals, nativeView, out);
+			injectorAnchors(mixin, m, injector, injectionTarget, resolver, withLocals, nativeView, out);
 			String group = groupOf(m);
 			if (group != null) {
 				for (int i = first; i < out.size(); i++) out.get(i).alternativeOf(group, m);
 			}
 		}
 		return countsGroups() ? settleGroups(out) : out;
+	}
+
+	/** An injector may select a concrete @Unique method which this same mixin adds before injection preparation.
+	 * Existing target members win. Abstract/shadow/injector methods cannot fabricate a target. */
+	static ClassNode withSelfAddedMethods(ClassNode mixin, ClassNode target) {
+		if (mixin == null || target == null) return target;
+		List<MethodNode> added = new ArrayList<>();
+		for (MethodNode method : mixin.methods) {
+			if (!selfAddedCandidate(method) || method.instructions == null || method.instructions.size() == 0) continue;
+			if (target.methods.stream().anyMatch(m -> m.name.equals(method.name) && m.desc.equals(method.desc))) continue;
+			added.add(method);
+		}
+		if (added.isEmpty()) return target;
+		ClassNode view = new ClassNode(); target.accept(view);
+		for (MethodNode method : added) {
+			MethodNode copy = new MethodNode(method.access, method.name, method.desc, method.signature,
+					method.exceptions == null ? null : method.exceptions.toArray(String[]::new));
+			method.accept(copy); view.methods.add(copy);
+		}
+		return view;
+	}
+
+	private static boolean selfAddedCandidate(MethodNode method) {
+		return !method.name.startsWith("<") && (method.access & (Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE)) == 0
+				&& injectorOf(method) == null
+				&& !has(method.visibleAnnotations, SHADOW_DESC) && !has(method.invisibleAnnotations, SHADOW_DESC)
+				&& !has(method.visibleAnnotations, OVERWRITE_DESC) && !has(method.invisibleAnnotations, OVERWRITE_DESC)
+				&& !has(method.visibleAnnotations, ACCESSOR_DESC) && !has(method.invisibleAnnotations, ACCESSOR_DESC)
+				&& !has(method.visibleAnnotations, INVOKER_DESC) && !has(method.invisibleAnnotations, INVOKER_DESC)
+				&& (has(method.visibleAnnotations, "Lorg/spongepowered/asm/mixin/Unique;")
+					|| has(method.invisibleAnnotations, "Lorg/spongepowered/asm/mixin/Unique;"));
 	}
 
 	/** Whether a mixin applied first adds the member to the target, by the name the mixin declares it or its home. */
@@ -706,8 +744,14 @@ public final class MixinFit {
 					if (MixinAtWidenedCall.widenedIn(hit, atTarget) != null) { anywhere = true; break; }
 				}
 			} else if (!anywhere) {
-				anywhere = MixinAtWidenedCall.wouldMove(m, injector, target.methods, atValue, atTarget) != null
-						|| MixinWrapOperationShim.wouldWrap(mixin.name, m, target.methods) != null
+				ClassNode wideningTarget = target;
+				if (injector.desc.equals("Lorg/spongepowered/asm/mixin/injection/ModifyArg;")
+						&& org.objectweb.asm.Type.getArgumentTypes(m.desc).length > 1) {
+					ClassNode completeTarget = withLocals.get();
+					if (completeTarget != null) wideningTarget = completeTarget;
+				}
+				anywhere = MixinAtWidenedCall.wouldMove(m, injector, wideningTarget.methods, atValue, atTarget) != null
+						|| MixinWrapOperationShim.wouldWrap(mixin, m, target) != null
 						// …and MixinSubtypeOwnerRetarget's: the same call through another owner (Decoder.parse made as
 						// Codec.parse, Monster.lookAt made as Mob.lookAt through the field the merge widened).
 						|| MixinSubtypeOwnerRetarget.wouldMove(mixin.name, m, injector, atTarget, target,
@@ -1017,6 +1061,7 @@ public final class MixinFit {
 		for (String targetName : mixinTargets(mixin)) {
 			ClassNode target = targets.apply(targetName);
 			if (target == null || target.methods == null) return null;
+			target = withSelfAddedMethods(mixin, target);
 			Set<MethodNode> bound = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 			String refusal = null;
 			for (String selector : selectors) {
@@ -1354,6 +1399,9 @@ public final class MixinFit {
 		// writes "…EntityRenderer.createRenderState ()Lnet/…/EntityRenderState;" with a space before the descriptor.
 		// Keeping it turned the name into "createRenderState " and no instruction ever matched — the same
 		// cries-wolf failure as the dotted owner below, and visible in the report as a tell-tale double space.
+		// A point with no target at all (MixinExtras' EXPRESSION, NEW by class) names no member: an adapter
+		// that asked about one must not throw inside Mixin's read of the mixin, which drops the whole mixin.
+		if (target == null) return null;
 		String s = target.replaceAll("\\s+", "");
 		if (s.isEmpty() || s.indexOf('*') >= 0) return null;
 
@@ -1532,7 +1580,7 @@ public final class MixinFit {
 		return read(bytes, true);
 	}
 
-	static AnnotationNode injectorOf(MethodNode m) {
+	public static AnnotationNode injectorOf(MethodNode m) {
 		AnnotationNode a = firstOf(m.visibleAnnotations);
 		return a != null ? a : firstOf(m.invisibleAnnotations);
 	}
@@ -1546,7 +1594,7 @@ public final class MixinFit {
 	}
 
 	/** The {@code @At} annotations nested in an injector's {@code at}/{@code slice} values. */
-	static List<AnnotationNode> atNodes(AnnotationNode injector) {
+	public static List<AnnotationNode> atNodes(AnnotationNode injector) {
 		List<AnnotationNode> out = new ArrayList<>();
 		Object at = value(injector, "at");
 		if (at instanceof AnnotationNode single && AT_DESC.equals(single.desc)) {
@@ -1559,7 +1607,7 @@ public final class MixinFit {
 		return out;
 	}
 
-	static Object value(AnnotationNode a, String key) {
+	public static Object value(AnnotationNode a, String key) {
 		if (a == null || a.values == null) return null;
 		for (int i = 0; i + 1 < a.values.size(); i += 2) {
 			if (key.equals(a.values.get(i))) return a.values.get(i + 1);
@@ -1567,7 +1615,7 @@ public final class MixinFit {
 		return null;
 	}
 
-	static List<String> stringList(Object value) {
+	public static List<String> stringList(Object value) {
 		if (value instanceof String s) return List.of(s);
 		if (!(value instanceof List<?> list)) return Collections.emptyList();
 		List<String> out = new ArrayList<>();

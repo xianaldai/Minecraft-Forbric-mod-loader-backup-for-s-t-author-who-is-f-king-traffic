@@ -67,6 +67,22 @@ class WeaveCoverageCensusTest {
 			// The subtype pair in MixinSubtypeOwnerRetargetWeaveTest, the widened field in MixinRetypedFieldOwnerWeaveTest.
 			Map.entry("MixinSubtypeOwnerRetarget", Switch.own("forbric.mixinSubtypeOwner", "forbric.mixinSubtypeOwner.retypedField")),
 			Map.entry("MixinWrapOperationShim", Switch.own("forbric.wrapOperationShim")),
+			Map.entry("MixinCollectionSourceAdapter", Switch.own("forbric.mixinCollectionSources")), // MixinCollectionSourceWeaveTest
+			Map.entry("MixinSharedResultTransport", Switch.own("forbric.mixinSharedResults")), // MixinSharedResultTransportWeaveTest
+			Map.entry("MixinDefaultPredicateAdapter", Switch.own("forbric.mixinDefaultPredicates")), // MixinDefaultPredicateAdapterWeaveTest
+			Map.entry("MixinDefaultPredicateTransport", Switch.own("forbric.mixinDefaultPredicates")), // MixinDefaultPredicateTransportWeaveTest
+			Map.entry("MixinReturnDecorationAdapter", Switch.own("forbric.mixinReturnDecorations")), // MixinReturnDecorationWeaveTest
+			Map.entry("MixinDefaultCallbackTransport", Switch.own("forbric.mixinDefaultCallbacks")), // MixinDefaultCallbackTransportWeaveTest
+			Map.entry("MixinNativePredicateSeam", Switch.own("forbric.nativePredicateSeams")), // MixinNativePredicateSeamWeaveTest
+			Map.entry("MixinAbsorbedCallbackTransport", new Switch(List.of("forbric.mixinAbsorbedCall"), "net.forbric.kernel.mixin.MergedBaseAbsorbedCalls")), // MixinAbsorbedCallbackTransportWeaveTest
+			Map.entry("MixinOperationSeamTransport", Switch.own("forbric.operationSeams", "forbric.operationSeams.locals")), // MixinOperationSeamTransportWeaveTest
+			Map.entry("MixinSharedPredicateSeam", Switch.own("forbric.sharedPredicateSeams")), // MixinSharedPredicateSeamWeaveTest
+			Map.entry("MixinCrossHostPredicateIsland", Switch.own("forbric.crossHostPredicateIslands")), // MixinCrossHostPredicateIslandWeaveTest
+			Map.entry("MixinPredicateDelegateAdapter", Switch.own("forbric.mixinPredicateDelegates")), // MixinPredicateDelegateWeaveTest
+			Map.entry("MixinResourceContinuationAdapter", Switch.own("forbric.mixinResourceContinuations")), // MixinResourceContinuationWeaveTest
+			Map.entry("MixinNullableCompositeCallback", Switch.own("forbric.mixinNullableCompositeCallbacks")), // MixinNullableCompositeWeaveTest
+			Map.entry("MixinDecodeScopeAdapter", Switch.own("forbric.decodeSourceScopes")), // MixinDecodeScopeWeaveTest
+			Map.entry("MixinUnusedArgumentObserverAdapter", Switch.own("forbric.mixinUnusedArgumentObservers")), // MixinUnusedArgumentObserverWeaveTest
 			Map.entry("MixinRelocatedCall", Switch.own("forbric.mixinRelocatedCall")),
 			// soften() in MixinLocalsCaptureWeaveTest, softenRequirements() in MixinRequireFailSoftWeaveTest.
 			Map.entry("MixinLocalsCapture", Switch.own("forbric.localsFailSoft", "forbric.requireFailSoft")),
@@ -78,19 +94,21 @@ class WeaveCoverageCensusTest {
 			Map.entry("MixinHandlerShim", Switch.own("forbric.mixinHandlerShim")),
 			Map.entry("MixinAnonymousRetarget", Switch.own("forbric.mixinAnonymousDrift")),
 			Map.entry("InterfaceDefaultConflictRepair", Switch.own("forbric.defaultConflictRepair")),
-			Map.entry("BarrelRollCameraAdapter", Switch.own("forbric.barrelRollCamera")),
+			Map.entry("MixinCameraRollAdapter", Switch.own("forbric.cameraRollCallbacks")),
 			Map.entry("ReplacedCallRedirects", Switch.own("forbric.replacedCallRedirects")), // ReplacedCallRedirectsWeaveTest
 			Map.entry("MixinTwinRebind", Switch.own("forbric.mixinTwinRebind")), // MixinTwinRebindWeaveTest
 			Map.entry("ThinnedCallOrdinals", Switch.own("forbric.thinnedCallOrdinals")), // ThinnedCallOrdinalsWeaveTest
-			Map.entry("GuiItemCaptureMixinAdapter", Switch.own("forbric.guiItemCaptureAnchor")),
+			Map.entry("MixinGuiItemCaptureAdapter", Switch.own("forbric.guiItemCaptureAnchor")),
 			Map.entry("KernelClientHookMixinAnchors", Switch.own("forbric.clientHookMixinAnchors")),
 			Map.entry("MixinShearsRelay", Switch.own("forbric.shearsRelay")),
 			Map.entry("InsertedLambdaArgumentShim", Switch.own("forbric.insertedLambdaArguments")),
-			Map.entry("CarpetMixinAdapter", Switch.own("forbric.carpetMixins")),
-			// CarpetFluidMixinAdapter stands down with CarpetMixinAdapter's switch, which both read through its enabled().
-			Map.entry("CarpetFluidMixinAdapter", new Switch(List.of("forbric.carpetMixins"), "net.forbric.kernel.mixin.CarpetMixinAdapter")),
+			Map.entry("MixinPlayerWorldCallbackAdapter", Switch.own("forbric.playerWorldCallbacks")),
+			// MixinFluidReactionAdapter stands down with MixinPlayerWorldCallbackAdapter's switch, which both read through its enabled().
+			Map.entry("MixinFluidReactionAdapter", new Switch(List.of("forbric.playerWorldCallbacks"), "net.forbric.kernel.mixin.MixinPlayerWorldCallbackAdapter")),
 			Map.entry("NativeCoremodParity", Switch.own("forbric.flowerPotRepair")), // NativeCoremodParityWeaveTest
 			Map.entry("PostMixinFixups", Switch.own("forbric.postMixinFixups")), // PostMixinFixupsWeaveTest
+			Map.entry("PostMixinCodecReturnArbitration", Switch.own("forbric.postMixinCodecArbitration")), // PostMixinCodecReturnArbitrationWeaveTest
+			Map.entry("PostMixinCallbackPriority", Switch.own()), // MixinNullableCompositeWeaveTest's absent installed-callback control
 			// An audit with no switch: ForgeTransferShapeAuditWeaveTest's control is an unreviewed twin in the same run.
 			Map.entry("ForgeTransferShapeAudit", Switch.own()),
 			Map.entry("FabricRegistryInitializationMixinAdapter", Switch.own("forbric.fabricRegistryInitialization")),
@@ -107,18 +125,21 @@ class WeaveCoverageCensusTest {
 			Map.entry("FabricClientMixinAnchors", Switch.own("forbric.fabricClientAnchors")),
 			Map.entry("FabricBlockBreakMixinAdapter", Switch.own("forbric.fabricBlockBreak")),
 			Map.entry("FabricSectionCompilerMixinAdapter", Switch.own("forbric.fabricChunkRendering")),
-			Map.entry("CreateStructureMixinAdapter", Switch.own("forbric.createStructureMixin")),
-			Map.entry("CreateKeyboardMixinAdapter", Switch.own("forbric.createKeyboardMixin")),
-			Map.entry("ContinuitySpriteMixinAdapter", Switch.own("forbric.continuitySpriteSources")),
-			Map.entry("CreateFluidMixinAdapter", Switch.own("forbric.createFluidMixins")),
-			Map.entry("CreateInjectionAdapters", Switch.own("forbric.createInjectionAdapters")),
-			Map.entry("CreateInteractionMixinAdapters", Switch.own("forbric.createInteractionMixins")),
-			Map.entry("CreateContextualBlockAdapters", Switch.own("forbric.createContextualBlocks")),
-			Map.entry("CreateEntitySoundMixinAdapter", Switch.own("forbric.createEntitySounds")),
-			Map.entry("CreateBreathingMixinAdapter", Switch.own("forbric.createBreathingMixin")),
-			Map.entry("CreateHudMixinAdapter", Switch.own("forbric.createHudMixin")),
+			Map.entry("MixinStructurePlacementAdapter", Switch.own("forbric.structurePlacementCallbacks")),
+			Map.entry("MixinKeyActionAdapter", Switch.own("forbric.keyActionCallbacks")),
+			Map.entry("MixinSpriteLoaderCallbackAdapter", Switch.own("forbric.spriteLoaderCallbacks")),
+			Map.entry("MixinFluidInteractionAdapter", Switch.own("forbric.fluidInteractionCallbacks")),
+			Map.entry("MixinCarrierCallbackAdapters", Switch.own("forbric.carrierCallbackAdapters")),
+			Map.entry("MixinBlockInteractionAdapters", Switch.own("forbric.blockInteractionAdapters")),
+			Map.entry("MixinBlockQueryAdapters", Switch.own("forbric.blockQueryAdapters")),
+			Map.entry("MixinEntitySoundCallbackAdapter", Switch.own("forbric.entitySoundCallbacks")),
+			Map.entry("MixinBreathingCallbackAdapter", Switch.own("forbric.breathingCallbacks")),
+			Map.entry("MixinHudContextAdapter", Switch.own("forbric.hudContextCallbacks")),
 			// The injectors Mixin rejects outright, taken out at the end of getClassNode: MixinRefusedBindingWeaveTest.
-			Map.entry("GuestInjectorPruner", Switch.own("forbric.guestInjectorPruner.refused")));
+			Map.entry("GuestInjectorPruner", Switch.own("forbric.guestInjectorPruner.refused")),
+			// Records each mixin's call-point injectors for the contention report; changes no mixin. Its off control
+			// in ContendedCallSitesWeaveTest weaves the same bytes and reports nothing.
+			Map.entry("ContendedCallSites", Switch.own("forbric.contendedCallSites")));
 
 	private static final String NO_SCENARIO = "no weave scenario yet; ClassNode-level tests only";
 	/** Only shrinks. Every row is a stage whose output no CI test has yet run through the real weave. */
@@ -132,7 +153,7 @@ class WeaveCoverageCensusTest {
 		assertEquals(Set.of("KernelGuestMixinAdapter"), configTime, "the config-time stages changed; place the new one in a list");
 		assertTrue(preMixin.size() >= 40, "the census could not read getClassNode's adapters: " + preMixin);
 		assertEquals(Set.of("NativeCoremodParity", "PostMixinFixups", "InterfaceDefaultConflictRepair",
-				"ForgeTransferShapeAudit"), postMixin, "the post-Mixin stages changed; place the new one in a list");
+				"ForgeTransferShapeAudit", "PostMixinCodecReturnArbitration", "PostMixinCallbackPriority"), postMixin, "the post-Mixin stages changed; place the new one in a list");
 
 		Set<String> stages = new TreeSet<>(configTime);
 		stages.addAll(preMixin);

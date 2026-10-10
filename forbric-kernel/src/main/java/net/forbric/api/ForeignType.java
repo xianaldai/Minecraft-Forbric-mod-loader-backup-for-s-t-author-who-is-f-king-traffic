@@ -49,6 +49,7 @@ package net.forbric.api;
  * not average it away.
  */
 public enum ForeignType {
+	CONFIG_SPEC("net.minecraftforge.fml.config.IConfigSpec", "net.neoforged.fml.config.IConfigSpec"),
 	CLIENT_HOOKS("net.minecraftforge.client.ForgeHooksClient",
 			"net.neoforged.neoforge.client.ClientHooks"),
 	CLIENT_MOD_LOADER("net.minecraftforge.client.loading.ClientModLoader",
@@ -196,6 +197,10 @@ public enum ForeignType {
 			"net.neoforged.neoforge.common.world.BiomeModifier"),
 	STRUCTURE_MODIFIER("net.minecraftforge.common.world.StructureModifier",
 			"net.neoforged.neoforge.common.world.StructureModifier"),
+	MODIFIABLE_BIOME_INFO("net.minecraftforge.common.world.ModifiableBiomeInfo",
+			"net.neoforged.neoforge.common.world.ModifiableBiomeInfo"),
+	MODIFIABLE_STRUCTURE_INFO("net.minecraftforge.common.world.ModifiableStructureInfo",
+			"net.neoforged.neoforge.common.world.ModifiableStructureInfo"),
 	MODIFIER_REGISTRY_KEYS("net.minecraftforge.registries.ForgeRegistries$Keys",
 			"net.neoforged.neoforge.registries.NeoForgeRegistries$Keys"),
 	MOB_SPAWN_SETTINGS_BUILDER("net.minecraftforge.common.world.MobSpawnSettingsBuilder",
@@ -204,14 +209,17 @@ public enum ForeignType {
 			"net.neoforged.neoforge.common.world.BiomeModifiers$RemoveSpawnsBiomeModifier"),
 	/** The static hook class each family's patched game calls to post its events. */
 	EVENT_FACTORY("net.minecraftforge.event.ForgeEventFactory", "net.neoforged.neoforge.event.EventHooks"),
+	/** The published conversion lifecycle event family. */
+	LIVING_CONVERSION_EVENT("net.minecraftforge.event.entity.living.LivingConversionEvent",
+			"net.neoforged.neoforge.event.entity.living.LivingConversionEvent"),
 	/**
 	 * Each family's fluid type: the merged Fluid answers NeoForge's (ForeignFluidTypeInjector gives a fluid without one
 	 * the type its tags imply) and a vanilla fluid is bridged to MinecraftForge's (ForbricMergedBaseCompatTransformer).
 	 */
 	FLUID_TYPE("net.minecraftforge.fluids.FluidType", "net.neoforged.neoforge.fluids.FluidType"),
 	/**
-	 * Each family's multipart-entity part: the Ender Dragon's parts are one or the other, and every consumer in the
-	 * merged game casts to NeoForge's (DragonPartsInjector, and the frame recomputer that follows its rebase).
+	 * Each family's multipart-entity part: consumers may read either public array-return descriptor;
+	 * the verified runtime bridge preserves both ancestor types for the shared native array.
 	 */
 	PART_ENTITY("net.minecraftforge.entity.PartEntity", "net.neoforged.neoforge.entity.PartEntity"),
 	/**
