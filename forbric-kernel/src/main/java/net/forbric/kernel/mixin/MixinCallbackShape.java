@@ -184,12 +184,39 @@ final class MixinCallbackShape {
      * when the body is missing or selects nothing, or when it selects more than one member there.
      */
     static String member(AnnotationNode at, MethodNode body) {
+        return member(at, selected(at, body));
+    }
+
+    /**
+     * {@link #member}, read among only the instructions the point's kind can select ({@link #pointSelected}): an
+     * {@code INVOKE} target without its descriptor names one method there even where a field shares its name.
+     */
+    static String pointMember(AnnotationNode at, MethodNode body) {
+        return member(at, pointSelected(at, body));
+    }
+
+    /**
+     * {@link #selected}, narrowed as Mixin's point narrows it: an {@code INVOKE} point ({@code INVOKE_ASSIGN},
+     * {@code INVOKE_STRING}) matches only calls, a {@code FIELD} point only field accesses, and of those only its
+     * {@code opcode} where it gives one. Any other point: everything {@link #selected} finds.
+     */
+    static List<AbstractInsnNode> pointSelected(AnnotationNode at, MethodNode body) {
+        List<AbstractInsnNode> selected = selected(at, body);
+        String kind = MixinFit.asString(MixinFit.value(at, "value"));
+        if (kind == null) return selected;
+        if (kind.startsWith("INVOKE")) return selected.stream().filter(MethodInsnNode.class::isInstance).toList();
+        if (!kind.equals("FIELD")) return selected;
+        int opcode = MixinFit.value(at, "opcode") instanceof Number number ? number.intValue() : -1;
+        return selected.stream().filter(i -> i instanceof FieldInsnNode && (opcode == -1 || i.getOpcode() == opcode)).toList();
+    }
+
+    private static String member(AnnotationNode at, List<AbstractInsnNode> selected) {
         MixinFit.Member named = MixinFit.parseMember(MixinFit.asString(MixinFit.value(at, "target")));
         if (named == null) return null;
         if (named.owner() != null && named.desc() != null)
             return "L" + named.owner() + ";" + named.name() + (named.desc().startsWith("(") ? "" : ":") + named.desc();
         String found = null;
-        for (AbstractInsnNode instruction : selected(at, body)) {
+        for (AbstractInsnNode instruction : selected) {
             String spelled = instruction instanceof MethodInsnNode call ? "L" + call.owner + ";" + call.name + call.desc
                     : instruction instanceof FieldInsnNode field ? "L" + field.owner + ";" + field.name + ":" + field.desc : null;
             if (spelled == null || found != null && !found.equals(spelled)) return null;
@@ -204,7 +231,12 @@ final class MixinCallbackShape {
      * for no body, or a target that names no member.
      */
     static List<AbstractInsnNode> selected(AnnotationNode at, MethodNode body) {
-        MixinFit.Member named = MixinFit.parseMember(MixinFit.asString(MixinFit.value(at, "target")));
+        return selected(MixinFit.asString(MixinFit.value(at, "target")), body);
+    }
+
+    /** {@link #selected(AnnotationNode, MethodNode)} for a target given as the string an {@code @At} would carry. */
+    static List<AbstractInsnNode> selected(String target, MethodNode body) {
+        MixinFit.Member named = MixinFit.parseMember(target);
         if (named == null || body == null || body.instructions == null) return List.of();
         List<AbstractInsnNode> found = new java.util.ArrayList<>();
         for (AbstractInsnNode instruction : body.instructions) {
@@ -217,6 +249,38 @@ final class MixinCallbackShape {
         }
         return found;
     }
+
+    /**
+     * {@link #selected} as an {@code INVOKE}-family point ({@code INVOKE}, {@code INVOKE_ASSIGN}) selects in {@code body}:
+     * the calls alone, since Mixin's {@code BeforeInvoke} never matches a field access of the same name. One call there
+     * means the target, however it is written, names that call's member in {@code body}; none means the point no longer
+     * selects anything in it.
+     */
+    static List<MethodInsnNode> calls(AnnotationNode at, MethodNode body) {
+        List<MethodInsnNode> calls = new java.util.ArrayList<>();
+        for (AbstractInsnNode instruction : selected(at, body)) if (instruction instanceof MethodInsnNode call) calls.add(call);
+        return calls;
+    }
+
+    /**
+     * The one method an {@code INVOKE}-family point's target names, spelled {@code Lowner;name(desc)}: spelled with its
+     * owner and descriptor, that method however it is written; without either, the one method whose calls it selects in
+     * {@code body}, the method the handler was written for ({@link #calls}). Null for a field target, and where the body
+     * is missing, selects no call, or selects calls of more than one method.
+     */
+    static String invoked(AnnotationNode at, MethodNode body) {
+        MixinFit.Member named = MixinFit.parseMember(MixinFit.asString(MixinFit.value(at, "target")));
+        if (named == null || named.desc() != null && !named.desc().startsWith("(")) return null;
+        if (named.owner() != null && named.desc() != null) return "L" + named.owner() + ";" + named.name() + named.desc();
+        String found = null;
+        for (MethodInsnNode call : calls(at, body)) {
+            String spelled = "L" + call.owner + ";" + call.name + call.desc;
+            if (found != null && !found.equals(spelled)) return null;
+            found = spelled;
+        }
+        return found;
+    }
+
     static boolean instance(MethodNode method) { return (method.access & Opcodes.ACC_STATIC) == 0; }
     static boolean noReceiver(MethodNode method) {
         for (var instruction : method.instructions) {

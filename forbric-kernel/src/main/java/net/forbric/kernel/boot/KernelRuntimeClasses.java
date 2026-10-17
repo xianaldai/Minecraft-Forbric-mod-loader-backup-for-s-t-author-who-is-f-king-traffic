@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 
 import net.forbric.kernel.classloading.ForbricClassLoader;
+import net.forbric.kernel.util.Caught;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
@@ -155,6 +156,11 @@ public final class KernelRuntimeClasses {
 				new Call("startCreativeTabProbe", void.class),
 				new Call("linkBlockItems", int.class),
 				new Call("logRegisteredContent", void.class))));
+		// Called from MinecraftForge's item callbacks (BlockItemLinkInjector): the live item registry's block->item map is
+		// Item.BY_BLOCK. Object-typed on purpose — linking this class here must load no game class. See KernelBlockItemLinks.
+		CLASSES.put("net.forbric.kernel.runtime.KernelBlockItemLinks", new Entry(Origin.COMPILED, List.of(
+				new Call("blockToItemMap", Object.class, Object.class, Object.class),
+				new Call("clear", void.class, Object.class, Object.class))));
 		// Loading NeoForge's configs: the early pass and the late pass that catches what it could not have seen.
 		// WHICH types each covers stays boot-side, where lateConfigTypes has a test. See KernelConfigLoad.
 		// Key mappings a mod registered on a bus that is not in ModList, so the one fan-out from Options.<init>
@@ -600,16 +606,15 @@ public final class KernelRuntimeClasses {
 			try {
 				c = Class.forName(name, false, loader);
 			} catch (ClassNotFoundException | LinkageError absent) {
-				if (loader.findResource(name.replace('.', '/') + ".class") == null) {
-					ForbricLog.error("[Forbric/Runtime] the kernel's own game-side class %s is in no owned jar. "
-							+ "This boot jar was built without the staged game artifacts, so "
-							+ "forbric-kernel-runtime.jar was never packed into it, and everything needing a "
-							+ "game-side kernel class will fail to link far from here. Fix: put the staged jars "
-							+ "in ../forbric-loader/run/ and rebuild with ./gradlew jar", name);
-				} else {
-					ForbricLog.error("[Forbric/Runtime] the kernel's own game-side class %s is present in an "
-							+ "owned jar but would not define: %s", name, String.valueOf(absent));
-				}
+				boolean packed = loader.findResource(name.replace('.', '/') + ".class") != null;
+				Caught.error(absent, packed
+						? "[Forbric/Runtime] the kernel's own game-side class %s is present in an owned jar but would "
+								+ "not define"
+						: "[Forbric/Runtime] the kernel's own game-side class %s is in no owned jar. "
+								+ "This boot jar was built without the staged game artifacts, so "
+								+ "forbric-kernel-runtime.jar was never packed into it, and everything needing a "
+								+ "game-side kernel class will fail to link far from here. Fix: put the staged jars "
+								+ "in ../forbric-loader/run/ and rebuild with ./gradlew jar", name);
 				continue;
 			}
 
@@ -622,7 +627,7 @@ public final class KernelRuntimeClasses {
 				// every public method the class declares, not only the one asked for. Issue #13's runtime jars held
 				// no NeoForge, and this NoClassDefFoundError was the whole boot's last word -- on stderr, outside
 				// latest.log -- because only NoSuchMethodException was caught.
-				ForbricLog.error("[Forbric/Runtime] the kernel's own game-side class %s is there, but a game type its "
+				Caught.error(unlinkable, "[Forbric/Runtime] the kernel's own game-side class %s is there, but a game type its "
 						+ "methods name cannot be loaded: %s. The kernel was built against a game that has it, so the "
 						+ "game jars this launch was given (--gameJar / --runtimeJar) are incomplete or from another "
 						+ "build. Players: run the Forbric installer again with \"Built artifacts\" left empty; "
@@ -666,6 +671,7 @@ public final class KernelRuntimeClasses {
 							+ call.returns().getSimpleName());
 				}
 			} catch (NoSuchMethodException missing) {
+				Caught.expected(missing);
 				broken.add(call.name() + describe(call.parameters()));
 			}
 		}

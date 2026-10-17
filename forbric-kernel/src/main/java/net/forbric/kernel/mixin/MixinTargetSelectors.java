@@ -17,6 +17,8 @@ import org.spongepowered.asm.mixin.injection.selectors.ITargetSelector;
 import org.spongepowered.asm.mixin.injection.selectors.MemberMatcher;
 import org.spongepowered.asm.mixin.injection.struct.MemberInfo;
 
+import net.forbric.kernel.util.Caught;
+
 /**
  * Which methods of a target class an injector's {@code method} selectors bind, decided the way Mixin decides it, never
  * by comparing how the selector is spelled. {@code "baseTick"}, {@code "baseTick()V"},
@@ -91,6 +93,34 @@ final class MixinTargetSelectors {
 		return bound != null && bound.size() == 1 ? bound.getFirst() : null;
 	}
 
+	/**
+	 * What a member selector pins, as Mixin parses it: its name and its descriptor, each null where the selector leaves it
+	 * open (a bare name has no descriptor; an owner prefix, a dotted owner or whitespace change neither).
+	 */
+	record Pinned(String name, String desc) { }
+
+	/**
+	 * {@code selector} as Mixin parses it for {@code target}, where it is a member selector configured to bind at most one
+	 * method (its first declared match): the name and descriptor it pins. Null for a pattern, a quantifier, a nested or a
+	 * dynamic form — whose binding also depends on the handler's staticness — and for one Mixin rejects (malformed, or an
+	 * owner other than {@code target}; {@code target} null skips the owner check).
+	 */
+	static Pinned pinned(String selector, ClassNode target) {
+		if (selector == null || !(parse(selector, target) instanceof MemberInfo info)
+				|| info.configure(ITargetSelector.Configure.SELECT_MEMBER).getMaxMatchCount() > 1) return null;
+		return new Pinned(info.getName(), info.getDesc());
+	}
+
+	/**
+	 * The method of {@code target} one selector binds, for a caller holding a selector rather than a handler: where it is
+	 * {@link #pinned}, its first declared exact match, as Mixin binds it; null where it is not, or matches nothing.
+	 */
+	static MethodNode single(String selector, ClassNode target) {
+		if (target == null || target.methods == null || pinned(selector, target) == null) return null;
+		List<MethodNode> bound = bound(List.of(selector), target, false);
+		return bound != null && bound.size() == 1 ? bound.getFirst() : null;
+	}
+
 	/** Whether the handler's injector binds the method {@code nameAndDesc} of {@code target}, and nothing else. */
 	static boolean bindsOnly(MethodNode handler, ClassNode target, String nameAndDesc) {
 		MethodNode bound = one(handler, target);
@@ -133,6 +163,33 @@ final class MixinTargetSelectors {
 		if (reach == null) return null;
 		for (Reach r : reach) if (r.single() && r.matched().size() > 1) return null;
 		return one(handler, target);
+	}
+
+	/**
+	 * The one method the handler binds in {@code target}, the class Mixin applies it to, where that is the method it was
+	 * written for: when no selector's binding there hangs on declaration order ({@link #unambiguous}), the method it binds;
+	 * when one does — a bare name shared by overloads binds whichever {@code target} declares first — only where
+	 * {@code nativeClass} (the class the mod was compiled against, read only then; null or a null result when missing)
+	 * binds the handler to that same member. Null otherwise.
+	 */
+	static MethodNode boundAsWritten(MethodNode handler, ClassNode target, java.util.function.Supplier<ClassNode> nativeClass) {
+		MethodNode bound = one(handler, target);
+		if (bound == null || unambiguous(handler, target) != null) return bound;
+		ClassNode original = nativeClass == null ? null : nativeClass.get();
+		MethodNode written = original == null ? null : one(handler, original);
+		return written != null && written.name.equals(bound.name) && written.desc.equals(bound.desc) ? bound : null;
+	}
+
+	/** {@code read}, asked at most once: a class the mod was compiled against, fetched only by the first question that needs it. */
+	static java.util.function.Supplier<ClassNode> once(java.util.function.Supplier<ClassNode> read) {
+		return new java.util.function.Supplier<>() {
+			private boolean asked;
+			private ClassNode node;
+			@Override public ClassNode get() {
+				if (!asked) { asked = true; node = read.get(); }
+				return node;
+			}
+		};
 	}
 
 	/**
@@ -186,6 +243,46 @@ final class MixinTargetSelectors {
 	}
 
 	/**
+	 * Whether one selector, as Mixin parses it for {@code target}, binds by its name alone: a member selector with a name
+	 * and no descriptor, configured to bind one method — the first {@code target} declares of that name. An owner prefix
+	 * (the target's), a dotted owner or whitespace leave it that; a descriptor, a quantifier, a pattern, a form Mixin
+	 * rejects, or an owner other than {@code target} do not.
+	 */
+	static boolean byNameAlone(String selector, ClassNode target) {
+		Pinned pinned = pinned(selector, target);
+		return pinned != null && pinned.name() != null && pinned.desc() == null;
+	}
+
+	/**
+	 * Whether one selector, as Mixin parses it for {@code target}, is a member selector configured to bind one method: a
+	 * name, with its descriptor or without (then the first declared of that name), however the owner and whitespace are
+	 * written — no quantifier, no pattern, no form Mixin rejects, no owner other than {@code target}.
+	 */
+	static boolean bindsOneMember(String selector, ClassNode target) {
+		Pinned pinned = pinned(selector, target);
+		return pinned != null && pinned.name() != null;
+	}
+
+	/** Whether one selector, as Mixin parses it, names an owner other than {@code target}: Mixin binds nothing there with it. */
+	static boolean namesAnotherOwner(String selector, ClassNode target) {
+		return selector != null && target != null && parse(selector, null) instanceof MemberInfo info
+				&& info.getOwner() != null && !info.getOwner().equals(target.name);
+	}
+
+	/**
+	 * Whether a member point's {@code @At} target, as Mixin reads it ({@code TargetSelector.parseAndValidate}: a
+	 * {@link MemberMatcher} for a pattern, a {@link MemberInfo} otherwise), is the plain member reference
+	 * {@link MixinFit#parseMember} reads: a {@code MemberInfo} with the same owner, name and descriptor. False for a
+	 * pattern, a dynamic or nested selector, a form Mixin rejects, and a quantified name, which Mixin reads with the
+	 * quantifier stripped — for all of these the plain reading's instructions are not the ones Mixin selects.
+	 */
+	static boolean readsAsMember(String target) {
+		MixinFit.Member read = target == null ? null : MixinFit.parseMember(target);
+		return read != null && parse(target, null) instanceof MemberInfo info && java.util.Objects.equals(read.owner(), info.getOwner())
+				&& java.util.Objects.equals(read.name(), info.getName()) && java.util.Objects.equals(read.desc(), info.getDesc());
+	}
+
+	/**
 	 * One selector as Mixin parses and validates it for {@code target}; null when Mixin rejects it (malformed, or an owner
 	 * other than the target) or it is a form this does not model. {@code target} null skips the owner check.
 	 */
@@ -203,6 +300,7 @@ final class MixinTargetSelectors {
 			else parsed = MemberInfo.parse(trimmed, null);
 			parsed = parsed.validate();
 		} catch (Exception invalid) {
+			Caught.expected(invalid);
 			return null;
 		}
 		if (parsed instanceof MemberInfo info) {

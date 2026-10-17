@@ -7,6 +7,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
@@ -15,6 +16,7 @@ import org.objectweb.asm.tree.analysis.*;
 
 import net.forbric.kernel.boot.DefaultPredicateDispatch;
 import net.forbric.kernel.boot.DefinedMethodContracts;
+import net.forbric.kernel.util.Caught;
 
 /**
  * Transports a missing redirect between structurally identical default bitmask-predicate families. The guest
@@ -38,14 +40,23 @@ public final class MixinDefaultPredicateAdapter {
                         List<DefinedMethodContracts.MethodContract> sources, String token) { }
 
     public static int adapt(ClassNode mixin, Function<String, ClassNode> resolver) {
+        return adapt(mixin, resolver, owner -> NativeGameReferences.reference(MixinStubRebind.ecosystemOf(mixin == null ? null : mixin.name), owner));
+    }
+
+    /**
+     * {@link #adapt(ClassNode, Function)} with {@code references} giving the class the mod was compiled against, read only
+     * where a selector's binding or a shortened {@code @At} target needs it to say what the mod wrote.
+     */
+    static int adapt(ClassNode mixin, Function<String, ClassNode> resolver, Function<String, ClassNode> references) {
         if ("off".equalsIgnoreCase(System.getProperty(PROPERTY, "on")) || mixin == null || resolver == null) return 0;
         List<String> targets = MixinFit.mixinTargets(mixin);
         if (targets.size() != 1) return 0;
         ClassNode host = resolver.apply(targets.getFirst());
         if (host == null) return 0;
+        Supplier<ClassNode> nativeHost = MixinTargetSelectors.once(() -> references == null ? null : references.apply(targets.getFirst()));
         List<MethodNode> added = new ArrayList<>();
         for (MethodNode handler : new ArrayList<>(mixin.methods)) {
-            Plan plan = plan(mixin, handler, host, resolver);
+            Plan plan = plan(mixin, handler, host, resolver, nativeHost);
             if (plan == null) continue;
             DefaultPredicateDispatch.register(plan.token(), plan.nativeContract(), plan.sources());
             added.add(wrap(mixin, handler, plan));
@@ -54,7 +65,8 @@ public final class MixinDefaultPredicateAdapter {
         return added.size();
     }
 
-    private static Plan plan(ClassNode mixin, MethodNode handler, ClassNode host, Function<String, ClassNode> resolver) {
+    private static Plan plan(ClassNode mixin, MethodNode handler, ClassNode host, Function<String, ClassNode> resolver,
+                             Supplier<ClassNode> nativeHost) {
         if ((handler.access & Opcodes.ACC_SYNCHRONIZED) != 0 || handler.name.contains(SUFFIX)) return null;
         List<AnnotationNode> annotations = annotations(handler);
         if (annotations.stream().anyMatch(a -> a.desc.equals(GROUP))) return null;
@@ -68,15 +80,23 @@ public final class MixinDefaultPredicateAdapter {
         if (!"INVOKE".equals(MixinFit.value(at, "value")) || MixinFit.value(at, "shift") != null) return null;
         Object ordinal = MixinFit.value(at, "ordinal");
         if (ordinal instanceof Number number && number.intValue() >= 0) return null;
-        Object raw = MixinFit.value(at, "target");
-        DefaultMethodOverloadBridge.Member old = raw instanceof String target ? parse(target) : null;
+        // The method Mixin binds the wrap to in the merged host, which must be the one the mod wrote it for.
+        MethodNode body = MixinTargetSelectors.boundAsWritten(handler, host, nativeHost);
+        if (body == null || (handler.access & Opcodes.ACC_STATIC) == 0 && (body.access & Opcodes.ACC_STATIC) != 0) return null;
+        // The call the redirect names, as Mixin resolves its target: spelled in full, that member; shortened, the one call
+        // it selects in the method the mod was compiled against (the merged body no longer makes it).
+        String named = MixinCallbackShape.pointMember(at, null);
+        if (named == null) {
+            // Only a merged body that still calls a method of that name (on that owner, where given) can hold the live
+            // overload; any other body is left before the class the mod was compiled against is read.
+            MixinFit.Member shortened = MixinFit.parseMember(MixinFit.asString(MixinFit.value(at, "target")));
+            if (shortened == null || !callsNamed(body, shortened)) return null;
+            named = MixinCallbackShape.pointMember(at, MixinCallbackShape.written(handler, nativeHost.get()));
+        }
+        DefaultMethodOverloadBridge.Member old = parse(named);
         if (old == null || !Type.getReturnType(old.descriptor()).equals(Type.BOOLEAN_TYPE)) return null;
-        List<String> selectors = strings(MixinFit.value(injection, "method"));
-        List<MethodNode> bodies = host.methods.stream().filter(m -> selectors.stream().anyMatch(s -> select(s, m))).toList();
-        if (bodies.size() != 1 || (handler.access & Opcodes.ACC_STATIC) == 0
-                && (bodies.getFirst().access & Opcodes.ACC_STATIC) != 0) return null;
         List<MethodInsnNode> candidates = new ArrayList<>();
-        for (AbstractInsnNode instruction : bodies.getFirst().instructions) {
+        for (AbstractInsnNode instruction : body.instructions) {
             if (!(instruction instanceof MethodInsnNode call) || !call.owner.equals(old.owner()) || !call.name.equals(old.name())) continue;
             if (call.desc.equals(old.descriptor())) return null;
             if (!Type.getReturnType(call.desc).equals(Type.BOOLEAN_TYPE) || call.getOpcode() != Opcodes.INVOKEINTERFACE
@@ -173,7 +193,7 @@ public final class MixinDefaultPredicateAdapter {
             int first = frame.getStackSize() - called.length - 1;
             int[] slots = DefaultMethodOverloadBridge.slots(arguments, (handler.access & Opcodes.ACC_STATIC) != 0);
             return parameter(frame.getStack(first)) == slots[0] && parameter(frame.getStack(first + mask + 1)) == slots[oldMask + 1];
-        } catch (AnalyzerException | RuntimeException invalid) { return false; }
+        } catch (AnalyzerException | RuntimeException invalid) { Caught.expected(invalid); return false; }
     }
 
     private static int parameter(BasicValue value) { return value instanceof Parameter parameter ? parameter.slot : -1; }
@@ -269,25 +289,27 @@ public final class MixinDefaultPredicateAdapter {
         };
         if (owner != null) method.instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, owner, "valueOf", "(" + type.getDescriptor() + ")L" + owner + ";", false));
     }
-    private static DefaultMethodOverloadBridge.Member parse(String value) {
+    /** Whether {@code body} calls a method of {@code member}'s name, on its owner where it gives one. */
+    private static boolean callsNamed(MethodNode body, MixinFit.Member member) {
+        for (AbstractInsnNode instruction : body.instructions)
+            if (instruction instanceof MethodInsnNode call && call.name.equals(member.name())
+                    && (member.owner() == null || member.owner().equals(call.owner))) return true;
+        return false;
+    }
+    /** The method {@link MixinCallbackShape#pointMember} resolved; null for none, or for a field. */
+    private static DefaultMethodOverloadBridge.Member parse(String member) {
+        MixinFit.Member parsed = MixinFit.parseMember(member);
+        if (parsed == null || parsed.owner() == null || parsed.desc() == null || !parsed.desc().startsWith("(")) return null;
         try {
-            int semicolon = value.indexOf(';'), descriptor = value.indexOf('(', semicolon);
-            if (!value.startsWith("L") || semicolon < 2 || descriptor <= semicolon) return null;
-            Type.getMethodType(value.substring(descriptor));
-            return new DefaultMethodOverloadBridge.Member(Opcodes.INVOKEINTERFACE, value.substring(1, semicolon),
-                    value.substring(semicolon + 1, descriptor), value.substring(descriptor), true);
-        } catch (RuntimeException invalid) { return null; }
+            Type.getMethodType(parsed.desc());
+            return new DefaultMethodOverloadBridge.Member(Opcodes.INVOKEINTERFACE, parsed.owner(), parsed.name(), parsed.desc(), true);
+        } catch (RuntimeException invalid) { Caught.expected(invalid); return null; }
     }
     private static List<AnnotationNode> annotations(MethodNode method) {
         List<AnnotationNode> out = new ArrayList<>();
         if (method.visibleAnnotations != null) out.addAll(method.visibleAnnotations);
         if (method.invisibleAnnotations != null) out.addAll(method.invisibleAnnotations); return out;
     }
-    private static List<String> strings(Object value) {
-        if (value instanceof String string) return List.of(string);
-        return value instanceof List<?> list ? list.stream().filter(String.class::isInstance).map(String.class::cast).toList() : List.of();
-    }
-    private static boolean select(String selector, MethodNode method) { return selector.equals(method.name) || selector.equals(method.name + method.desc); }
     private static void put(AnnotationNode annotation, String key, Object value) {
         if (annotation.values == null) annotation.values = new ArrayList<>();
         for (int index = 0; index + 1 < annotation.values.size(); index += 2) if (key.equals(annotation.values.get(index))) {

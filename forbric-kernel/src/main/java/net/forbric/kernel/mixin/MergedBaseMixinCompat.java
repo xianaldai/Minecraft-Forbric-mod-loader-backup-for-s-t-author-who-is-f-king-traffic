@@ -60,7 +60,7 @@ public final class MergedBaseMixinCompat {
                     }
                 }
             }
-        }catch(Exception unreadable){net.forbric.kernel.util.ForbricLog.debug("[Forbric/Mixin] cannot inspect source protocols in %s: %s",configName,unreadable.toString());}
+        }catch(Exception unreadable){net.forbric.kernel.util.Caught.warn(unreadable,"[Forbric/Mixin] cannot inspect source protocols in %s; its remaining mixins are not checked",configName);}
     }
     /**
      * Why the source mixin is refused, or null. {@code natives} gives the class the mod was compiled against: each gate
@@ -71,7 +71,7 @@ public final class MergedBaseMixinCompat {
         Function<String,ClassNode> classes=name->parse(resources.apply(name+".class"));
         // The pair is proved through the host's local variable table (the callback's @Local names the Reader), which
         // MixinFit.parse drops; read the host whole, as the pruner's own lookup does, or the check never fires.
-        if(!net.forbric.kernel.transform.GuestInjectorPruner.enabled()&&net.forbric.kernel.transform.GuestInjectorPruner.unsafeWithoutPruning(node,name->whole(resources.apply(name+".class"))))
+        if(!net.forbric.kernel.transform.GuestInjectorPruner.enabled()&&net.forbric.kernel.transform.GuestInjectorPruner.unsafeWithoutPruning(node,name->whole(resources.apply(name+".class")),owner->natives==null?null:natives.apply(null,owner)))
             return "source has a closed consuming-Reader callback pair which cannot remain half-applied while pruning is disabled";
         if(FabricRegistryInitializationMixinAdapter.conflicts(node,natives)&&FabricRegistryInitializationMixinAdapter.adapt(copy(node),classes,natives)==0)
             return "source callback repeats or defers the kernel-owned registry freeze; its tracker protocol could not be adapted";

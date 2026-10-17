@@ -17,6 +17,7 @@ import net.forbric.api.Ecosystem;
 import net.forbric.kernel.boot.DefinedMethodContracts;
 import net.forbric.kernel.boot.DefinedMethodContracts.MethodContract;
 import net.forbric.kernel.boot.KernelDefaultPredicates;
+import net.forbric.kernel.util.Caught;
 import net.forbric.kernel.util.ForbricLog;
 
 /** Transports an atomic expression modifier into an unchanged pure default behind a native virtual hook.
@@ -85,13 +86,10 @@ public final class MixinDefaultPredicateTransport {
 		List<AnnotationNode> ats = MixinFit.atNodes(injector);
 		if (ats.size() != 1 || !"MIXINEXTRAS:EXPRESSION".equals(MixinFit.value(ats.getFirst(), "value"))
 				|| MixinFit.value(ats.getFirst(), "ordinal") != null || MixinFit.value(ats.getFirst(), "shift") != null) return null;
-		List<String> selectors = MixinFit.stringList(MixinFit.value(injector, "method"));
-		if (selectors.size() != 1) return null;
-		List<MethodNode> live = current.methods.stream().filter(m -> selectors.getFirst().equals(m.name) || selectors.getFirst().equals(m.name + m.desc)).toList();
-		if (live.size() != 1) return null;
-		MethodNode body = live.getFirst();
-		MethodNode nativeBody = original.methods.stream().filter(m -> m.name.equals(body.name) && m.desc.equals(body.desc)).findFirst().orElse(null);
-		if (nativeBody == null) return null;
+		// The one method Mixin binds in the merged class, and the same member bound in the class the mod was compiled
+		// against: as Mixin reads the selector, however it is spelled.
+		MethodNode body = MixinTargetSelectors.one(handler, current), nativeBody = MixinCallbackShape.written(handler, original);
+		if (body == null || nativeBody == null || !body.name.equals(nativeBody.name) || !body.desc.equals(nativeBody.desc)) return null;
 		List<TypeInsnNode> oldAtoms = atoms(nativeBody, atomicType);
 		if (oldAtoms.size() != 1 || !atoms(body, atomicType).isEmpty()) return null;
 		Region region = region(nativeBody, oldAtoms.getFirst());
@@ -128,7 +126,7 @@ public final class MixinDefaultPredicateTransport {
 				matches.add(new Plan(candidate, KernelDefaultPredicates.register(contract)));
 			}
 			return matches.size() == 1 ? matches.getFirst() : null;
-		} catch (AnalyzerException | RuntimeException unavailable) { return null; }
+		} catch (AnalyzerException | RuntimeException unavailable) { Caught.expected(unavailable); return null; }
 	}
 
 	private static boolean sameGetter(Getter a, Getter b) { return a.declaration().contract().equals(b.declaration().contract())
@@ -174,7 +172,7 @@ public final class MixinDefaultPredicateTransport {
 					return result;
 				} else return null;
 			}
-		} catch (IndexOutOfBoundsException malformed) { return null; }
+		} catch (IndexOutOfBoundsException malformed) { Caught.expected(malformed); return null; }
 		return null;
 	}
 

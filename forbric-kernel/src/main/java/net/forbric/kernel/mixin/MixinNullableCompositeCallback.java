@@ -6,6 +6,7 @@ import net.forbric.api.Ecosystem;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.*;
+import net.forbric.kernel.util.Caught;
 
 /** A no-result fallback callback follows an exactly absent composite lookup; native alternatives retain priority. */
 public final class MixinNullableCompositeCallback {
@@ -35,17 +36,21 @@ public final class MixinNullableCompositeCallback {
 		for(MethodNode handler:new ArrayList<>(mixin.methods)){
 			AnnotationNode injection=MixinFit.injectorOf(handler);if(injection==null||!INJECT.equals(injection.desc)||!Boolean.TRUE.equals(MixinFit.value(injection,"cancellable"))
 					||MixinFit.value(injection,"slice")!=null||annotations(handler).stream().anyMatch(a->a.desc.equals(MixinRetarget.GROUP)))continue;
-			List<AnnotationNode> points=MixinFit.atNodes(injection);List<String> selectors=MixinFit.stringList(MixinFit.value(injection,"method"));
-			if(points.size()!=1||selectors.size()!=1||!"INVOKE_ASSIGN".equals(MixinFit.value(points.getFirst(),"value"))
+			List<AnnotationNode> points=MixinFit.atNodes(injection);
+			if(points.size()!=1||!"INVOKE_ASSIGN".equals(MixinFit.value(points.getFirst(),"value"))
 					||MixinFit.value(points.getFirst(),"shift")!=null||MixinFit.value(points.getFirst(),"ordinal")!=null)continue;
-			MethodNode original=MixinStubRebind.bound(reference,selectors.getFirst()),host=MixinStubRebind.bound(target,selectors.getFirst());
-			if(original==null||host==null||!original.desc.equals(host.desc)||((host.access^handler.access)&Opcodes.ACC_STATIC)!=0)continue;
+			// The host natively and in the merged class, as Mixin binds the handler's selectors however they are spelled.
+			MethodNode original=MixinTargetSelectors.one(handler,reference),host=MixinTargetSelectors.one(handler,target);
+			if(original==null||host==null||!original.name.equals(host.name)||!original.desc.equals(host.desc)||((host.access^handler.access)&Opcodes.ACC_STATIC)!=0)continue;
 			Type[] parameters=Type.getArgumentTypes(handler.desc),arguments=Type.getArgumentTypes(host.desc);int capture=arguments.length+1;
 			if(parameters.length!=capture+1||!parameters[arguments.length].getDescriptor().equals(CIR)||parameters[capture].getSort()!=Type.OBJECT
 					||!Type.getReturnType(handler.desc).equals(Type.VOID_TYPE)||!Arrays.equals(arguments,Arrays.copyOf(parameters,arguments.length)))continue;
 			AnnotationNode local=MixinStubRebind.sugar(handler,capture,LOCAL);if(local==null||!onlyLocal(handler,capture)||!nullFallback(handler,capture))continue;
-			String member=MixinFit.asString(MixinFit.value(points.getFirst(),"target"));List<MethodInsnNode> nativeCalls=calls(original,member);
-			if(nativeCalls.size()!=1||!Type.getReturnType(nativeCalls.getFirst().desc).equals(parameters[capture])||!calls(host,member).isEmpty())continue;
+			// The lookup as Mixin resolves the point's target in the native host (an owner- or descriptor-less one where that
+			// body selects one method's calls alone): assigned once there, and no call it selects left in the merged host.
+			if(MixinCallbackShape.invoked(points.getFirst(),original)==null)continue;
+			List<MethodInsnNode> nativeCalls=MixinCallbackShape.calls(points.getFirst(),original);
+			if(nativeCalls.size()!=1||!Type.getReturnType(nativeCalls.getFirst().desc).equals(parameters[capture])||!MixinCallbackShape.calls(points.getFirst(),host).isEmpty())continue;
 			List<Plan> candidates=new ArrayList<>();
 			for(AbstractInsnNode instruction:host.instructions)if(instruction instanceof MethodInsnNode lookup&&Type.getReturnType(lookup.desc).getSort()==Type.OBJECT){
 				Shape shape=shape(classes.apply(Type.getReturnType(lookup.desc).getInternalName()),parameters[capture]);if(shape==null)continue;
@@ -80,7 +85,7 @@ public final class MixinNullableCompositeCallback {
 	}
 	private static boolean captureFromLookup(ClassNode target,MethodNode host,MethodNode outer,String lookup){
 		try{Frame<SourceValue>[] frames=new Analyzer<>(new SourceInterpreter()).analyze(target.name,host);for(var instruction:host.instructions)if(instruction instanceof MethodInsnNode call&&call.owner.equals(target.name)&&call.name.equals(outer.name)&&call.desc.equals(outer.desc)){Frame<SourceValue> at=frames[host.instructions.indexOf(call)];return at!=null&&at.getStackSize()>0&&lookupOrigin(host,frames,at.getStack(at.getStackSize()-1),lookup,new HashSet<>());}return false;}
-		catch(AnalyzerException|RuntimeException unproved){return false;}
+		catch(AnalyzerException|RuntimeException unproved){Caught.expected(unproved);return false;}
 	}
 	private static boolean lookupOrigin(MethodNode host,Frame<SourceValue>[] frames,SourceValue value,String lookup,Set<AbstractInsnNode> active){if(value==null||value.insns.size()!=1)return false;var instruction=value.insns.iterator().next();if(!active.add(instruction))return false;try{Frame<SourceValue> at=frames[host.instructions.indexOf(instruction)];if(at==null)return false;
 		if(instruction instanceof MethodInsnNode call)return lookup.equals("L"+call.owner+";"+call.name+call.desc);
@@ -166,7 +171,7 @@ public final class MixinNullableCompositeCallback {
 			Map<Integer,String> parameters=new HashMap<>();int slot=0;Type[] args=Type.getArgumentTypes(helper.desc);for(int i=0;i<args.length;i++){parameters.put(slot,expected.get(i));slot+=args[i].getSize();}
 			Keys inside=new Keys(owner,helper,parameters);List<MethodInsnNode> matches=new ArrayList<>();for(var instruction:helper.instructions)if(instruction instanceof MethodInsnNode call&&call.getOpcode()==current.getOpcode()&&Type.getReturnType(call.desc).equals(Type.getReturnType(old.desc))&&prefix(Type.getArgumentTypes(call.desc),Type.getArgumentTypes(current.desc))&&actual!=null&&Objects.equals(inside.arguments(call),actual.subList(0,Type.getArgumentTypes(call.desc).length+(call.getOpcode()==Opcodes.INVOKESTATIC?0:1))))matches.add(call);
 			return actual!=null&&matches.size()==1;
-		}catch(AnalyzerException|RuntimeException unknown){return false;}
+		}catch(AnalyzerException|RuntimeException unknown){Caught.expected(unknown);return false;}
 	}
 	private static boolean prefix(Type[] original,Type[] current){return original.length<=current.length&&Arrays.equals(original,Arrays.copyOf(current,original.length));}
 		static final class Keys{
@@ -190,7 +195,6 @@ public final class MixinNullableCompositeCallback {
 		handler.name=inner;if(handler.visibleAnnotations!=null)handler.visibleAnnotations.remove(injection);if(handler.invisibleAnnotations!=null)handler.invisibleAnnotations.remove(injection);handler.visibleParameterAnnotations=null;handler.invisibleParameterAnnotations=null;return outer;
 	}
 	private static List<AnnotationNode> annotations(MethodNode method){List<AnnotationNode> out=new ArrayList<>();if(method.visibleAnnotations!=null)out.addAll(method.visibleAnnotations);if(method.invisibleAnnotations!=null)out.addAll(method.invisibleAnnotations);return out;}
-	private static List<MethodInsnNode> calls(MethodNode method,String member){List<MethodInsnNode> out=new ArrayList<>();for(var instruction:method.instructions)if(instruction instanceof MethodInsnNode call&&("L"+call.owner+";"+call.name+call.desc).equals(member))out.add(call);return out;}
 	private static AbstractInsnNode next(AbstractInsnNode instruction){for(var next=instruction.getNext();next!=null;next=next.getNext())if(next.getOpcode()>=0)return next;return null;}
 	private static void put(AnnotationNode node,String name,Object value){if(node.values==null)node.values=new ArrayList<>();for(int i=0;i<node.values.size();i+=2)if(name.equals(node.values.get(i))){node.values.set(i+1,value);return;}node.values.add(name);node.values.add(value);}
 	private static void remove(AnnotationNode node,String name){if(node.values!=null)for(int i=node.values.size()-2;i>=0;i-=2)if(name.equals(node.values.get(i))){node.values.remove(i+1);node.values.remove(i);}}
