@@ -3486,6 +3486,14 @@
    "title": null,
    "updated_at": null
   },
+  "187": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "1872": {
    "body": null,
    "deleted": true,
@@ -3517,6 +3525,14 @@
   "1879": {
    "body": null,
    "deleted": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "188": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
    "state": null,
    "title": null,
    "updated_at": null
@@ -3584,6 +3600,14 @@
    "title": null,
    "updated_at": null
   },
+  "189": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "1890": {
    "body": null,
    "deleted": true,
@@ -3641,6 +3665,14 @@
    "state": "closed",
    "title": "\u60f3\u786e\u8ba4\u4e00\u4e0b\uff0cREADME \u91cc\u8bf4\u7684\u201c\u539f\u751f\u540c\u65f6\u8fd0\u884c\u4e09\u4e2a Loader\u201d\uff0c\u5177\u4f53\u5230\u5e95\u662f\u4ec0\u4e48\u610f\u601d\uff1f",
    "updated_at": "2026-10-05T06:14:42Z"
+  },
+  "190": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
   },
   "1900": {
    "body": null,
@@ -3705,6 +3737,14 @@
    "title": null,
    "updated_at": null
   },
+  "191": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "1910": {
    "body": null,
    "deleted": true,
@@ -3736,6 +3776,14 @@
   "1918": {
    "body": null,
    "deleted": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "192": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
    "state": null,
    "title": null,
    "updated_at": null
@@ -3796,6 +3844,14 @@
    "title": null,
    "updated_at": null
   },
+  "193": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "1930": {
    "body": null,
    "deleted": true,
@@ -3827,6 +3883,14 @@
   "1938": {
    "body": null,
    "deleted": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "194": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
    "state": null,
    "title": null,
    "updated_at": null
@@ -3887,6 +3951,14 @@
    "title": null,
    "updated_at": null
   },
+  "195": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "1951": {
    "body": null,
    "deleted": true,
@@ -3943,6 +4015,14 @@
    "title": null,
    "updated_at": null
   },
+  "196": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "1962": {
    "body": null,
    "deleted": true,
@@ -3974,6 +4054,14 @@
   "1968": {
    "body": null,
    "deleted": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "197": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
    "state": null,
    "title": null,
    "updated_at": null
@@ -4013,6 +4101,14 @@
    "title": null,
    "updated_at": null
   },
+  "198": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "1980": {
    "body": null,
    "deleted": true,
@@ -4034,6 +4130,14 @@
    "title": null,
    "updated_at": null
   },
+  "199": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "2": {
    "body": "6a04daf9f562",
    "comments": {},
@@ -4050,6 +4154,86 @@
    "title": "README: say Forbric is one new loader, and what the 0.3.0 numbers test",
    "updated_at": "2026-10-01T16:17:01Z"
   },
+  "200": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "201": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "202": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "203": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "204": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "205": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "206": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "207": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "208": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "209": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "21": {
    "body": "0cccfc2d495b",
    "comments": {},
@@ -4057,6 +4241,22 @@
    "state": "closed",
    "title": "Refuse wrong game files at install, and stop a broken install at boot with the reason in latest.log",
    "updated_at": "2026-10-02T05:53:29Z"
+  },
+  "210": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "211": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
   },
   "2138": {
    "body": null,
