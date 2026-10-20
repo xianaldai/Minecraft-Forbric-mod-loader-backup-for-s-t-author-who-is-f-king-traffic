@@ -7841,6 +7841,70 @@
    "title": null,
    "updated_at": null
   },
+  "362": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "363": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "364": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "365": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "366": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "367": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "368": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "369": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "37": {
    "body": "da39a3ee5e6b",
    "comments": {},
@@ -7848,6 +7912,86 @@
    "state": "closed",
    "title": "\u4fee\u590d\u4e86\u72d7\u5c4e\u4ee3\u7801\u7684\u95ee\u9898",
    "updated_at": "2026-10-02T14:31:39Z"
+  },
+  "370": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "371": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "372": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "373": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "374": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "375": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "376": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "377": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "378": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "379": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
   },
   "38": {
    "body": "6eba1584749a",
@@ -7863,6 +8007,62 @@
    "state": "open",
    "title": "\u6211\u60f3\u8981\u7528\u514d\u8d39\u7684claude",
    "updated_at": "2026-10-02T13:32:59Z"
+  },
+  "380": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "381": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "382": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "383": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "384": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "385": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "386": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
   },
   "39": {
    "body": "ba449d408247",
@@ -11593,12 +11793,19 @@
      "m": null,
      "t": "2026-10-18T14:51:26Z",
      "u": "2026-10-18T14:51:26Z"
+    },
+    "6282351762": {
+     "a": "TansuoTro",
+     "d": "cabb32232638",
+     "m": null,
+     "t": "2026-10-20T03:03:53Z",
+     "u": "2026-10-20T03:03:53Z"
     }
    },
-   "comments_through": "2026-10-18T14:51:26Z",
+   "comments_through": "2026-10-20T03:03:53Z",
    "state": "closed",
    "title": "\u6d4b\u8bc4\u548c\u53cd\u9988",
-   "updated_at": "2026-10-18T14:51:26Z"
+   "updated_at": "2026-10-20T03:03:53Z"
   },
   "6": {
    "body": "5787b95dba3d",
