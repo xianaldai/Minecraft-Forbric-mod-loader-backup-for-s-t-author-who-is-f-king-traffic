@@ -10590,6 +10590,70 @@
    "title": null,
    "updated_at": null
   },
+  "562": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "563": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "564": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "565": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "566": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "567": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "568": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "569": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "57": {
    "body": "271a001f0012",
    "comments": {},
@@ -10597,6 +10661,86 @@
    "state": "closed",
    "title": "[bug] Android/FCL\uff1aASK \u95f8\u95e8 fork java.home/bin/java \u629b EACCES(13) \u88ab\u5f53\u6210\u73a9\u5bb6\u62d2\u7edd\uff0c\u4efb\u4f55 required finding \u90fd\u6c38\u4e45\u65e0\u6cd5\u542f\u52a8",
    "updated_at": "2026-10-04T15:20:18Z"
+  },
+  "570": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "571": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "572": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "573": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "574": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "575": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "576": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "577": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "578": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "579": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
   },
   "58": {
    "body": "8d80187d24bc",
@@ -10621,6 +10765,62 @@
    "state": "closed",
    "title": "Invitation to share minecraft-forbric-mod-loader on GithubStarMate and help more people discover your work",
    "updated_at": "2026-10-05T03:21:57Z"
+  },
+  "580": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "581": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "582": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "583": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "584": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "585": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "586": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
   },
   "59": {
    "body": "208a510d30fe",
