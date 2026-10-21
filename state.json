@@ -10335,6 +10335,30 @@
    "title": null,
    "updated_at": null
   },
+  "537": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "538": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "539": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "54": {
    "body": "95dc2f352487",
    "comments": {
@@ -10358,6 +10382,86 @@
    "title": "[26.2] Humanoid mobs render the wrong ArmPose (SPREAD showing as SWING)",
    "updated_at": "2026-10-04T11:14:55Z"
   },
+  "540": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "541": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "542": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "543": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "544": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "545": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "546": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "547": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "548": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "549": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "55": {
    "body": "57895eecbde5",
    "comments": {
@@ -10374,6 +10478,86 @@
    "title": "\u4fee\u590d\uff1a\u5e76\u53d1\u95e8\u7981\u8c03\u5ea6\u5668\u6f0f\u914d M32_PORT\uff0cgate-m16 \u4e0e gate-m32 \u649e\u7aef\u53e3\u65f6\u4e24\u4e2a\u95e8\u7981\u90fd\u62a5 GREEN",
    "updated_at": "2026-10-04T11:38:38Z"
   },
+  "550": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "551": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "552": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "553": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "554": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "555": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "556": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "557": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "558": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "559": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "56": {
    "body": "5e4cf8de1754",
    "comments": {
@@ -10389,6 +10573,22 @@
    "state": "closed",
    "title": "[bug] \u540c\u540d\u91cd\u8f7d\uff1a\u540d\u5b57\u552f\u4e00\u7684 @Inject \u88ab Mixin \u89e3\u6790\u5230 NeoForge \u90a3\u4e2a\u91cd\u8f7d\uff0c\u6574\u6761 mixin \u7c7b\u4f5c\u5e9f\uff08carpet-org-addition / MinecraftServer.handleCustomClickAction\uff09",
    "updated_at": "2026-10-04T15:20:26Z"
+  },
+  "560": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "561": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
   },
   "57": {
    "body": "271a001f0012",
