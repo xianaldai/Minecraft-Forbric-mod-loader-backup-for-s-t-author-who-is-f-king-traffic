@@ -7612,7 +7612,7 @@
      "u": "2026-10-10T14:01:36Z"
     },
     "6106926213": {
-     "a": "sb6661",
+     "a": "Egggggggggggggggggggggg",
      "d": "9ad21e5861bc",
      "m": null,
      "t": "2026-10-11T08:01:15Z",
@@ -9007,6 +9007,7 @@
   "40": {
    "body": "ac96a4872f84",
    "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "\u4fee\u590d\uff1a\u4e2d\u6587\u8bed\u8a00\u73af\u5883\u4e0b ./gradlew test \u5fc5\u7ea2\uff08KernelLoadReportTest \u628a\u82f1\u6587\u63aa\u8f9e\u65ad\u8a00\u5728\u7cfb\u7edf\u8bed\u8a00\u6587\u4ef6\u4e0a\uff09",
    "updated_at": "2026-10-02T14:47:52Z"
@@ -9182,6 +9183,7 @@
   "42": {
    "body": "ecbd73d46435",
    "comments": {},
+   "comments_through": "",
    "state": "closed",
    "title": "Pin that load-report.txt follows the system language; let gate-m24 read it in Chinese",
    "updated_at": "2026-10-02T16:12:43Z"
@@ -14597,7 +14599,87 @@
    "title": null,
    "updated_at": null
   },
+  "712": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "713": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "714": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "715": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "716": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "717": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "718": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "719": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "72": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "720": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "721": {
    "body": null,
    "deleted": true,
    "never_seen": true,
@@ -14633,9 +14715,25 @@
    "title": null,
    "updated_at": null
   },
+  "726": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "727": {
    "body": null,
    "deleted": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "728": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
    "state": null,
    "title": null,
    "updated_at": null
@@ -14683,6 +14781,14 @@
    "title": null,
    "updated_at": null
   },
+  "734": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "735": {
    "body": null,
    "deleted": true,
@@ -14726,9 +14832,25 @@
    "title": null,
    "updated_at": null
   },
+  "740": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "741": {
    "body": null,
    "deleted": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "742": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
    "state": null,
    "title": null,
    "updated_at": null
@@ -14747,9 +14869,33 @@
    "title": null,
    "updated_at": null
   },
+  "745": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "746": {
    "body": null,
    "deleted": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "747": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "748": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
    "state": null,
    "title": null,
    "updated_at": null
@@ -14776,6 +14922,14 @@
    "title": null,
    "updated_at": null
   },
+  "751": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "752": {
    "body": null,
    "deleted": true,
@@ -14790,6 +14944,14 @@
    "title": null,
    "updated_at": null
   },
+  "754": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "755": {
    "body": null,
    "deleted": true,
@@ -14797,9 +14959,33 @@
    "title": null,
    "updated_at": null
   },
+  "756": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "757": {
    "body": null,
    "deleted": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "758": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "759": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
    "state": null,
    "title": null,
    "updated_at": null
@@ -14819,6 +15005,14 @@
    "title": null,
    "updated_at": null
   },
+  "761": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "762": {
    "body": null,
    "deleted": true,
@@ -14829,6 +15023,14 @@
   "763": {
    "body": null,
    "deleted": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "764": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
    "state": null,
    "title": null,
    "updated_at": null
@@ -15440,6 +15642,7 @@
     "Forbric-Installer.command",
     "forbric-kernel-installer-0.1.0.jar"
    ],
+   "deleted": true,
    "updated_at": "2026-09-11T14:35:04Z"
   },
   "v0.2.0": {
@@ -15448,6 +15651,7 @@
     "Forbric-Installer.command",
     "forbric-kernel-installer-0.2.0.jar"
    ],
+   "deleted": true,
    "updated_at": "2026-09-15T14:24:32Z"
   },
   "v0.3.0": {
@@ -15456,6 +15660,7 @@
     "Forbric-Installer.command",
     "forbric-kernel-installer-0.3.0.jar"
    ],
+   "deleted": true,
    "updated_at": "2026-09-28T03:38:04Z"
   },
   "v0.3.1-beta": {
@@ -15465,6 +15670,7 @@
     "forbric-kernel-installer-0.3.1-beta.jar",
     "forbric-kernel-installer-0.3.1-beta.zip"
    ],
+   "deleted": true,
    "updated_at": "2026-09-30T15:58:17Z"
   },
   "v0.3.1-beta2": {
@@ -15474,6 +15680,7 @@
     "forbric-kernel-installer-0.3.1-beta2.jar",
     "forbric-kernel-installer-0.3.1-beta2.zip"
    ],
+   "deleted": true,
    "updated_at": "2026-10-02T13:54:24Z"
   }
  }
