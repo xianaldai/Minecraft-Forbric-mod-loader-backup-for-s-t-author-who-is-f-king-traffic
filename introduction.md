@@ -490,11 +490,18 @@ classpath (first-URL-wins would otherwise let it shadow the winner and contribut
   the constructor. Where Fabric refuses a value (several methods of one name, a private member) the kernel stays
   lenient: it opens the member, or takes the first static method.
 - The mod-facing API is vendored under its own names: `src/main/java/net/fabricmc/api` (7 files) and
-  `src/main/java/net/fabricmc/loader` (30 files: `loader.api.*` plus the narrow internals mods actually link against
+  `src/main/java/net/fabricmc/loader` (32 files: `loader.api.*` plus the narrow internals mods actually link against
   — `FabricLoaderImpl`, `ModContainerImpl`, `EntrypointStorage`, `Hooks`, `FabricLauncher`/`FabricLauncherBase`,
   `DefaultLanguageAdapter`, `StringUtil`, legacy `net.fabricmc.loader.FabricLoader`). `FabricLoaderInternals`
   pins those internals to the parent by exact name; `-Dforbric.fabricImpl=off` withholds them. The API level
-  reported is `KernelFabricEcosystem.FABRIC_LOADER_API_LEVEL = "0.19.3"`.
+  reported is `KernelFabricEcosystem.FABRIC_LOADER_API_LEVEL = "0.19.3"`. `FabricLoaderApiSurfaceTest` holds
+  `net.fabricmc.api` and `net.fabricmc.loader.api` to Fabric Loader 0.19.3's own jar (a local launcher's copy): every
+  public class, its supertypes, and every public or protected member by descriptor. The differences it accepts are
+  listed in the test (the interval algebra, which no mod in the local corpus calls); a new one is red. As on Fabric,
+  `getEntrypoints` builds every entry, leaves a null one out, and then throws one `EntrypointException` naming the
+  first failing mod; a container's `getEntrypoint()` throws one for its own entry, except for an Error construction
+  itself raised (a class that will not initialise), which leaves as it is. Unlike Fabric, the entries are those
+  that can be the asked type: one that cannot is left out rather than failing the key.
 - Entrypoints: `preLaunch` after Mixin (§3.2 step 19); `main` inside the registration window (server) or in
   `Minecraft.<init>` (client, default); `client` in `Minecraft.<init>`; `server` on the dedicated server. Each
   mod's entrypoint is invoked in isolation — one throwing mod is recorded and skipped — with a NeoForge
@@ -539,13 +546,16 @@ classpath (first-URL-wins would otherwise let it shadow the winner and contribut
   (`-Dforbric.forgeCapabilities=off`). The switch turns off dispatch only: the merged base lists those three roots in
   `required-ancestor-compositions.tsv` and the loader refuses to define one without the composition's proof, so off
   still composes them, with an inert provider that fires no `AttachCapabilitiesEvent` and answers every ask empty.
+  Off also registers no Forge block transfer fallback, and the transfer bridge is told so and does not look for one.
   `CapabilityUseAudit` lists the jars that use MinecraftForge capabilities and marks them DEGRADED if dispatch is off
   or the composition did not land on every root type.
 - **Enum extensions** — `ForgeEnumExtensionInjector` drives MinecraftForge's own processor (unconditional; it
   declines everything unless Forge's mod list holds more than two mods).
 - **Configs** — `KernelForgeConfigLoad` opens genuine MinecraftForge configs one at a time, keeping Forge's reader,
   events, save and file watcher; the watchers are stopped on exit by `interop.ClientShutdown`
-  (`ExitHookInjector`: `Minecraft.close` on the client, `DedicatedServer.onServerExit` on the server).
+  (`ExitHookInjector`: `Minecraft.close` on the client, `DedicatedServer.onServerExit` on the server). A watcher
+  that does not confirm its stop within 1.5 s is not a failure; the exit guard keeps sweeping and names any
+  non-daemon thread still alive at its deadline.
 
 ### 5.4 Cross-ecosystem services that are not events
 
@@ -1124,7 +1134,9 @@ Working directories in the same place: `lib/` (extracted bundled jars), `jij/`, 
 the game runs with `-XstartOnFirstThread` and AWT cannot share thread one with GLFW. Parent and child share only
 the tab-separated file format in `DependencyReport`; strings are in `DialogLang` (system language,
 `-Dforbric.dialogLanguage=<code>` forces one). `-Dforbric.dependencyDialog=on` (default) | `off` | `dryRun` (forks
-the real child with AWT disabled — what gates assert on). The child times out after 10 minutes. The confirmation's
+the real child with AWT disabled — what gates assert on). A child started with `-Djava.awt.headless=true` that
+cannot draw has given the answer it was started for, and reports no failure; a child that is headless without being
+told so (a macOS client outside a window session) still does. The child times out after 10 minutes. The confirmation's
 exit code is `0` continue, `4` quit or closed, and anything else (`3` cannot draw, the launcher's own `1`) a window
 nobody could answer. The same child
 has a third window, `--isolation`: the crash-suspects offer of §12.2, whose exit code `2` means start without them;
@@ -1168,8 +1180,11 @@ every `catch` in `src/main` and `src/runtime` either rethrows or reports to `Cau
   this shape", text a mod wrote that is not a valid value, an exception handed on as a value to code that reports
   it. Counted, logged only under `-Dforbric.debug`. When the cause chain of an "expected" exception holds an
   exception only a bug throws (`NullPointerException`, `ClassCastException`, an index out of bounds outside ASM's
-  analysis frames, …), it is reported as a failure instead: ASM's `Analyzer` wraps whatever its interpreter threw
-  in the very `AnalyzerException` a recogniser expects.
+  analysis frames, …) thrown by Forbric's own code, it is reported as a failure instead: ASM's `Analyzer` wraps
+  whatever its interpreter threw in the very `AnalyzerException` a recogniser expects. The same holds for
+  `Caught.Invariant`, which every registry throws when it already holds a different value under the key it is
+  given (`RegistryConflictsAreInvariantsTest` keeps it so): repairs register from inside their "not this shape"
+  catch, so an ordinary `IllegalStateException` was declined there silently.
 
 A recogniser that declines by throwing gives the decline an exception type of its own (a private class such as
 `Unproven`) and catches that one as `expected`, ahead of the `warn` for everything else: to a single catch, an
