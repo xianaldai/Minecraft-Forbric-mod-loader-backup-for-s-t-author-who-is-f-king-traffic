@@ -14,7 +14,7 @@
 #
 #   1. positive — STRICT, every case passes, zero confirmed required findings.
 #   2. off — -Dforbric.unifiedEvents=off -Dforbric.forgeDamageSeams=off: exactly the repaired cases fail and the
-#      controls hold.
+#      controls hold — less the cases whose MinecraftForge hook the merged base calls itself, read from the base.
 # Not covered here: shield blocking (ShieldBlockEvent is forwarded; driving a block needs a raised shield).
 # GATE-PARALLEL: rundirs=server-damage-m47 mem=2000
 set -uo pipefail
@@ -73,13 +73,36 @@ judge positive "not failed" "all 12 cases pass"
 if python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r['confirmedRequired']==0 else 1)" "$RESULTS/positive-compatibility.json" 2>/dev/null
 then echo "[kernel] PASS positive: zero confirmed required findings under STRICT"
 else echo "[kernel] FAIL positive: STRICT report missing or has confirmed required findings"; FAIL=1; fi
-check "positive: the Hurt and Damage seams went into both bodies" 'Forbric/Damage\] net.minecraft.world.entity.LivingEntity: MinecraftForge.s Hurt and Damage' "$RESULTS/positive.log"
-check "…and the player's attack seam" 'Forbric/Damage\] net.minecraft.world.entity.player.Player: .*player Attack in hurtServer' "$RESULTS/positive.log"
+# A merge that keeps both sides' edits may already call some of MinecraftForge's hooks itself; the seams then go in
+# only where a hook is missing, and a native player attack is told to the forward instead of seamed.
+check "positive: Hurt and Damage are asked in LivingEntity (seams, or the merged body's own calls)" 'Forbric/Damage\] net.minecraft.world.entity.LivingEntity: MinecraftForge.s (Hurt and Damage in actuallyHurt|Hurt, Damage already asked)' "$RESULTS/positive.log"
+check "…and the player's attack (seam, or the merged body's own call told to the forward)" 'Forbric/Damage\] net.minecraft.world.entity.player.Player: (.*player Attack in hurtServer|the player Attack forward told)' "$RESULTS/positive.log"
 check_absent "positive: no damage forward or seam failed" 'forward failed|failed inside the damage pipeline' "$RESULTS/positive.log"
 
 step "2. off: the same server with the bridges and the seams switched off"
+# A merge that keeps both sides' edits calls some of MinecraftForge's damage hooks in the merged body itself. With the
+# bridges and seams off, the cases those hooks decide still hold: the base delivers them, the kernel did not repair
+# them. So they leave the expectation, read from the base this run booted, by the hook call itself. Both directions
+# stay exact: a native hook that does not decide its case, or a case that holds without one, is red.
+MERGED="${MERGED:-$RUN_OLD/merged-base/patched-mc-merged-26.2.jar}"
+native_hook() { # <class> <hook> — does the merged class call that MinecraftForge hook itself?
+  javap -c -p -cp "$MERGED" "$1" 2>/dev/null | grep -aqE "Method net/minecraftforge/[A-Za-z/]+\.$2:"
+}
+NATIVE=""
+if javap -cp "$MERGED" net.minecraft.world.entity.LivingEntity >/dev/null 2>&1; then
+  native_hook net.minecraft.world.entity.LivingEntity onLivingAttack && NATIVE="$NATIVE'attack.veto', "
+  native_hook net.minecraft.world.entity.LivingEntity onLivingHurt && NATIVE="$NATIVE'hurt.halve', 'hurt.cancel', "
+  native_hook net.minecraft.world.entity.LivingEntity onLivingDamage && NATIVE="$NATIVE'damage.lethal', 'damage.absorption', "
+  native_hook net.minecraft.world.entity.player.Player onPlayerAttack && NATIVE="$NATIVE'player.attack.zero', 'player.attack.once', "
+  native_hook net.minecraft.world.entity.LivingEntity onLivingKnockBack && NATIVE="$NATIVE'knockback.cancel', "
+  native_hook net.minecraft.world.entity.LivingEntity onLivingFall && NATIVE="$NATIVE'fall.cancel', "
+else
+  echo "[kernel] FAIL off: cannot read LivingEntity from the merged base ($MERGED)"; FAIL=1
+fi
+NATIVE="set([${NATIVE%, }])"
+echo "[kernel] off: cases the merged base delivers itself: $NATIVE"
 run_server off continue "-Dforbric.unifiedEvents=off -Dforbric.forgeDamageSeams=off"
-judge off "failed == $REPAIRED" "exactly the repaired cases fail; the controls hold"
+judge off "failed == $REPAIRED - $NATIVE" "exactly the repaired cases the base does not deliver itself fail; the controls hold"
 
 if [ "$FAIL" -eq 0 ]; then
   echo "[kernel] ✅ M47 DAMAGE GATE GREEN — MinecraftForge's attack, hurt, damage, knockback and fall listeners run and are obeyed"

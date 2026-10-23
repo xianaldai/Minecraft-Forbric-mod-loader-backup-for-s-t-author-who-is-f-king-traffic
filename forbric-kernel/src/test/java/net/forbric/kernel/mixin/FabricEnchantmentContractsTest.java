@@ -2,7 +2,6 @@ package net.forbric.kernel.mixin;
 import static org.junit.jupiter.api.Assertions.*;
 import java.util.*;
 import net.forbric.kernel.transform.FabricItemContractTransformer;
-import net.forbric.kernel.transform.DuplicateLambdaPruneInjector;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.*;
@@ -23,32 +22,28 @@ class FabricEnchantmentContractsTest {
   byte[] bytes=StagedFabricMixinFixture.bytes(api());String name=FabricItemContractTransformer.API.replace('/','.');
   assertSame(bytes,new FabricItemContractTransformer(n->n.equals(FabricItemContractTransformer.API)).transform(name,bytes,null));
   System.setProperty(FabricItemContractTransformer.PROPERTY,"off");assertSame(bytes,transformer.transform(name,bytes,null));System.clearProperty(FabricItemContractTransformer.PROPERTY);
-  ClassNode node=api();StagedFabricMixinFixture.method(node,"canBeEnchantedWith").instructions.insert(new InsnNode(Opcodes.NOP));bytes=StagedFabricMixinFixture.bytes(node);assertSame(bytes,transformer.transform(name,bytes,null));
+  // A default that decides anything else than vanilla's two decisions on the PRIMARY test is not the contract.
+  ClassNode node=api();StagedFabricMixinFixture.method(node,"canBeEnchantedWith").instructions.insert(new MethodInsnNode(Opcodes.INVOKESTATIC,"other/Effects","touch","()V",false));bytes=StagedFabricMixinFixture.bytes(node);assertSame(bytes,transformer.transform(name,bytes,null));
  }
- @Test void theRealMethodReferenceGetsOneTypedWrapperWithoutChangingCaptureOrder()throws Exception{
-  ClassNode node=transformed(FabricItemContractTransformer.HELPER,StagedFabricMixinFixture.game(FabricItemContractTransformer.HELPER,false));
-  MethodNode bridge=StagedFabricMixinFixture.method(node,FabricItemContractTransformer.PRIMARY_HELPER);assertEquals(FabricItemContractTransformer.PRIMARY_DESC,bridge.desc);assertEquals(1,count(bridge,FabricItemContractTransformer.NATIVE,"isPrimaryItemFor"));
-  int handles=0;for(var instruction:StagedFabricMixinFixture.method(node,"getAvailableEnchantmentResults").instructions)if(instruction instanceof InvokeDynamicInsnNode d)for(Object argument:d.bsmArgs)if(argument instanceof Handle h&&h.getName().equals(FabricItemContractTransformer.PRIMARY_HELPER)){handles++;assertEquals(Opcodes.H_INVOKESTATIC,h.getTag());assertEquals(FabricItemContractTransformer.PRIMARY_DESC,h.getDesc());}
-  assertEquals(1,handles);byte[] bytes=StagedFabricMixinFixture.bytes(node);assertSame(bytes,transformer.transform(node.name.replace('/','.'),bytes,null));
- }
- @Test void allFourActualFabricMixinsAttachToTheCorrespondingNativeDecision()throws Exception{
-  for(String[] pair:List.of(new String[]{"EnchantCommandMixin","net/minecraft/server/commands/EnchantCommand"},new String[]{"EnchantRandomlyFunctionMixin","net/minecraft/world/level/storage/loot/functions/EnchantRandomlyFunction"},new String[]{"EnchantmentHelperMixin",FabricItemContractTransformer.HELPER},new String[]{"AnvilMenuMixin","net/minecraft/world/inventory/AnvilMenu"})){
-   ClassNode mixin=StagedFabricMixinFixture.mixin("fabric-item-api-v1","net/fabricmc/fabric/mixin/item/"+pair[0]);ClassNode target=StagedFabricMixinFixture.game(pair[1],false);
-   target=MixinFit.parse(new DuplicateLambdaPruneInjector().transform(pair[1].replace('/','.'),StagedFabricMixinFixture.bytes(target),null));
-   if(pair[1].equals(FabricItemContractTransformer.HELPER))target=transformed(pair[1],target);ClassNode finalTarget=target;
-   assertEquals(1,FabricEnchantmentMixinAdapter.adapt(mixin,n->finalTarget),pair[0]);
-   MethodNode handler=mixin.methods.stream().filter(m->MixinFit.injectorOf(m)!=null&&m.name.contains("Enchanting")).findFirst().orElseThrow();
-   assertEquals(2,Type.getArgumentTypes(handler.desc).length);assertEquals(1,count(handler,FabricItemContractTransformer.STACK,"canBeEnchantedWith"));
-   new org.objectweb.asm.tree.analysis.Analyzer<>(new org.objectweb.asm.tree.analysis.BasicVerifier()).analyze(mixin.name,handler);
-   assertEquals(0,FabricEnchantmentMixinAdapter.adapt(mixin,n->finalTarget));
-  }
- }
- @Test void modifiedHandlerAndAlternativeGroupKeepTheirOriginalContract()throws Exception{
-  for(boolean group:new boolean[]{false,true}){
-   ClassNode mixin=StagedFabricMixinFixture.mixin("fabric-item-api-v1","net/fabricmc/fabric/mixin/item/EnchantCommandMixin"),target=StagedFabricMixinFixture.game("net/minecraft/server/commands/EnchantCommand",false);
-   MethodNode method=StagedFabricMixinFixture.method(mixin,"callAllowEnchantingEvent");
-   if(group)method.visibleAnnotations.add(new AnnotationNode("Lorg/spongepowered/asm/mixin/injection/Group;"));else method.instructions.insert(new InsnNode(Opcodes.NOP));
-   assertEquals(0,FabricEnchantmentMixinAdapter.adapt(mixin,n->target));
+ /** The contract is the default's data flow, not one release's bytes: another spelling of the same decision is rewritten. */
+ @Test void theSameDecisionSpelledAnotherWayIsRewrittenAndAnotherDecisionIsNot()throws Exception{
+  String name=FabricItemContractTransformer.API.replace('/','.'),context="net/fabricmc/fabric/api/item/v1/EnchantingContext",enchantment="net/minecraft/world/item/enchantment/Enchantment",stack="net/minecraft/world/item/ItemStack";
+  for(int variant=0;variant<4;variant++){
+   ClassNode node=api();MethodNode method=StagedFabricMixinFixture.method(node,"canBeEnchantedWith");method.instructions.clear();method.localVariables=null;method.tryCatchBlocks.clear();var c=method.instructions;
+   // the enchantment read once into a local, the test written the other way round (IF_ACMPEQ), the answers returned on two exits
+   c.add(new VarInsnNode(Opcodes.ALOAD,2));c.add(new MethodInsnNode(Opcodes.INVOKEINTERFACE,"net/minecraft/core/Holder","value","()Ljava/lang/Object;",true));c.add(new TypeInsnNode(Opcodes.CHECKCAST,enchantment));c.add(new VarInsnNode(Opcodes.ASTORE,4));
+   LabelNode primary=new LabelNode();
+   c.add(new FieldInsnNode(Opcodes.GETSTATIC,context,"PRIMARY","L"+context+";"));c.add(new VarInsnNode(Opcodes.ALOAD,3));c.add(new JumpInsnNode(Opcodes.IF_ACMPEQ,primary));
+   // 1: the decisions swapped; 2: canEnchant asked about another stack (null); 3: the test made on a constant, not the context
+   String otherwise=variant==1?"isPrimaryItem":"canEnchant",onPrimary=variant==1?"canEnchant":"isPrimaryItem";
+   c.add(new VarInsnNode(Opcodes.ALOAD,4));c.add(variant==2?new InsnNode(Opcodes.ACONST_NULL):new VarInsnNode(Opcodes.ALOAD,1));c.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL,enchantment,otherwise,"(L"+stack+";)Z",false));c.add(new InsnNode(Opcodes.IRETURN));
+   c.add(primary);c.add(new FrameNode(Opcodes.F_SAME,0,null,0,null));c.add(new VarInsnNode(Opcodes.ALOAD,4));c.add(new VarInsnNode(Opcodes.ALOAD,1));c.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL,enchantment,onPrimary,"(L"+stack+";)Z",false));c.add(new InsnNode(Opcodes.IRETURN));
+   if(variant==3){c.remove(c.get(5));c.insert(c.get(4),new InsnNode(Opcodes.ACONST_NULL));}
+   method.maxLocals=5;method.maxStack=2;
+   byte[] bytes=StagedFabricMixinFixture.bytes(node);byte[] out=transformer.transform(name,bytes,null);
+   if(variant==0){assertNotSame(bytes,out);MethodNode rewritten=StagedFabricMixinFixture.method(MixinFit.parse(out),"canBeEnchantedWith");
+    assertEquals(1,count(rewritten,FabricItemContractTransformer.NATIVE,"supportsEnchantment"));assertEquals(1,count(rewritten,FabricItemContractTransformer.NATIVE,"isPrimaryItemFor"));}
+   else assertSame(bytes,out,"variant "+variant+" decides something else");
   }
  }
  private int count(MethodNode method,String owner,String name){int n=0;for(var i:method.instructions)if(i instanceof MethodInsnNode c&&c.owner.equals(owner)&&c.name.equals(name))n++;return n;}

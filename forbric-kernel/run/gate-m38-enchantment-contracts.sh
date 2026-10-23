@@ -28,7 +28,12 @@ for phase in ('positive','off'):
  (run/'server.properties').write_text(f'server-ip=127.0.0.1\nserver-port={port}\nonline-mode=false\nlevel-name=world\nlevel-type=minecraft:flat\nlevel-seed=8035262\nmax-tick-time=-1\npause-when-empty-seconds=0\nview-distance=2\nsimulation-distance=2\n')
  for item in [inputs['mod'],*inputs['modules']]:source=pathlib.Path(item['path']);shutil.copy2(source,run/'mods'/source.name)
  env=os.environ.copy();env.update(RUNDIR=str(run),FORBRIC_COMPAT_POLICY='strict' if phase=='positive' else 'continue',M38_RESULT_COMPATIBILITY=str(results/(phase+'-compatibility.json')),
-   FORBRIC_JVM=f'-Dforbric.fabricItemContracts={"on" if phase=="positive" else "off"} -Dforbric.enchantPhase={phase} -Dforbric.enchantNonce={nonce} -Dforbric.enchantRoot={run}')
+   FORBRIC_JVM=f'-Dforbric.fabricItemContracts={"on" if phase=="positive" else "off"} -Dforbric.enchantPhase={phase} -Dforbric.enchantNonce={nonce} -Dforbric.enchantRoot={run}'
+   # The command, loot and anvil redirects move onto the carrier's supportsEnchantment by CarrierDecisions, and the table's
+   # primary-item redirect onto the carrier's isPrimaryItemFor method reference by CarrierMethodReferences (the native lambda
+   # runs there with fabric-api's handler, its "|| isBook" kept); both know no mod and have their own switches: the negative
+   # control turns them off too, or a deciding listener still lands without the contracts.
+   +(' -Dforbric.carrierDecisions=off -Dforbric.carrierMethodReferences=off' if phase=='off' else ''))
  for key,role in [('MERGED','merged'),('FORGE_RT','forge'),('NEO_RT','neo')]:env[key]=inputs[role]['path']
  command=['python3',str(kernel/'run/compat/evidence.py'),'run','--source',str(root),'--mods',str(run/'mods'),'--output',str(results/(phase+'.json'))]
  for role,path in [('merged',env['MERGED']),('forge-interop',env['FORGE_RT']),('neo-runtime',env['NEO_RT']),('fabric-api',inputs['fabricApi']['path']),('kernel',str(kernel/'build/libs/forbric-kernel-0.1.0-SNAPSHOT.jar')),('kernel-runtime',str(kernel/'build/libs/forbric-kernel-runtime-0.1.0-SNAPSHOT.jar'))]:command+=['--artifact',role+'='+path]
@@ -49,6 +54,9 @@ for phase in ('positive','off'):
  proof=json.loads((run/'probe.json').read_text());shutil.copy2(run/'probe.json',results/(phase+'-probe.json'))
  assert proof['nonce']==nonce and proof['phase']==phase and len(proof['cases'])==16,proof
  assert all(c['pass'] is (phase=='positive') for c in proof['cases']),proof
+ # The Fabric-only translation is CarrierDecisions' repair (fabric-api's server language copy, moved onto NeoForge's
+ # capture), so it is there in the positive phase only; vanilla's own language is there in both.
+ assert proof['vanillaLanguage'] is True and proof['fabricLanguage'] is (phase=='positive'),(phase,'language',proof['fabricLanguage'],proof['vanillaLanguage'])
  outcome=json.loads((results/(phase+'.result.json')).read_text());assert outcome['inputsUnchanged'] is True,outcome
  report=json.loads((results/(phase+'-compatibility.json')).read_text())
  if phase=='positive':assert report['confirmedRequired']==0,report

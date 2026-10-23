@@ -713,6 +713,17 @@ public final class MixinFit {
 			if (locals != null) moved = MixinStubRebind.destination(mixin, m, locals);
 			if (moved != null) hits = new ArrayList<>(List.of(moved));
 		}
+		// The move MixinSplitBodyEdges will make for a start or end of a method a carrier split into pieces the merged game
+		// runs one by one (Balm's health events on Hud.extractPlayerHealth), judged here too so the verdict and the move
+		// cannot disagree: bound to the dispatcher it would read as never running.
+		if (selectors.size() == 1 && hits.size() == 1) {
+			ClassNode code = withLocals.get();
+			MethodNode piece = code == null ? null : MixinSplitBodyEdges.destination(mixin, m, code, NativeGameReferences::reference);
+			if (piece != null) {
+				MethodNode live = findMethod(target, piece.name, piece.desc, resolver);
+				hits = new ArrayList<>(List.of(live != null ? live : piece));
+			}
+		}
 		// Bound is not run. An injector whose every method is one nothing in the merged game calls attaches and
 		// never fires: Better Mount HUD's XP redirect in Hud.extractHotbarAndDecorations, whose vanilla caller
 		// NeoForge's HUD layers replaced, and malilib's tooltip hook in the renamed tooltip body R3 moves it to. Soft —
@@ -1277,6 +1288,9 @@ public final class MixinFit {
 			String why = owner == null ? null : MergedBaseUncalledMethods.neverRuns(owner, hit, ecosystem, resolver);
 			// Or a body a carrier renamed and nothing calls, where R3 moved the injector to bind as it would in the body.
 			if (why == null && owner != null) why = CarrierRenames.neverRuns(owner, hit, ecosystem);
+			// Or a method whose woven body the carrier's own place runs through a relay (UncalledValueRelay): it runs there, on the
+			// carrier's value. The final class still reports it, should the relay be declined after weaving.
+			if (why != null && UncalledValueRelay.relays(owner.name, hit.name, hit.desc, ecosystem)) why = null;
 			if (why == null) return null;
 			String line = hit.name + " never runs: " + why;
 			if (!dead.contains(line)) dead.add(line);
@@ -1365,6 +1379,15 @@ public final class MixinFit {
 	}
 
 	record Member(String owner, String name, String desc) { // package-private for MixinFitTest
+	}
+
+	/**
+	 * Whether two member targets name the same owner, name and descriptor as Mixin reads a target ({@link #parseMember}:
+	 * any spacing, a descriptor or a dotted owner); false when either is not a full member.
+	 */
+	public static boolean sameMember(String a, String b) {
+		Member left = parseMember(a), right = parseMember(b);
+		return left != null && right != null && left.owner() != null && left.desc() != null && left.equals(right);
 	}
 
 	/** Parses {@code Lowner;name(args)ret} and {@code Lowner;name:Ldesc;}. Returns null when the shape is unfamiliar. */
@@ -1743,7 +1766,7 @@ public final class MixinFit {
 	}
 
 	/** Mixin's implicit accessor naming: strip one of the prefixes and decapitalise. */
-	private static String derived(String method, String... prefixes) {
+	static String derived(String method, String... prefixes) {
 		for (String prefix : prefixes) {
 			if (method.length() > prefix.length() && method.startsWith(prefix)
 					&& Character.isUpperCase(method.charAt(prefix.length()))) {
@@ -1754,7 +1777,7 @@ public final class MixinFit {
 		return null;
 	}
 
-	private static AnnotationNode annotation(MethodNode m, String desc) {
+	static AnnotationNode annotation(MethodNode m, String desc) {
 		for (List<AnnotationNode> table : new List[] { m.visibleAnnotations, m.invisibleAnnotations }) {
 			if (table == null) continue;
 			for (AnnotationNode a : table) if (desc.equals(a.desc)) return a;

@@ -102,12 +102,16 @@ public final class KernelMixinBootstrap {
 		// most of fabric-api's mixins use (@ModifyExpressionValue, MIXINEXTRAS:EXPRESSION, LocalRef sugar). Without
 		// it those configs fail to even parse their injection points.
 		initMixinExtras(loader);
+		// The kernel's injection point that counts a guest's point over its platform's own body (NativeOccurrences hands
+		// guest points to it); registered before any config is parsed, like MixinExtras' points.
+		org.spongepowered.asm.mixin.injection.InjectionPoint.register(NativeOccurrencePoint.class, NativeOccurrencePoint.NAMESPACE);
 
 		for (String config : configs) {
 			Mixins.addConfiguration(config);
 		}
 		nameTheModsBehindTheConfigs();
 		giveFabricConfigsTheirCompatibilityLevel();
+		configsRegistered = true;
 		// A mixin that fails to prepare or apply names its mod on the Mods screen and in load-report.txt. Mixin
 		// instantiates the handler by name through the service's class provider when the first error happens.
 		if (KernelMixinErrorHandler.enabled()) {
@@ -150,10 +154,23 @@ public final class KernelMixinBootstrap {
 		loader.knotDelegate().attach();
 		var codecReturns = new net.forbric.kernel.transform.PostMixinCodecReturnArbitration();
 		var callbackPriority = new net.forbric.kernel.transform.PostMixinCallbackPriority();
+		// The transfer audit proves an interface-default delegate against the same raw game classes the merged-base
+		// repair read when it dropped the ones it could prove (KernelBoot hands it this lookup).
+		java.util.function.Function<String, byte[]> gameClasses = path -> {
+			try (var in = loader.getGameResourceAsStream(path)) {
+				return in == null ? null : in.readAllBytes();
+			} catch (java.io.IOException unreadable) {
+				Caught.warn(unreadable, "[Forbric/Mixin] could not read game resource %s; taken as absent", path);
+				return null;
+			}
+		};
+		// UncalledValueRelay after the fixups: a vanilla method the merged game never calls, into which guest hooks were woven, gets
+		// a relay of its woven body the carrier's own place runs (Block.tryDropExperience, from NeoForge's drops event). It needs
+		// the bytes Mixin was handed, to tell what was woven.
 		loader.setMixinTransformer((name, bytes) -> net.forbric.kernel.transform.ForgeTransferShapeAudit.certify(name,
-				callbackPriority.transform(name, codecReturns.transform(name, conflicts.transform(name, bytes, PostMixinFixups.apply(name,
-						net.forbric.kernel.transform.NativeCoremodParity.apply(name,
-								MixinWeaverSlot.currentOr(transformer).transformClassBytes(name, name, bytes)))), null), null)));
+				callbackPriority.transform(name, codecReturns.transform(name, conflicts.transform(name, bytes, UncalledValueRelay.apply(name, bytes,
+						PostMixinFixups.apply(name, net.forbric.kernel.transform.NativeCoremodParity.apply(name,
+								MixinWeaverSlot.currentOr(transformer).transformClassBytes(name, name, bytes))))), null), null), gameClasses));
 
 		// Leave PREINIT so the registered configs are prepared and their targets become weavable.
 		gotoPhase(MixinEnvironment.Phase.INIT);
@@ -240,6 +257,46 @@ public final class KernelMixinBootstrap {
 			String mode) {
 		if ("latest".equalsIgnoreCase(mode)) return null;
 		return FabricMixinCompat.levelFor(dependencies);
+	}
+
+	/** Whether {@link #init} has registered and decorated every config with Mixin. */
+	private static volatile boolean configsRegistered;
+
+	/**
+	 * The Mixin compatibility level {@code configName}'s mixins are woven at: its decoration when Mixin has the config
+	 * decorated, else the level {@link #giveFabricConfigsTheirCompatibilityLevel} gives it (the same rule, so a judgement
+	 * made before Mixin's INIT agrees with the weave), else Mixin's newest — every Forge-family config, a config nobody
+	 * owns, and every config under {@code -Dforbric.mixinCompat=latest}.
+	 *
+	 * <p>For a mechanism that predicts what Mixin will do with an injector: what Mixin does at a point (which stores a
+	 * {@code @ModifyVariable} finds, which local an ordinal picks) changes with this level, mod by mod.
+	 */
+	public static int wovenLevel(String configName) {
+		if (configName == null) return FabricUtil.COMPATIBILITY_LATEST;
+		String mode = System.getProperty(COMPATIBILITY_PROPERTY, "fabric");
+		if ("latest".equalsIgnoreCase(mode)) return FabricUtil.COMPATIBILITY_LATEST;
+		try {
+			// Mixin's registry only once this bootstrap has filled it: before that (a judgement at config registration, a
+			// unit test without Mixin) asking it would start Mixin's services, and the decoration is not there yet anyway.
+			if (configsRegistered) for (Config registered : Mixins.getConfigs()) {
+				if (!configName.equals(registered.getName())) continue;
+				IMixinConfig config = registered.getConfig();
+				if (config == null) break;
+				// Undecorated, Mixin weaves it at its newest, whatever the metadata would have given it.
+				return config.hasDecoration(FabricUtil.KEY_COMPATIBILITY) ? FabricUtil.getCompatibility(config)
+						: FabricUtil.COMPATIBILITY_LATEST;
+			}
+			if (MixinConfigOwners.ecosystemOf(configName) != Ecosystem.FABRIC) return FabricUtil.COMPATIBILITY_LATEST;
+			KernelFabricLoader fabric = KernelFabricLoader.getInstanceOrNull();
+			String modId = MixinConfigOwners.modIdOf(configName);
+			ModContainer mod = fabric == null || modId == null ? null : fabric.getModContainer(modId).orElse(null);
+			Integer level = mod == null ? null : compatibilityLevel(mod.getMetadata().getDependencies(), mode);
+			return level == null ? FabricUtil.COMPATIBILITY_LATEST : level;
+		} catch (RuntimeException | LinkageError unreadable) {
+			Caught.warn(unreadable, "[Forbric/Mixin] could not tell which level %s is woven at; it is taken as Mixin's newest",
+					configName);
+			return FabricUtil.COMPATIBILITY_LATEST;
+		}
 	}
 
 	/**

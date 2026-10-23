@@ -84,10 +84,11 @@ public final class DeadEventAudit {
 						+ "and block-logging mods record nothing");
 		dead.put("net/minecraftforge/event/entity/player/PlayerInteractEvent$RightClickBlock",
 				"right-clicking a block is neither observed nor preventable");
-		dead.put("net/minecraftforge/event/entity/player/PlayerInteractEvent$LeftClickBlock",
-				"left-clicking a block is neither observed nor preventable");
-		dead.put("net/minecraftforge/event/entity/player/PlayerInteractEvent$RightClickItem",
-				"using an item in hand is neither observed nor preventable");
+		// LeftClickBlock and RightClickItem were rows here too. The merge now keeps both families' edits in a method
+		// both patched, and HookCallSiteCensus finds ServerPlayerGameMode (and MultiPlayerGameMode) calling
+		// MinecraftForge's onLeftClickBlock and onItemRightClick again, so neither is "never posted". Both are BRIDGED as well, which is consulted first, so the rows were
+		// unreachable from the audit anyway; where the native call shares a path with NeoForge's, the bridge stands
+		// down for that event (NativeDualEventInjector) rather than posting it a second time.
 		// ServerGamePacketListenerImpl carries NeoForge's chat decorator and no MinecraftForge chat hook.
 		dead.put("net/minecraftforge/event/ServerChatEvent",
 				"chat messages cannot be seen, edited or blocked — chat-formatting and moderation mods do nothing");
@@ -112,28 +113,23 @@ public final class DeadEventAudit {
 		// carries yet. The merged consumers read only NeoForge's tables at these sites, so the Forge event would
 		// be delivered into nothing; they are named here so a waiting mod is named at boot rather than found in
 		// a screenshot. Each is a candidate adapter for a later round.
-				dead.put("net/minecraftforge/client/event/AddFramePassEvent",
-				"extra render frame passes a MinecraftForge mod adds never run — the merged frame graph asks only "
-						+ "NeoForge's event");
+		// AddFramePassEvent and EntityRenderersEvent$AddLayers were rows here as well, until the merge began keeping
+		// both families' edits in a method both patched: the census now finds Minecraft.<init> calling
+		// ForgeEventFactoryClient.onInitLevelRenderer and EntityRenderDispatcher.onResourceManagerReload calling its
+		// onGatherLayers again, so neither row can still say the event is never posted.
 		dead.put("net/minecraftforge/client/event/EntityRenderersEvent$CreateSkullModels",
 				"custom skull block models a MinecraftForge mod registers never render — the merged skull renderer "
 						+ "reads only NeoForge's map");
-		dead.put("net/minecraftforge/client/event/EntityRenderersEvent$AddLayers",
-				"render layers a MinecraftForge mod adds to existing entity renderers — armour, capes, overlays — "
-						+ "never draw; the merged EntityRenderDispatcher posts only NeoForge's AddLayers");
 		// The two fluid events the merged FlowingFluid/LavaFluid post only for NeoForge (EventHooks
 		// .canCreateFluidSource at bc 110, fireFluidPlaceBlockEvent at three sites). Deliberately not bridged by the
 		// fluid-rendering repair: that is event multiplexing, and it is named here instead so a listener is told.
 		dead.put("net/minecraftforge/event/level/BlockEvent$CreateFluidSourceEvent",
 				"infinite-source formation cannot be observed or vetoed — the merged FlowingFluid.canConvertToSource "
 						+ "asks only NeoForge's EventHooks.canCreateFluidSource");
-						// The other side of the ledger: the merged ItemStack.getTooltipLines calls only MinecraftForge's
-		// ForgeEventFactory.onItemTooltip (javap: one invokestatic, none into net/neoforged), so NeoForge's event is
-		// the dead one here. ItemStack#onDestroyed is NOT a row: it is an extension hook on both sides
-		// (IForgeItemStack.onDestroyed survived) and cannot be a subscriber finding.
-		dead.put("net/neoforged/neoforge/event/entity/player/ItemTooltipEvent",
-				"item tooltips cannot be extended by NeoForge mods — the merged getTooltipLines calls only "
-						+ "MinecraftForge's onItemTooltip");
+		// NeoForge's ItemTooltipEvent was the one row on the other side of the ledger: the merged
+		// ItemStack.getTooltipLines called only MinecraftForge's onItemTooltip. With both families' edits kept in a
+		// method both patched it calls NeoForge's EventHooks.onItemTooltip too, so the event is posted natively; the
+		// kernel's tooltip repair stands down there (ForbricMergedBaseCompatTransformer) instead of posting it again.
 		// EntityPlaceEvent was a row here too, for the reason routePlaceItemHookToNeoForge states: ItemStack.useOn
 		// was sent to NeoForge's onPlaceItemIntoWorld so that placing anything works at all. True of useOn, and
 		// the census finds ReplaceDisk#apply still calling ForgeEventFactory.onBlockPlace — so the event is
@@ -143,6 +139,10 @@ public final class DeadEventAudit {
 		// rows were unreachable anyway; FluidPlaceBlockEvent is posted from MinecraftForge's own
 		// FluidInteractionRegistry, which this layer cannot prove is reached but can no longer claim is not.
 		// A row here says "the merged game never posts this", and none of the three could still say it.
+		// The two sound events were rows here for one round: once the splice stopped carrying a MinecraftForge rewrite
+		// of the vanilla play call over NeoForge's own handling of the same sound (it dropped what NeoForge's listeners
+		// set), every place the merged game plays a sound asked only NeoForge. KernelGameSoundEvents forwards both now,
+		// so they are BRIDGED.
 		return Map.copyOf(dead);
 	}
 
@@ -173,23 +173,46 @@ public final class DeadEventAudit {
 
 	private static Map<String, String> partiallyPosted() {
 		Map<String, String> partial = new LinkedHashMap<>();
+		// Regenerated from HookCallSiteCensus.erosion once the merge began keeping both families' edits in a method
+		// both patched: PlayerDestroyItemEvent, NeighborNotifyEvent, BlockFeatureGrowEvent and MobEffectEvent
+		// $Applicable got every call site back and left; four that had lost all of theirs (LivingConversionEvent$Pre,
+		// EntityLeaveLevelEvent, LevelEvent$Unload, PlayLevelSoundEvent$AtEntity) got some back and joined, and
+		// LivingConversionEvent$Post went from 3 of 7 to 4. Regenerated again once the splice carried an insertion
+		// statement by statement: ClientLevel's tracking end now posts EntityLeaveLevelEvent too (2 of 2), so it left,
+		// and the pig's lightning conversion keeps MinecraftForge's onLivingConvert (Post is 5 of 7 now). Regenerated
+		// once the splice stopped carrying runs whose answer the kept body drops: PlayLevelSoundEvent$AtEntity lost
+		// its last paths and moved to DEAD (and is BRIDGED now); the level tick (MinecraftServer.tickChildren), the click that starts
+		// mining a block on the client (MultiPlayerGameMode.startDestroyBlock) and a huge mushroom's growth
+		// (MushroomBlock.growMushroom) are posted from fewer places and joined. Regenerated once the merge stopped
+		// forcing NeoForge's copy of a lambda both sides compile as one vanilla lambda onto its capturer: the client's
+		// finishing break (MultiPlayerGameMode.lambda$continueDestroyBlock$1) asks isLeftClickBlockCancelled again, and
+		// HookCallSiteCensusStagedTest now checks each row's count against every hook that posts the event — the
+		// LeftClickBlock row had left out onLeftClickBlockHold's path.
 		partial.put("net/minecraftforge/event/entity/living/LivingConversionEvent$Post",
-				"a completed conversion is announced on 3 of its 7 paths, so a mod reacting to one will react "
-						+ "to some conversions and not others");
-		partial.put("net/minecraftforge/event/entity/player/PlayerDestroyItemEvent",
-				"an item breaking is announced on 1 of its 4 paths — a mod that replaces or refunds broken "
-						+ "tools will do it for some breakages only");
-		partial.put("net/minecraftforge/event/level/BlockEvent$NeighborNotifyEvent",
-				"block updates reaching neighbours are visible on 1 of the 4 paths that used to report them");
-		partial.put("net/minecraftforge/event/level/BlockFeatureGrowEvent",
-				"a feature growing is observable on 1 of its 3 paths — saplings and the rest differ");
+				"a completed conversion is announced on 5 of its 7 paths — not for hoglins or piglins — so a "
+						+ "mod reacting to one will react to some conversions and not others");
+		partial.put("net/minecraftforge/event/entity/living/LivingConversionEvent$Pre",
+				"whether a mob may convert is asked on 5 of its 10 paths — not for lightning, a piglin or hoglin "
+						+ "zombifying, or a zombie villager being cured — so a mod that stops conversions stops some");
 		partial.put("net/minecraftforge/event/entity/living/LivingFallEvent",
 				"fall damage can be modified on 2 of its 3 paths; the one that is gone is the one most entities "
 						+ "take, so this reads as a mod that works for horses and llamas only");
-		partial.put("net/minecraftforge/event/entity/living/MobEffectEvent$Applicable",
-				"whether an effect may apply is asked on 1 of its 2 paths");
 		partial.put("net/minecraftforge/event/level/BlockEvent$EntityPlaceEvent",
 				"placement by an entity is announced on 1 of its 2 paths");
+		partial.put("net/minecraftforge/event/level/LevelEvent$Unload",
+				"a level going away is announced on 2 of its 3 paths — not when a server stops — so what a mod "
+						+ "releases on unload is kept at shutdown");
+		partial.put("net/minecraftforge/event/TickEvent$LevelTickEvent$Pre",
+				"the level tick is posted natively for the client's level only, not for a server level — server "
+						+ "levels reach MinecraftForge mods only through the level-tick bridge");
+		partial.put("net/minecraftforge/event/TickEvent$LevelTickEvent$Post",
+				"as the level tick's pre half: posted natively for the client's level only");
+		partial.put("net/minecraftforge/event/entity/player/PlayerInteractEvent$LeftClickBlock",
+				"a left click on a block is announced on 5 of its 6 paths — not when a survival player starts "
+						+ "mining a block on the client");
+		partial.put("net/minecraftforge/event/level/BlockFeatureGrowEvent",
+				"a feature growing from a bonemealed plant can be changed or stopped on 2 of its 3 paths — not for a "
+						+ "huge mushroom");
 		return Map.copyOf(partial);
 	}
 
@@ -273,6 +296,31 @@ public final class DeadEventAudit {
 		map.put("net/minecraftforge/client/event/AddGuiOverlayLayersEvent", GameEventBridge.GUI_OVERLAY_LAYERS);
 		map.put("net/minecraftforge/event/level/BlockEvent$EntityPlaceEvent",
 				GameEventBridge.ENTITY_PLACE_BLOCK);
+		// A bridge per event, not one for the pair: the stand-down skips what a native delivery covered, and a merged
+		// method that asks MinecraftForge about an entity's sound has not asked it about a position's.
+		map.put("net/minecraftforge/event/PlayLevelSoundEvent$AtEntity", GameEventBridge.PLAY_SOUND_AT_ENTITY);
+		map.put("net/minecraftforge/event/PlayLevelSoundEvent$AtPosition", GameEventBridge.PLAY_SOUND_AT_POSITION);
+		// The level tick has been bridged all along (KernelGameTickEvents); a row here makes the audit consult the
+		// bridge for it, and lets the bridge stand down where the merged game posts MinecraftForge's level tick
+		// itself on the same path as NeoForge's (the client's Minecraft.tick), instead of delivering it twice.
+		map.put("net/minecraftforge/event/TickEvent$LevelTickEvent$Pre", GameEventBridge.LEVEL_TICK_PRE);
+		map.put("net/minecraftforge/event/TickEvent$LevelTickEvent$Post", GameEventBridge.LEVEL_TICK_POST);
+		// Entity tracking is bridged too (KernelGamePlayerTrackingEvents). Rows here because this table is also what
+		// NativeDualEventInjector and the bridge guard read: a bridge whose events are not listed can never stand
+		// down where the merged game tracks natively, and these two were the first to need it.
+		map.put("net/minecraftforge/event/entity/player/PlayerEvent$StartTracking", GameEventBridge.START_TRACKING);
+		map.put("net/minecraftforge/event/entity/player/PlayerEvent$StopTracking", GameEventBridge.STOP_TRACKING);
+		// The server lifecycle has been bridged all along (KernelGameServerAboutToStart, KernelGameServerLifecycle). A
+		// merged initServer and runServer that keep both families' edits call MinecraftForge's hooks natively on the
+		// same path as NeoForge's, and without these rows each forward delivered its event a second time: every
+		// MinecraftForge mod's about-to-start, starting and started listeners ran twice, its SERVER configs loaded twice
+		// with two watchers each, and PermissionAPI was initialised twice.
+		String server = "net/minecraftforge/event/server/";
+		map.put(server + "ServerAboutToStartEvent", GameEventBridge.SERVER_ABOUT_TO_START);
+		map.put(server + "ServerStartingEvent", GameEventBridge.SERVER_STARTING);
+		map.put(server + "ServerStartedEvent", GameEventBridge.SERVER_STARTED);
+		map.put(server + "ServerStoppingEvent", GameEventBridge.SERVER_STOPPING);
+		map.put(server + "ServerStoppedEvent", GameEventBridge.SERVER_STOPPED);
 		// The registration events lifted by the Phase 1 A repairs. ForgeHooksClient.initClientHooks posts the
 		// first eleven (three directly, eight through the Forge managers' init()); the merged Minecraft.<init>
 		// now calls it through KernelForgeClientInit. The next three have one redirect each.
@@ -290,6 +338,115 @@ public final class DeadEventAudit {
 		map.put("net/minecraftforge/event/entity/SpawnPlacementRegisterEvent", GameEventBridge.SPAWN_PLACEMENTS);
 		return Map.copyOf(map);
 	}
+
+	/**
+	 * The rest of what the bridges on NeoForge's buses re-post: every forwarding bridge without a {@link #BRIDGED} row,
+	 * game bus or mod bus, with the MinecraftForge events its forward constructs (read from its game-side class and the
+	 * hooks it calls).
+	 *
+	 * <p>The stand-down is only as complete as this inventory. {@code NativeDualEventInjector} looks only for these
+	 * events on a path that also posts NeoForge's, and {@link GameEventMultiplexer#guarded} guards only a bridge with
+	 * events here or in {@link #BRIDGED}. A bridge with neither could never stand down, and a merge that keeps both
+	 * families' edits calls MinecraftForge's hook natively beside NeoForge's at many of these sites: measured with the
+	 * event-chain audit on the edit-spliced base, every MinecraftForge mod received the server, player, client and
+	 * render ticks, each level's load, save and unload, the client's log-in and log-out, system chat, mouse buttons,
+	 * fog and block overlays twice — once from the game and once from the bridge.
+	 *
+	 * <p>Not {@link #BRIDGED}, because that table is also the dead-event judgement's, and none of these is "never
+	 * posted": each bridge here installs on every boot of its side, and a CLIENT_GAME_BUS row there would name every mod
+	 * listening for its event DEGRADED on every dedicated server, which never installs it. The portal bridge is not here
+	 * either: {@code PortalSpawnInjector} composes its two families' calls itself.
+	 */
+	static final Map<String, GameEventBridge> STAND_DOWN = standDown();
+
+	private static Map<String, GameEventBridge> standDown() {
+		Map<String, GameEventBridge> map = new LinkedHashMap<>();
+		String event = "net/minecraftforge/event/", client = "net/minecraftforge/client/event/";
+		map.put(event + "TickEvent$ServerTickEvent$Pre", GameEventBridge.SERVER_TICK_PRE);
+		map.put(event + "TickEvent$ServerTickEvent$Post", GameEventBridge.SERVER_TICK_POST);
+		map.put(event + "TickEvent$PlayerTickEvent$Pre", GameEventBridge.PLAYER_TICK_PRE);
+		map.put(event + "TickEvent$PlayerTickEvent$Post", GameEventBridge.PLAYER_TICK_POST);
+		map.put(event + "entity/player/PlayerEvent$PlayerRespawnEvent", GameEventBridge.PLAYER_RESPAWN);
+		map.put(event + "entity/player/PlayerEvent$PlayerChangedDimensionEvent", GameEventBridge.PLAYER_CHANGED_DIMENSION);
+		map.put(event + "level/LevelEvent$Load", GameEventBridge.LEVEL_LOAD);
+		map.put(event + "level/LevelEvent$Unload", GameEventBridge.LEVEL_UNLOAD);
+		map.put(event + "level/LevelEvent$Save", GameEventBridge.LEVEL_SAVE);
+		map.put(event + "entity/living/LivingEntityUseItemEvent$Finish", GameEventBridge.ITEM_USE_FINISH);
+		map.put(event + "TickEvent$ClientTickEvent$Pre", GameEventBridge.CLIENT_TICK_PRE);
+		map.put(event + "TickEvent$ClientTickEvent$Post", GameEventBridge.CLIENT_TICK_POST);
+		map.put(event + "TickEvent$RenderTickEvent$Pre", GameEventBridge.RENDER_FRAME_PRE);
+		map.put(event + "TickEvent$RenderTickEvent$Post", GameEventBridge.RENDER_FRAME_POST);
+		map.put(client + "ScreenEvent$MouseButtonPressed$Pre", GameEventBridge.SCREEN_MOUSE_PRESSED_PRE);
+		map.put(client + "ScreenEvent$MouseButtonReleased$Pre", GameEventBridge.SCREEN_MOUSE_RELEASED_PRE);
+		map.put(client + "ScreenEvent$MouseDragged$Pre", GameEventBridge.SCREEN_MOUSE_DRAG_PRE);
+		map.put(client + "ScreenEvent$MouseScrolled$Post", GameEventBridge.SCREEN_MOUSE_SCROLL_POST);
+		map.put(client + "ClientPlayerNetworkEvent$LoggingIn", GameEventBridge.CLIENT_LOGGING_IN);
+		map.put(client + "ClientPlayerNetworkEvent$LoggingOut", GameEventBridge.CLIENT_LOGGING_OUT);
+		map.put(client + "ClientPlayerNetworkEvent$Clone", GameEventBridge.CLIENT_PLAYER_CLONE);
+		map.put(client + "RegisterClientCommandsEvent", GameEventBridge.CLIENT_COMMANDS);
+		map.put(client + "ClientChatReceivedEvent", GameEventBridge.CLIENT_CHAT_RECEIVED);
+		map.put(client + "ClientChatReceivedEvent$Player", GameEventBridge.CLIENT_CHAT_RECEIVED);
+		map.put(client + "SystemMessageReceivedEvent", GameEventBridge.CLIENT_CHAT_RECEIVED);
+		map.put(client + "ClientChatEvent", GameEventBridge.CLIENT_CHAT_SEND);
+		map.put(client + "InputEvent$Key", GameEventBridge.KEY_INPUT);
+		map.put(client + "ScreenEvent$Init$Pre", GameEventBridge.SCREEN_INIT_PRE);
+		map.put(client + "ScreenEvent$Init$Post", GameEventBridge.SCREEN_INIT_POST);
+		map.put(client + "ScreenEvent$KeyPressed$Pre", GameEventBridge.SCREEN_KEY_PRESSED_PRE);
+		map.put(client + "ScreenEvent$KeyPressed$Post", GameEventBridge.SCREEN_KEY_PRESSED_POST);
+		map.put(client + "ScreenEvent$KeyReleased$Pre", GameEventBridge.SCREEN_KEY_RELEASED_PRE);
+		map.put(client + "ScreenEvent$KeyReleased$Post", GameEventBridge.SCREEN_KEY_RELEASED_POST);
+		map.put(client + "InputEvent$MouseButton$Pre", GameEventBridge.MOUSE_BUTTON_PRE);
+		map.put(client + "InputEvent$InteractionKeyMappingTriggered", GameEventBridge.INTERACTION_KEY);
+		map.put(client + "ViewportEvent$RenderFog", GameEventBridge.RENDER_FOG);
+		map.put(client + "ViewportEvent$ComputeFogColor", GameEventBridge.FOG_COLOR);
+		map.put(client + "ComputeFovModifierEvent", GameEventBridge.FOV_MODIFIER);
+		map.put(client + "RenderBlockScreenEffectEvent", GameEventBridge.BLOCK_OVERLAY);
+		map.put(client + "CustomizeGuiOverlayEvent$BossEventProgress", GameEventBridge.BOSS_EVENT_PROGRESS);
+		map.put(client + "ScreenEvent$Render$Pre", GameEventBridge.SCREEN_RENDER_PRE);
+		map.put(client + "ScreenEvent$Render$Post", GameEventBridge.SCREEN_RENDER_POST);
+		// The two forwards on NeoForge's mod bus. The merged TextureAtlas.upload and ModelManager.apply call MinecraftForge's
+		// hook as well as NeoForge's, so without these rows every MinecraftForge mod saw each atlas stitched, and the models
+		// baked, twice.
+		map.put(client + "TextureStitchEvent$Post", GameEventBridge.TEXTURE_STITCHED);
+		map.put(client + "ModelEvent$BakingCompleted", GameEventBridge.MODELS_BAKED);
+		return Map.copyOf(map);
+	}
+
+	/**
+	 * The MinecraftForge events a bridge re-posts from a NeoForge event on a NeoForge bus: every {@link #BRIDGED} or
+	 * {@link #STAND_DOWN} key in MinecraftForge's namespace whose bridge {@link GameEventMultiplexer} installs, and
+	 * therefore guards. What {@code NativeDualEventInjector} looks for on a path that also posts NeoForge's. The rows
+	 * landed by class transformers (client init, registration, the HUD, tooltips) forward from no NeoForge event and
+	 * are left out.
+	 */
+	public static Set<String> forwardedForgeEvents() {
+		Set<String> out = new java.util.TreeSet<>();
+		for (Map<String, GameEventBridge> table : List.of(BRIDGED, STAND_DOWN)) {
+			for (Map.Entry<String, GameEventBridge> row : table.entrySet()) {
+				if (row.getKey().startsWith(FORGE) && forwards(row.getValue())) out.add(row.getKey());
+			}
+		}
+		return Set.copyOf(out);
+	}
+
+	/** Whether {@code bridge} is installed on one of NeoForge's buses, game or mod, by {@link GameEventMultiplexer}. */
+	private static boolean forwards(GameEventBridge bridge) {
+		return bridge.pass() == GameEventBridge.Pass.GAME_BUS || bridge.pass() == GameEventBridge.Pass.CLIENT_GAME_BUS
+				|| bridge.pass() == GameEventBridge.Pass.CLIENT_MOD_BUS;
+	}
+
+	/** The MinecraftForge events {@code bridge} re-posts, none when it has no {@link #BRIDGED} or {@link #STAND_DOWN} row. */
+	static Set<String> forgeEventsOf(GameEventBridge bridge) {
+		Set<String> out = new java.util.TreeSet<>();
+		for (Map<String, GameEventBridge> table : List.of(BRIDGED, STAND_DOWN)) {
+			for (Map.Entry<String, GameEventBridge> row : table.entrySet()) {
+				if (row.getValue() == bridge && row.getKey().startsWith(FORGE) && forwards(bridge)) out.add(row.getKey());
+			}
+		}
+		return Set.copyOf(out);
+	}
+
+	private static final String FORGE = "net/minecraftforge/";
 
 	private DeadEventAudit() {
 	}
@@ -373,7 +530,7 @@ public final class DeadEventAudit {
 			ForbricLog.info("[Forbric/DeadEvents] %d mod(s) listen for bridged Forge-family events; judged once the server is up",
 					bridgeable.size());
 		}
-		report(audit(deadNow, EventBridges.installed()));
+		report(audit(deadNow, EventBridges.satisfied()));
 	}
 
 	/** mod id → the bridgeable events it listens for, judged by {@link #judgePending()}. */
@@ -381,7 +538,7 @@ public final class DeadEventAudit {
 
 	/** The deferred judgement: a bridgeable event whose bridge is STILL not installed once the server is up. */
 	public static void judgePending() {
-		judgePending(EventBridges.installed());
+		judgePending(EventBridges.satisfied());
 	}
 
 	static List<Finding> judgePending(Set<GameEventBridge> installed) {

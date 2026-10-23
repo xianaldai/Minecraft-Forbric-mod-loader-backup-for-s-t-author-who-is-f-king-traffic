@@ -116,6 +116,72 @@ class GuestInjectorPrunerTest {
 				"a second pass changes nothing");
 	}
 
+	/**
+	 * What the bridge calls in the pruned injectors' place is read from the helper itself: on the real mixin the five
+	 * registry moments and the order are the ones its helper calls; relocated, its registry and order classes moved and
+	 * every one of their methods renamed, the group is pruned alike and the recorded dispatch follows the new names.
+	 */
+	@Test
+	void theDispatchIsReadFromTheHelperAndFollowsAnyNames() throws Exception {
+		byte[] original = realItemStackMixin();
+		pruner().transform(ITEM_STACK_MIXIN, original, null);
+		var dispatch = GuestInjectorPruner.tooltipDispatch();
+		assertNotNull(dispatch);
+		String registry = "net/fabricmc/fabric/impl/item/ItemComponentTooltipProviderRegistryImpl";
+		assertEquals(List.of(registry + ".hasModdedEntries", registry + ".onFirst", registry + ".onLast", registry + ".onBefore", registry + ".onAfter",
+				"net/fabricmc/fabric/impl/item/VanillaTooltipProviderOrder.getVanillaOrder"),
+				java.util.stream.Stream.of(dispatch.guard(), dispatch.first(), dispatch.last(), dispatch.before(), dispatch.after(), dispatch.order())
+						.map(m -> m.owner() + "." + m.name()).toList());
+
+		java.util.Map<String, String> classes = java.util.Map.of(registry, "org/qzx/tips/QzxTips",
+				"net/fabricmc/fabric/impl/item/VanillaTooltipProviderOrder", "org/qzx/tips/QzxOrder", ITEM_STACK_ENTRY.replace(".class", ""), "org/qzx/tips/QzxStackHooks");
+		java.util.Map<String, String> methods = java.util.Map.of("hasModdedEntries", "qzxAny", "onFirst", "qzxHead", "onLast", "qzxTail",
+				"onBefore", "qzxPre", "onAfter", "qzxPost", "getVanillaOrder", "qzxSequence");
+		org.objectweb.asm.commons.Remapper remapper = new org.objectweb.asm.commons.Remapper() {
+			@Override public String map(String name) { return classes.getOrDefault(name, name); }
+			@Override public String mapMethodName(String owner, String name, String desc) {
+				return classes.containsKey(owner) && !owner.equals(ITEM_STACK_ENTRY.replace(".class", "")) ? methods.getOrDefault(name, name) : name;
+			}
+		};
+		ClassNode moved = new ClassNode();
+		read(original).accept(new org.objectweb.asm.commons.ClassRemapper(moved, remapper));
+		ClassNode tips = new ClassNode();
+		read(readFromNestedJar(fabricApiJar(), "fabric-item-api-v1", registry + ".class")).accept(new org.objectweb.asm.commons.ClassRemapper(tips, remapper));
+		GuestInjectorPruner relocated = new GuestInjectorPruner(owner -> owner.equals("org/qzx/tips/QzxTips") ? tips : resolver().apply(owner));
+		byte[] movedBytes = write(moved);
+		byte[] pruned = relocated.transform("org.qzx.tips.QzxStackHooks", movedBytes, null);
+		assertNotSame(movedBytes, pruned, "the relocated group is pruned alike");
+		for (String name : TOOLTIP_INJECTORS) assertEquals(null, method(read(pruned), name), name + " must be pruned");
+		var followed = GuestInjectorPruner.tooltipDispatch();
+		assertEquals(List.of("org/qzx/tips/QzxTips.qzxAny", "org/qzx/tips/QzxTips.qzxHead", "org/qzx/tips/QzxTips.qzxTail",
+				"org/qzx/tips/QzxTips.qzxPre", "org/qzx/tips/QzxTips.qzxPost", "org/qzx/tips/QzxOrder.qzxSequence"),
+				java.util.stream.Stream.of(followed.guard(), followed.first(), followed.last(), followed.before(), followed.after(), followed.order())
+						.map(m -> m.owner() + "." + m.name()).toList());
+
+		// A helper that also asks its registry something else is not the dispatcher: nothing is pruned.
+		ClassNode wider = read(original);
+		MethodNode helper = method(wider, "preAppendTooltip");
+		helper.instructions.insert(new org.objectweb.asm.tree.InsnNode(org.objectweb.asm.Opcodes.POP));
+		helper.instructions.insert(new org.objectweb.asm.tree.MethodInsnNode(org.objectweb.asm.Opcodes.INVOKESTATIC, registry, "hasModdedEntries", "()Z", false));
+		byte[] widerBytes = write(wider);
+		assertSame(widerBytes, pruner().transform(ITEM_STACK_MIXIN, widerBytes, null));
+	}
+
+	/** The pruner's resolver as {@link #pruner()} builds it. */
+	private static java.util.function.Function<String, ClassNode> resolver() {
+		GuestInjectorPruner base = pruner();
+		return owner -> {
+			try {
+				java.lang.reflect.Field field = GuestInjectorPruner.class.getDeclaredField("classes");
+				field.setAccessible(true);
+				@SuppressWarnings("unchecked") var classes = (java.util.function.Function<String, ClassNode>) field.get(base);
+				return classes.apply(owner);
+			} catch (ReflectiveOperationException unavailable) {
+				return null;
+			}
+		};
+	}
+
 	@Test
 	void fabricItemApisTooltipInjectorsStayWhileTheBridgeIsOff() throws Exception {
 		byte[] original = realItemStackMixin();
@@ -286,6 +352,79 @@ class GuestInjectorPrunerTest {
 		byte[] drifted = write(node);
 
 		assertSame(drifted, pruner().transform(MODEL_MANAGER_MIXIN, drifted, null));
+	}
+
+	/**
+	 * The pair written another way is the same pair: the redirect drops the parse through a local, the argument modifier
+	 * keeps the deserialized model in two locals before returning it. Read by data flow, both are recognised and pruned.
+	 */
+	@Test
+	void thePairWrittenAnotherWayIsPrunedTheSame() throws Exception {
+		ClassNode node = read(realMixin());
+		rewrite(method(node, "cancelVanillaDeserialize"), code -> {
+			code.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ACONST_NULL));
+			code.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ASTORE, 1));
+			code.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, 1));
+			code.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ARETURN));
+		});
+		org.objectweb.asm.tree.MethodInsnNode deserialize = firstCall(method(node, "actuallyDeserializeModel"));
+		rewrite(method(node, "actuallyDeserializeModel"), code -> {
+			code.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, 1));
+			code.add(new org.objectweb.asm.tree.MethodInsnNode(Opcodes.INVOKESTATIC, deserialize.owner, deserialize.name, deserialize.desc, false));
+			code.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ASTORE, 2));
+			code.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, 2));
+			code.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ASTORE, 3));
+			code.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, 3));
+			code.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ARETURN));
+		});
+		byte[] rewritten = write(node);
+		ClassNode after = read(pruner().transform(MODEL_MANAGER_MIXIN, rewritten, null));
+		for (String gone : PRUNED) assertEquals(null, method(after, gone), gone + " written another way must still be pruned");
+	}
+
+	/** A redirect that does something besides dropping the parse is not the pair: both stay, as written. */
+	@Test
+	void aRedirectWithASideEffectIsNotThePair() throws Exception {
+		ClassNode node = read(realMixin());
+		rewrite(method(node, "cancelVanillaDeserialize"), code -> {
+			code.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, 0));
+			code.add(new org.objectweb.asm.tree.MethodInsnNode(Opcodes.INVOKEVIRTUAL, "java/io/Reader", "close", "()V", false));
+			code.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ACONST_NULL));
+			code.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ARETURN));
+		});
+		byte[] rewritten = write(node);
+		assertSame(rewritten, pruner().transform(MODEL_MANAGER_MIXIN, rewritten, null));
+	}
+
+	/** An argument modifier that deserializes some other Reader than the captured one is not the pair either. */
+	@Test
+	void aModifierDeserializingAnotherReaderIsNotThePair() throws Exception {
+		ClassNode node = read(realMixin());
+		org.objectweb.asm.tree.MethodInsnNode deserialize = firstCall(method(node, "actuallyDeserializeModel"));
+		rewrite(method(node, "actuallyDeserializeModel"), code -> {
+			code.add(new org.objectweb.asm.tree.TypeInsnNode(Opcodes.NEW, "java/io/StringReader"));
+			code.add(new org.objectweb.asm.tree.InsnNode(Opcodes.DUP));
+			code.add(new org.objectweb.asm.tree.LdcInsnNode("{}"));
+			code.add(new org.objectweb.asm.tree.MethodInsnNode(Opcodes.INVOKESPECIAL, "java/io/StringReader", "<init>", "(Ljava/lang/String;)V", false));
+			code.add(new org.objectweb.asm.tree.MethodInsnNode(Opcodes.INVOKESTATIC, deserialize.owner, deserialize.name, deserialize.desc, false));
+			code.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ARETURN));
+		});
+		byte[] rewritten = write(node);
+		assertSame(rewritten, pruner().transform(MODEL_MANAGER_MIXIN, rewritten, null));
+	}
+
+	private static void rewrite(MethodNode method, java.util.function.Consumer<org.objectweb.asm.tree.InsnList> body) {
+		method.instructions.clear();
+		method.tryCatchBlocks.clear();
+		method.localVariables = null;
+		body.accept(method.instructions);
+		method.maxLocals = 6;
+		method.maxStack = 4;
+	}
+
+	private static org.objectweb.asm.tree.MethodInsnNode firstCall(MethodNode method) {
+		for (var instruction : method.instructions) if (instruction instanceof org.objectweb.asm.tree.MethodInsnNode call) return call;
+		throw new AssertionError(method.name + " calls nothing");
 	}
 
 	@Test

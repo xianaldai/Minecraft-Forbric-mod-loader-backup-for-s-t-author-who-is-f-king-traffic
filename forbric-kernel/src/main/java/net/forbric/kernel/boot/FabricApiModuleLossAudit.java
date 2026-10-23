@@ -55,12 +55,12 @@ import net.forbric.kernel.util.ForbricLog;
  *
  * <p>A constant-pool needle over-reports a mod that names the API only in an optional compat class. That is the
  * safe direction: a DEGRADED row that turns out not to matter costs a glance; a silent loss costs a bug hunt.
- * fabric-api's own module jars name every surface they define and are never users, so they are skipped by
- * catalog identity (mod id {@code fabric-api}, or bundled by it).
+ * The jar that DEFINES a surface names it everywhere and is its provider, never its user, so it is skipped by what it
+ * carries — a class at the needle, or under a package needle — never by its mod id or by who bundles it: a module that
+ * only calls a sibling's surface is a user like any other mod.
  */
 public final class FabricApiModuleLossAudit {
 	static final String SWITCH = "forbric.fabricApiAudit";
-	static final String FABRIC_API = "fabric-api";
 
 	/**
 	 * One surface that is (or can be) switched off.
@@ -114,6 +114,8 @@ public final class FabricApiModuleLossAudit {
 	private static final Map<Loss, Set<String>> USERS = new LinkedHashMap<>();
 	/** The jars among {@link #USERS} with a class implementing an interface under the needle, per surface. */
 	private static final Map<Loss, Set<String>> IMPLEMENTERS = new LinkedHashMap<>();
+	/** The jars that define a surface — a class at its needle, or under its package needle — per surface. */
+	private static final Map<Loss, Set<String>> DEFINERS = new LinkedHashMap<>();
 
 	private FabricApiModuleLossAudit() {
 	}
@@ -150,14 +152,27 @@ public final class FabricApiModuleLossAudit {
 	/** Records {@code jarName} under every surface {@code classBytes} names, and whether it implements one. */
 	public static void note(String jarName, byte[] classBytes) {
 		if (jarName == null || classBytes == null || !ByteScan.containsAny(classBytes, NEEDLES)) return;
+		String defined = className(classBytes);
 		for (int i = 0; i < NEEDLES.length; i++) {
 			if (!ByteScan.contains(classBytes, NEEDLES[i])) continue;
 			Loss loss = LOSSES.get(i);
 			boolean implementer = loss.implementerCost() != null && implementsUnder(classBytes, loss.needle());
+			boolean definer = defined != null && (loss.needle().endsWith("/") ? defined.startsWith(loss.needle()) : defined.equals(loss.needle()));
 			synchronized (USERS) {
 				USERS.computeIfAbsent(loss, l -> new LinkedHashSet<>()).add(jarName);
 				if (implementer) IMPLEMENTERS.computeIfAbsent(loss, l -> new LinkedHashSet<>()).add(jarName);
+				if (definer) DEFINERS.computeIfAbsent(loss, l -> new LinkedHashSet<>()).add(jarName);
 			}
+		}
+	}
+
+	/** The internal name the class file declares; null for bytes that are not a readable class. */
+	private static String className(byte[] classBytes) {
+		try {
+			return new org.objectweb.asm.ClassReader(classBytes).getClassName();
+		} catch (RuntimeException notAClass) {
+			Caught.warn(notAClass, "[Forbric/FabricApi] could not read a class of %d bytes; its definer is not known", classBytes.length);
+			return null;
 		}
 	}
 
@@ -183,12 +198,15 @@ public final class FabricApiModuleLossAudit {
 		if (!enabled()) return;
 		Map<Loss, Set<String>> users;
 		Map<Loss, Set<String>> implementers;
+		Map<Loss, Set<String>> definers;
 		synchronized (USERS) {
 			if (USERS.isEmpty()) return;
 			users = new LinkedHashMap<>();
 			for (var e : USERS.entrySet()) users.put(e.getKey(), Set.copyOf(e.getValue()));
 			implementers = new LinkedHashMap<>();
 			for (var e : IMPLEMENTERS.entrySet()) implementers.put(e.getKey(), Set.copyOf(e.getValue()));
+			definers = new LinkedHashMap<>();
+			for (var e : DEFINERS.entrySet()) definers.put(e.getKey(), Set.copyOf(e.getValue()));
 		}
 		List<ModCatalog.Entry> catalog = ModCatalog.everything();
 		for (Loss loss : LOSSES) {
@@ -202,7 +220,7 @@ public final class FabricApiModuleLossAudit {
 			Set<String> thirdParty = new LinkedHashSet<>();
 			for (ModCatalog.Entry entry : catalog) {
 				if (entry.jar() == null || !jars.contains(entry.jar())) continue;
-				if (FABRIC_API.equals(entry.modId()) || FABRIC_API.equals(entry.bundledBy()) || loss.module().equals(entry.modId())) continue;
+				if (definers.getOrDefault(loss, Set.of()).contains(entry.jar())) continue;
 				boolean implementer = implementers.getOrDefault(loss, Set.of()).contains(entry.jar());
 				ModCatalog.mark(entry.modId(), ModCatalog.Status.DEGRADED,
 						loss.module() + ": " + (implementer ? loss.implementerCost() : loss.cost()));
@@ -237,6 +255,7 @@ public final class FabricApiModuleLossAudit {
 		synchronized (USERS) {
 			USERS.clear();
 			IMPLEMENTERS.clear();
+			DEFINERS.clear();
 		}
 	}
 }

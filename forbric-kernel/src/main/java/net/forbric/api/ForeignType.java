@@ -94,6 +94,12 @@ public enum ForeignType {
 			"net.neoforged.fml.event.lifecycle.FMLClientSetupEvent"),
 	FML_COMMON_SETUP_EVENT("net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent",
 			"net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent"),
+	/**
+	 * FML's own settings ({@code fml.toml}). MinecraftForge's is loaded by the kernel; NeoForge's never is, so the kernel
+	 * gives it the one answer that is not its default under Forbric: there is no NeoForge early window.
+	 */
+	FML_CONFIG("net.minecraftforge.fml.loading.FMLConfig",
+			"net.neoforged.fml.loading.FMLConfig"),
 	FML_DEDICATED_SERVER_SETUP_EVENT("net.minecraftforge.fml.event.lifecycle.FMLDedicatedServerSetupEvent",
 			"net.neoforged.fml.event.lifecycle.FMLDedicatedServerSetupEvent"),
 	FML_LOAD_COMPLETE_EVENT("net.minecraftforge.fml.event.lifecycle.FMLLoadCompleteEvent",
@@ -187,6 +193,8 @@ public enum ForeignType {
 			"net.neoforged.neoforge.registries.RegisterEvent"),
 	REGISTRY_MANAGER("net.minecraftforge.registries.RegistryManager",
 			"net.neoforged.neoforge.registries.RegistryManager"),
+	RESOURCE_PACK_LOADER("net.minecraftforge.resource.ResourcePackLoader",
+			"net.neoforged.neoforge.resource.ResourcePackLoader"),
 	SERVER_LIFECYCLE_HOOKS("net.minecraftforge.server.ServerLifecycleHooks",
 			"net.neoforged.neoforge.server.ServerLifecycleHooks"),
 	SERVER_MOD_LOADER("net.minecraftforge.server.loading.ServerModLoader",
@@ -233,7 +241,8 @@ public enum ForeignType {
 			"net.neoforged.neoforge.common.loot.LootModifierManager"),
 	/**
 	 * Each family's per-tab creative search keys. The merged creative screen reads NeoForge's, which also holds the
-	 * trees; the merged class's MinecraftForge bodies looped over MinecraftForge's (CreativeSearchTreesInjector).
+	 * trees; a MinecraftForge caller's key is turned into NeoForge's for the same tab (KernelCreativeSearch), and a
+	 * merged MinecraftForge producer body loops over MinecraftForge's (CreativeSearchTreesInjector).
 	 */
 	CREATIVE_SEARCH_REGISTRY("net.minecraftforge.client.CreativeModeTabSearchRegistry",
 			"net.neoforged.neoforge.client.CreativeModeTabSearchRegistry");

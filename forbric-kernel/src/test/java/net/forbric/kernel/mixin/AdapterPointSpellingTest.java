@@ -37,7 +37,7 @@ import net.forbric.kernel.transform.ItemUseOnInjector;
 
 /**
  * The adapters that used to compare an {@code @At} target or a {@code method} selector with one spelling — block break,
- * entity anchors, replaced-call redirects, the shears relay, the relocated {@code useOn} call, the client-hook anchors, the
+ * bed occupancy, replaced-call redirects, the shears relay, the relocated {@code useOn} call, the client-hook anchors, the
  * registry loader's companions and the registry bootstrap callback — given the released mixins they were built from, under
  * other class and handler names wherever the adapter does not key on a platform module's own mixin, with every point and
  * selector written another way Mixin reads as the same member: whitespace, a dotted owner, an owner-prefixed selector, a
@@ -85,45 +85,64 @@ class AdapterPointSpellingTest {
 
 	static List<Case> cases() {
 		List<Case> cases = new ArrayList<>();
-		// FabricBlockBreakMixinAdapter: any mod's break callback and harvest modifier; fabric-api's AFTER row.
+		// MixinCapturedLocals and NativeLocalPins: any mod's break callback capture and harvest modifier; CarrierHelperResults:
+		// fabric-api's AFTER row, under unrelated names.
 		cases.add(new Case("break locals", () -> jar(Fixture.THIRD_PARTY, POPULAR.resolve("architectury-fabric-21.1.10.jar"),
-				"dev/architectury/mixin/fabric/MixinServerPlayerGameMode"), true, Ecosystem.FABRIC, GAME_MODE, FabricBlockBreakMixinAdapter::adapt, 1,
+				"dev/architectury/mixin/fabric/MixinServerPlayerGameMode"), true, Ecosystem.FABRIC, GAME_MODE, MixinCapturedLocals::adapt, 1,
 				List.of(STATE + "getBlock()Lnet/minecraft/world/level/block/Block;"),
 				mixin -> assertTrue(mixin.methods.stream().anyMatch(m -> MixinFit.injectorOf(m) != null && m.desc.equals("(Lnet/minecraft/core/BlockPos;"
-						+ CIR + STATE + "Lnet/neoforged/neoforge/event/level/block/BreakBlockEvent;" + ENTITY + ")V")), "the merged frame is captured")));
-		cases.add(new Case("harvest ordinal", AdapterPointSpellingTest::apoli, true, Ecosystem.FABRIC, GAME_MODE, FabricBlockBreakMixinAdapter::adapt, 1,
+						+ CIR + ENTITY + STATE + ")V") && MixinFit.value(MixinFit.injectorOf(m), "locals") == null), "each captured local read where the merged body keeps it")));
+		cases.add(new Case("harvest ordinal", AdapterPointSpellingTest::apoli, true, Ecosystem.FABRIC, GAME_MODE, NativeLocalPins::adapt, 1,
 				List.of("Lnet/minecraft/world/item/ItemStack;mineBlock(Lnet/minecraft/world/level/Level;" + STATE
 						+ "Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/entity/player/Player;)V"),
 				mixin -> assertTrue(mixin.methods.stream().anyMatch(m -> MixinFit.injectorOf(m) != null && m.desc.equals("(Z)Z")
-						&& Integer.valueOf(0).equals(MixinFit.value(MixinFit.injectorOf(m), "ordinal"))), "ordinal 0")));
-		cases.add(new Case("fabric-api AFTER break", () -> StagedFabricMixinFixture.mixin("fabric-events-interaction-v0", FabricBlockBreakMixinAdapter.FABRIC),
-				false, Ecosystem.FABRIC, GAME_MODE, FabricBlockBreakMixinAdapter::adapt, 1, List.of(FabricBlockBreakMixinAdapter.BLOCK_DESTROY),
-				mixin -> assertTrue(atTargets(mixin).contains("L" + GAME_MODE + ";removeBlock" + FabricBlockBreakMixinAdapter.REMOVE_BLOCK_DESC))));
-		// FabricEntityMixinAnchors: any mod's per-effect clear veto; fabric-api's entity event rows.
-		cases.add(new Case("clear veto", AdapterPointSpellingTest::clearVeto, false, Ecosystem.FABRIC, LIVING, FabricEntityMixinAnchors::adapt, 1,
-				List.of("Ljava/util/Map;clear()V"), mixin -> assertTrue(mixin.methods.stream().anyMatch(m -> m.name.startsWith("forbric$clearVeto$")
-						&& MixinFit.injectorOf(m) != null), "re-hosted on NeoForge's per-effect question")));
+						&& Integer.valueOf(9).equals(MixinFit.value(MixinFit.injectorOf(m), "index"))), "pinned to the canDestroy local")));
+		cases.add(new Case("fabric-api AFTER break", () -> StagedFabricMixinFixture.mixin("fabric-events-interaction-v0", "net/fabricmc/fabric/mixin/event/interaction/ServerPlayerGameModeMixin"),
+				true, Ecosystem.FABRIC, GAME_MODE, CarrierHelperResults::adapt, 1,
+				List.of("Lnet/minecraft/world/level/block/Block;destroy(Lnet/minecraft/world/level/LevelAccessor;Lnet/minecraft/core/BlockPos;" + STATE + ")V"),
+				mixin -> assertTrue(atTargets(mixin).contains("L" + GAME_MODE + ";removeBlock(Lnet/minecraft/core/BlockPos;" + STATE + "ZLnet/minecraft/world/item/ItemStack;)Z"),
+						"the injector runs on the removal helper's answer")));
 		String root = "net/fabricmc/fabric/mixin/entity/event/";
-		cases.add(new Case("fabric-api effects", () -> StagedFabricMixinFixture.mixin("fabric-entity-events-v1", root + "effect/LivingEntityMixin"), false,
-				Ecosystem.FABRIC, LIVING, FabricEntityMixinAnchors::adapt, 3,
+		// CarrierDecisions: fabric-api's effect injectors, mining redirect and command enchanting redirect, under unrelated names.
+		cases.add(new Case("fabric-api effects", () -> StagedFabricMixinFixture.mixin("fabric-entity-events-v1", root + "effect/LivingEntityMixin"), true,
+				Ecosystem.FABRIC, LIVING, CarrierDecisions::adapt, 2,
 				List.of("L" + LIVING + ";canBeAffected(Lnet/minecraft/world/effect/MobEffectInstance;)Z",
-						"Lcom/google/common/collect/Maps;newHashMap(Ljava/util/Map;)Ljava/util/HashMap;", "Ljava/util/Map;clear()V"),
+						"Lcom/google/common/collect/Maps;newHashMap(Ljava/util/Map;)Ljava/util/HashMap;"),
 				mixin -> assertTrue(atTargets(mixin).containsAll(List.of("java/util/HashMap",
-						"Lnet/neoforged/neoforge/event/EventHooks;onEffectRemoved(L" + LIVING + ";Lnet/minecraft/world/effect/MobEffectInstance;)Z")))));
-		cases.add(new Case("fabric-api elytra", () -> StagedFabricMixinFixture.mixin("fabric-entity-events-v1", root + "elytra/LivingEntityMixin"), false,
-				Ecosystem.FABRIC, LIVING, FabricEntityMixinAnchors::adapt, 2,
+						"Lnet/neoforged/neoforge/common/CommonHooks;canMobEffectBeApplied(L" + LIVING + ";Lnet/minecraft/world/effect/MobEffectInstance;Lnet/minecraft/world/entity/Entity;)Z")))));
+		cases.add(new Case("fabric-api mining", () -> StagedFabricMixinFixture.mixin("fabric-item-api-v1", "net/fabricmc/fabric/mixin/item/client/MultiPlayerGameModeMixin"),
+				true, Ecosystem.FABRIC, "net/minecraft/client/multiplayer/MultiPlayerGameMode", CarrierDecisions::adapt, 1,
+				List.of("L" + STACK + ";isSameItemSameComponents(L" + STACK + ";L" + STACK + ";)Z"),
+				mixin -> assertTrue(atTargets(mixin).contains("L" + STACK + ";shouldCauseBlockBreakReset(L" + STACK + ";)Z"))));
+		cases.add(new Case("fabric-api enchant command", () -> StagedFabricMixinFixture.mixin("fabric-item-api-v1", "net/fabricmc/fabric/mixin/item/EnchantCommandMixin"),
+				true, Ecosystem.FABRIC, "net/minecraft/server/commands/EnchantCommand", CarrierDecisions::adapt, 1,
+				List.of("Lnet/minecraft/world/item/enchantment/Enchantment;canEnchant(L" + STACK + ";)Z"),
+				mixin -> assertTrue(atTargets(mixin).contains("L" + STACK + ";supportsEnchantment(Lnet/minecraft/core/Holder;)Z"))));
+		// CarrierGuardedPoints: fabric-api's elytra veto and flight tick, under unrelated names.
+		cases.add(new Case("fabric-api elytra", () -> StagedFabricMixinFixture.mixin("fabric-entity-events-v1", root + "elytra/LivingEntityMixin"), true,
+				Ecosystem.FABRIC, LIVING, CarrierGuardedPoints::adapt, 2,
 				List.of("Lnet/minecraft/world/entity/EquipmentSlot;VALUES:Ljava/util/List;",
 						"Lnet/minecraft/util/Util;getRandom(Ljava/util/List;Lnet/minecraft/util/RandomSource;)Ljava/lang/Object;"),
 				mixin -> assertTrue(atTargets(mixin).containsAll(List.of("Lnet/neoforged/neoforge/common/NeoForgeMod;GLIDING_FLIGHT:Lnet/minecraft/core/Holder;",
 						"Ljava/util/List;isEmpty()Z")))));
-		cases.add(new Case("fabric-api beds", () -> StagedFabricMixinFixture.mixin("fabric-entity-events-v1", root + "LivingEntityMixin"), false,
-				Ecosystem.FABRIC, LIVING, FabricEntityMixinAnchors::adapt, 2,
-				List.of("Lnet/minecraft/world/level/Level;setBlock(Lnet/minecraft/core/BlockPos;" + STATE + "I)Z",
-						"Lnet/minecraft/world/level/block/BedBlock;getBedOrientation(Lnet/minecraft/world/level/BlockGetter;Lnet/minecraft/core/BlockPos;)Lnet/minecraft/core/Direction;"),
-				mixin -> assertTrue(mixin.methods.stream().map(m -> m.name).toList().containsAll(List.of("forbric$setBedOccupied", "forbric$modifySleepingDirection")))));
-		cases.add(new Case("fabric-api sleep", () -> StagedFabricMixinFixture.mixin("fabric-entity-events-v1", root + "ServerPlayerMixin"), false,
-				Ecosystem.FABRIC, PLAYER, FabricEntityMixinAnchors::adapt, 1, List.of("Ljava/util/List;isEmpty()Z"),
-				mixin -> assertTrue(selectors(mixin).stream().anyMatch(s -> s.startsWith("lambda$startSleepInBed$")))));
+		// CarrierDefaultChains: fabric-api's bed occupancy redirect, bound to the sleep start and the wake-up lambda, under
+		// unrelated names.
+		cases.add(new Case("fabric-api beds", () -> StagedFabricMixinFixture.mixin("fabric-entity-events-v1", root + "LivingEntityMixin"), true,
+				Ecosystem.FABRIC, LIVING, CarrierDefaultChains::adapt, 1,
+				List.of("Lnet/minecraft/world/level/Level;setBlock(Lnet/minecraft/core/BlockPos;" + STATE + "I)Z"),
+				mixin -> assertTrue(atTargets(mixin).contains("Lnet/minecraft/world/level/block/state/BlockState;setBedOccupied(Lnet/minecraft/world/level/Level;"
+						+ "Lnet/minecraft/core/BlockPos;L" + LIVING + ";Z)V"), "the occupancy write moves onto the state's setBedOccupied")));
+		// CarrierReturnedCalls: fabric-api's sleeping direction wrap, under unrelated names.
+		cases.add(new Case("fabric-api sleeping direction", () -> StagedFabricMixinFixture.mixin("fabric-entity-events-v1", root + "LivingEntityMixin"), true,
+				Ecosystem.FABRIC, LIVING, CarrierReturnedCalls::adapt, 1,
+				List.of("Lnet/minecraft/world/level/block/BedBlock;getBedOrientation(Lnet/minecraft/world/level/BlockGetter;Lnet/minecraft/core/BlockPos;)Lnet/minecraft/core/Direction;"),
+				mixin -> assertTrue(mixin.methods.stream().anyMatch(m -> MixinFit.injectorOf(m) != null && MixinFit.injectorOf(m).desc.equals(CarrierReturnedCalls.MODIFY_RETURN)))));
+		// CarrierDefaultChains: fabric-api's sound stream redirect, under unrelated names.
+		cases.add(new Case("fabric-api sound stream", () -> StagedFabricMixinFixture.mixin("fabric-sound-api-v1", "net/fabricmc/fabric/mixin/client/sound/SoundEngineMixin"), true,
+				Ecosystem.FABRIC, "net/minecraft/client/sounds/SoundEngine", CarrierDefaultChains::adapt, 1,
+				List.of("Lnet/minecraft/client/sounds/SoundBufferLibrary;getStream(Lnet/minecraft/resources/Identifier;Z)Ljava/util/concurrent/CompletableFuture;"),
+				mixin -> assertTrue(atTargets(mixin).contains("Lnet/minecraft/client/resources/sounds/SoundInstance;getStream(Lnet/minecraft/client/sounds/SoundBufferLibrary;"
+						+ "Lnet/minecraft/client/resources/sounds/Sound;Z)Ljava/util/concurrent/CompletableFuture;"))));
 		// ReplacedCallRedirects: ViaFabricPlus' three, forwarding the carrier's call.
 		String via = "com/viaversion/viafabricplus/injection/mixin/features/";
 		cases.add(via("hotbar keys", via + "v1_4_2/MixinAbstractContainerScreen", "net/minecraft/client/gui/screens/inventory/AbstractContainerScreen",
@@ -353,9 +372,17 @@ class AdapterPointSpellingTest {
 				})));
 	}
 
+	/**
+	 * Cases whose adapter reads the point exactly as Mixin selects it, ordinal included, rather than asking that the shorter
+	 * target name one member in the written method: architectury's capture is {@code ordinal = 0}, and the crowd is placed
+	 * after the method's last instruction, so Mixin (and MixinCapturedLocals) still select the first {@code getBlock()} there.
+	 */
+	private static final Set<String> READ_AS_SELECTED = Set.of("break locals");
+
 	/** The shorter target, against a written method that also accesses another owner's member of that name (or another overload). */
 	private static void crowded(Case c, PointRespelling.Form form, boolean otherOwner) throws Exception {
 		ClassNode mixin = read(c), natives = NATIVES.apply(c.family(), c.owner()), crowd = PointRespelling.copy(natives);
+		if (READ_AS_SELECTED.contains(c.id())) return;
 		Set<MethodNode> key = key(c, mixin);
 		assertTrue(PointRespelling.crowd(mixin, key::contains, crowd, otherOwner) > 0, "premise: the written methods are crowded");
 		assertTrue(PointRespelling.points(mixin, key::contains, form, m -> PointRespelling.bound(m, natives)) > 0
@@ -423,20 +450,28 @@ class AdapterPointSpellingTest {
 
 	private static final Map<String, byte[]> MERGED = new HashMap<>();
 
-	/** The merged class with code and local variable tables, a fresh node each time, with the kernel's own pre-mixin relays. */
+	/**
+	 * The merged class with code and local variable tables, a fresh node each time, with the kernel's own pre-mixin relays; a
+	 * class the merged base does not hold is read from the carriers' runtimes (NeoForge's extension interfaces), as the game's
+	 * class loader serves it to the adapters.
+	 */
 	static ClassNode merged(String name) {
 		byte[] bytes = MERGED.computeIfAbsent(name, n -> {
-			Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
-			try (ZipFile zip = new ZipFile(jar.toFile())) {
-				ZipEntry entry = zip.getEntry(n + ".class");
-				if (entry == null) return null;
-				byte[] read = zip.getInputStream(entry).readAllBytes();
-				if (n.equals(STACK)) read = new ItemUseOnInjector().transform(n.replace('/', '.'), read, null);
-				if (n.equals(CLIENT)) read = new ForbricMergedBaseCompatTransformer().transform(n.replace('/', '.'), read, null);
-				return read;
-			} catch (Exception unreadable) {
-				return null;
+			for (String jarName : List.of("merged-base/patched-mc-merged-26.2.jar", "neoforge-runtime/neoforge-runtime.jar", "merged-base/forge-runtime-interop.jar")) {
+				Path jar = TestFixtures.stagedRoot().resolve(jarName);
+				if (!Files.isRegularFile(jar)) continue;
+				try (ZipFile zip = new ZipFile(jar.toFile())) {
+					ZipEntry entry = zip.getEntry(n + ".class");
+					if (entry == null) continue;
+					byte[] read = zip.getInputStream(entry).readAllBytes();
+					if (n.equals(STACK)) read = new ItemUseOnInjector().transform(n.replace('/', '.'), read, null);
+					if (n.equals(CLIENT)) read = new ForbricMergedBaseCompatTransformer().transform(n.replace('/', '.'), read, null);
+					return read;
+				} catch (Exception unreadable) {
+					return null;
+				}
 			}
+			return null;
 		});
 		if (bytes == null) return null;
 		ClassNode node = new ClassNode();
@@ -461,14 +496,5 @@ class AdapterPointSpellingTest {
 			}
 		}
 		throw new AssertionError("apoli's mixin is not in the nested jar");
-	}
-
-	/** A per-effect clear veto that is not balm's: a loop over a snapshot ({@link PerEffectClearVetoTest#snapshotLoop}). */
-	private static ClassNode clearVeto() {
-		// Not a third-party jar, but adapted against the staged merged LivingEntity and its native-reference index.
-		TestFixtures.requireFiles(Fixture.STAGED, "the staged merged base", TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar"));
-		ClassNode mixin = PerEffectClearVetoTest.mixin("org/example/effects/mixin/RespelledVetoMixin");
-		mixin.methods.add(PerEffectClearVetoTest.snapshotLoop("keepWarded", false, false));
-		return mixin;
 	}
 }

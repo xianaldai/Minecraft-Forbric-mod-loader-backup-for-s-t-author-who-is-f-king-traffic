@@ -63,6 +63,7 @@ import net.forbric.kernel.TestFixtures.Fixture;
  * {@code build/reports/vanilla-anchor-census.txt}): nothing fails on it, and someone has to read it.
  */
 @ResourceLock("system-properties")
+@ResourceLock("native-game-references")
 class MixinFitLivenessCensusStagedTest {
 	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 	private static final Path INTEROP = TestFixtures.stagedRoot().resolve("merged-base/forge-runtime-interop.jar");
@@ -86,33 +87,61 @@ class MixinFitLivenessCensusStagedTest {
 	 * .shouldSpreadLiquid} (both carriers' {@code FluidInteractionRegistry.canInteract} replaced it), {@code AxeItem
 	 * .getStripped} ({@code getToolModifiedState}), {@code LivingEntity.trapdoorUsableAsLadder} ({@code CommonHooks
 	 * .isLivingOnLadder}), and the vanilla-shaped forwarders the merge kept beside NeoForge's overloads, which the merged
-	 * callers skip ({@code ItemModelGenerator.bakeSideFaces}, {@code ServerExplosion.hurtEntities}, {@code EffectsInInventory
-	 * .extractText}, {@code CropBlock.getGrowthSpeed(Block, …)}); plus {@code Block.tryDropExperience} and
+	 * callers skip ({@code ItemModelGenerator.bakeSideFaces}, {@code CropBlock.getGrowthSpeed(Block, …)}); plus {@code Block.tryDropExperience} and
 	 * {@code ScreenEffectRenderer.getViewBlockingState}, which the merged callers replaced outright. And NeoForge's
 	 * renamed tooltip body {@code ItemStack.addDetailsToTooltipComponents}, which nothing calls: R3 moves malilib's last
 	 * tooltip hook and trinkets' attribute-line hook there (carrier-renames.txt marks it UNCALLED), where they bind and
-	 * never run.
+	 * never run. And vanilla's private four-argument {@code RegistryDataLoader.load}, which the merged class keeps beside
+	 * NeoForge's five-argument one and never calls: the census used to read any {@code load} of that descriptor, of any class,
+	 * as a call to it, and now reads a private method's callers by their owner (fabric-registry-sync's hook there).
+	 *
+	 * <p>Judged with the merged base's native references bound, as a boot judges: PuzzlesLib's explosion hook (an
+	 * {@code @ModifyVariable(ordinal = 0)} on the dead {@code ServerExplosion.hurtEntities()}) has its local pinned against
+	 * vanilla's body there and moves onto NeoForge's overload, and fabric-renderer-api's chunk takeover on the dead
+	 * four-argument {@code SectionCompiler.compile} moves with its shared state onto the live overload once its redirect is
+	 * counted against vanilla's compile; neither is left where it never runs. So is PuzzlesLib's effect-tooltip hook on the
+	 * dead {@code EffectsInInventory.extractText}: its sliced {@code @ModifyVariable} pair has the flag it modifies pinned
+	 * by value inside the slice, judged against vanilla's body there, and moves with its {@code @Share} partner onto
+	 * NeoForge's overload ({@code -Dforbric.mixinStubRebind.slice=off} puts it back on this list). Apoli's power bar at the
+	 * first {@code getPlayerMode()} of the dead {@code Hud.extractHotbarAndDecorations} moves with its occurrence onto the
+	 * verbatim piece NeoForge's hotbar layer runs ({@code extractHotbar}): FIT both ways, with the move. Balm's health events
+	 * at the start and end of {@code Hud.extractPlayerHealth}, whose four pieces NeoForge draws as layers, are judged where
+	 * MixinSplitBodyEdges moves them and are not on the list either ({@code -Dforbric.splitBodyEdges=off} puts them on it).
+	 * PuzzlesLib's experience hook on the dead {@code Block.tryDropExperience} left the list when the kernel began relaying
+	 * that method's woven hooks to NeoForge's drops event (UncalledValueRelay): liveness reads it as running for the Fabric
+	 * mods its census row names ({@code -Dforbric.uncalledValueRelay=off} puts it back).
 	 */
 	private static final Set<String> EXPECTED = Set.of(
-			"apoli.mixins.json:legacy.hud_power.HudMixin FIT -> PARTIAL",
-			"architectury.mixins.json:MixinServerExplosion PARTIAL -> PARTIAL",
+			"apoli.mixins.json:legacy.hud_power.HudMixin FIT -> FIT",
 			"balm.fabric.mixins.json:FabricCropBlockMixin PARTIAL -> PARTIAL",
 			"bettermounthud.mixins.json:HudMixin FIT -> FIT",
-			"configapi-fabric.mixins.json:event.ServerExplosionMixin PARTIAL -> PARTIAL",
 			"fabric-block-api-v1.mixins.json:LivingEntityMixin FIT -> PARTIAL",
+			"fabric-registry-sync-v0.mixins.json:RegistryDataLoaderMixin PARTIAL -> PARTIAL",
 			"fabric-renderer-api-v1.mixins.json:block.particle.ScreenEffectRendererMixin FIT -> PARTIAL",
 			"fabric-rendering-v1.mixins.json:HudMixin PARTIAL -> PARTIAL",
 			"mixins.malilib.json:item.MixinItemStack FIT -> PARTIAL",
-			"puzzleslib.fabric.mixins.json:BlockFabricMixin FIT -> PARTIAL",
-			"puzzleslib.fabric.mixins.json:ServerExplosionFabricMixin FIT -> PARTIAL",
-			"puzzleslib.fabric.mixins.json:client.EffectsInInventoryFabricMixin PARTIAL -> PARTIAL",
 			"sodium-fabric.mixins.json:features.render.model.ItemModelGeneratorMixin FIT -> PARTIAL",
 			"trinkets.fabric.mixins.json:ItemStackMixin FIT -> PARTIAL");
-	/** The same, counted per pack: one mixin changes in every pack that carries it. */
+	/**
+	 * The same, counted per pack: one mixin changes in every pack that carries it. Architectury's and Forge Config API
+	 * Port's explosion hooks left the list (30 → 28): with their by-type {@code @Local} pinned beside the arguments the
+	 * carrier added, they move off the dead {@code hurtEntities()} onto NeoForge's overload, so liveness has nothing to add.
+	 * PuzzlesLib's left it the same way once the census bound the native references a boot binds (28 → 27), and its
+	 * effect-tooltip hook, in the one pack that carries it, once a sliced pinned local moves too (27 → 26). fabric-registry-sync's
+	 * hook on the private, uncalled four-argument {@code RegistryDataLoader.load} joined it in the five packs that carry it once
+	 * private methods were read by owner (26 → 31). PuzzlesLib's experience hook left it in its one pack once the method it
+	 * hooks is relayed (31 → 30).
+	 */
 	private static final int EXPECTED_IN_PACKS = 30;
 
+	/** The merged base's native references, bound for the census as ForbricMixinService.bind binds them before Mixin starts. */
+	private net.forbric.kernel.classloading.ForbricClassLoader references;
+
 	@AfterEach
-	void reset() {
+	void reset() throws IOException {
+		NativeGameReferences.bind(null);
+		if (references != null) references.close();
+		references = null;
 		System.clearProperty(MixinFit.LIVENESS_PROPERTY);
 		MixinStubRebind.forget();
 		MixinRetarget.reset();
@@ -123,6 +152,11 @@ class MixinFitLivenessCensusStagedTest {
 	void exactlyThePinnedMixinsChangeVerdict() throws Exception {
 		for (Path p : List.of(MERGED, INTEROP, NEO_RUNTIME)) TestFixtures.require(Fixture.STAGED, Files.isRegularFile(p), p + " required");
 		for (Path p : PACKS.values()) TestFixtures.require(Fixture.THIRD_PARTY, Files.isDirectory(p), p + " required (symlink it from the main checkout)");
+		// KernelGuestMixinAdapter judges with the merged base's native references bound: MixinStubRebind's move of a
+		// state-sharing @Redirect counts the calls it replaces against the mod's own platform there, and MixinFit asks the
+		// same move before it calls a stub's injector one that never runs. Unbound, the census would judge a game no boot has.
+		references = new net.forbric.kernel.classloading.ForbricClassLoader(new java.net.URL[] {MERGED.toUri().toURL()}, getClass().getClassLoader());
+		NativeGameReferences.bind(references);
 		Map<String, byte[]> game = new HashMap<>();
 		for (Path jar : List.of(NEO_RUNTIME, INTEROP, MERGED)) game.putAll(read(Files.readAllBytes(jar), n -> n.endsWith(".class")));
 		// The one step of the transform chain that removes methods an injector binds to: the merge's orphaned duplicate
@@ -380,7 +414,7 @@ class MixinFitLivenessCensusStagedTest {
 	/**
 	 * fabric-api's anchors that resolve on stock 26.2 and not on the merged base as the kernel's verdict judges it, as
 	 * {@code config:mixin | anchor} — 66 of them. Each is a loss the kernel replaces elsewhere (its networking codec and
-	 * configuration wraps are PayloadInterop's, its HUD layers KernelHudBridge's, its fuel, hopper, use-on and sound hooks
+	 * configuration wraps are PayloadInterop's, its fuel, hopper, use-on and sound hooks
 	 * bridges or adapters of their own that the verdict does not ask, its item tooltip hooks the Fabric tooltip bridge's
 	 * over NeoForge's appenders) or reports as the mixin's PARTIAL line. Four of item-api's tooltip anchors read as bound
 	 * only while R3 moved them, on the bytes alone, into NeoForge's addDetailsToTooltipComponents — a renamed tooltip body

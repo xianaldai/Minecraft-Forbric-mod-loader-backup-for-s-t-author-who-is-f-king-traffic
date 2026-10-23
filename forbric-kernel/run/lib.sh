@@ -58,6 +58,16 @@ caught_report() {
       for (i = 1; i <= k && i <= 30; i++) { w = order[i]; printf "[kernel]   %sx %s: %s\n", (w in n ? n[w] : "?"), w, what[w] }
       if (k > 30) printf "[kernel]   ... and %d more\n", k - 30
     }' "$file"
+  # Never carried on from, strict or not: an entity-attribute event that did not finish leaves every living entity of an
+  # ecosystem without its attributes, and a base that reads forge:swim_speed for every swimming entity then crashes on
+  # the first one in water. A gate in whose JVMs that happened is red whatever its own checks say.
+  local fatal
+  fatal=$(awk -F'\t' '$1=="FAILURE" && $4 ~ /Forbric\/Attributes/ && $4 ~ /did not finish|could not initialise/ {print $3}' \
+    "$file" 2>/dev/null | sort -u | wc -l | tr -d ' ')
+  if [ "${fatal:-0}" -gt 0 ]; then
+    printf '[kernel] FAIL %s entity-attribute event(s) did not finish — living entities are left without attributes\n' "$fatal"
+    return 1
+  fi
   if [ "${FORBRIC_CAUGHT_STRICT:-0}" = 1 ]; then
     printf '[kernel] FAIL the kernel carried on from failures, and FORBRIC_CAUGHT_STRICT=1\n'
     return 1
@@ -142,6 +152,48 @@ check_absent() {
   fi
   if [ "${got:-0}" -eq 0 ]; then printf '[kernel] PASS %s (absent)\n' "$what"
   else printf '[kernel] FAIL %s (present x%s)\n' "$what" "$got"; FAIL=1; fi
+}
+
+# check_exactly <what> <grep-pattern> <file> <count> — fails unless the pattern appears exactly that many times.
+#
+# For events a mod must hear once per occurrence. "At least once" is what check asserts, and it stays green when the
+# kernel forwards an event the merged game already delivered natively: every MinecraftForge server lifecycle event
+# reached the canary twice, its SERVER config loaded twice, and every gate that looked passed.
+check_exactly() {
+  local what="$1" pat="$2" file="$3" want="$4" got
+  if ! readable "$file"; then
+    printf '[kernel] FAIL %s (no log to read: %s)\n' "$what" "$file"; FAIL=1; return
+  fi
+  got=$(grep -acE "$pat" "$file" 2>/dev/null || true)
+  if [ "${got:-0}" -eq "$want" ]; then printf '[kernel] PASS %s (%s)\n' "$what" "$got"
+  else printf '[kernel] FAIL %s (want exactly %s got %s)\n' "$what" "$want" "${got:-0}"; FAIL=1; fi
+}
+
+# merged_calls <class> <method> <ref>... — does the merged base this run boots make one of these calls (or
+# constructions) in <class>.<method>, any overload, or in a lambda that method captures? 0 yes, 1 no, 2 unreadable.
+# Reads $MERGED, else the staged base. Grammar and the reason only CAPTURED lambdas count are in merged_calls.py: a
+# merge that keeps both families' compiles of a lambda can leave the losing body behind with nothing calling it.
+# A leading --every asks whether EACH overload makes it (a constructor handing over to this(...) left out).
+merged_calls() {
+  local every=""
+  if [ "${1:-}" = "--every" ]; then every="--every"; shift; fi
+  python3 "$KERNEL/run/merged_calls.py" $every "${MERGED:-$RUN_OLD/merged-base/patched-mc-merged-26.2.jar}" "$@"
+}
+
+# merged_delivers <case> [--every] <class> <method> <ref>... — for a gate whose off phase expects exactly the repaired cases
+# to fail: when the merged base makes the call that decides <case> itself, append 'case' to $MERGED_NATIVE (a
+# python set body), because with the kernel's repair switched off the base still delivers it. FAILS when the base
+# cannot be read: an expectation computed from a base nobody read is no expectation.
+MERGED_NATIVE=""
+merged_delivers() {
+  local name="$1" site; shift
+  if [ "${1:-}" = "--every" ]; then site="$2.$3"; else site="$1.$2"; fi
+  merged_calls "$@"
+  case $? in
+    0) MERGED_NATIVE="$MERGED_NATIVE'$name', " ;;
+    1) ;;
+    *) printf '[kernel] FAIL cannot read %s from the merged base, so whether it delivers %s is unknown\n' "$site" "$name"; FAIL=1 ;;
+  esac
 }
 
 # check_kept_up <what> <server-log> — the one performance assertion this project has.
@@ -271,13 +323,60 @@ reap_stale_server() {
 
 record_server_pid() { echo "$2" > "$(_pidfile "$1")"; }
 
+# server_ready <server-log> <seconds> [settle-seconds] — return once <seconds> have passed AND the server has printed
+# "Done (", so a console line written now is one it can run; return 1 instead when the log says the server is gone
+# or going without ever getting there, when the log has not grown for STOP_READY_STALL (default 60) seconds, or after
+# STOP_READY_CAP (default 150) more seconds without either.
+#
+# The give-ups matter because a gate waits for its whole pipeline: await_server's `wait` on the server's pid returns
+# only when the feeder on the other end of the pipe has finished too, so a feeder still polling for a Done that a
+# refused launch (the policy stops gate-m19 and gate-m24 provoke on purpose) will never print would hold the gate
+# for the full cap. Every way the kernel, the launcher or the game ends a boot early says so in the log, and those
+# lines end the wait at once; the stall is for a death nothing announced.
+# stop_when_ready <server-log> <seconds> [settle-seconds] — server_ready, then "stop": what a gate pipes into its
+# server's stdin in place of `sleep <seconds>; echo stop`.
+#
+# The dedicated server's console thread builds a command's source when it READS the line, not when it runs it:
+# DedicatedServer$1 calls createCommandSourceStack(), which takes findRespawnDimension() and so overworld() as it is
+# at that moment. initServer starts that thread before loadLevel, so a line read during the boot gets a source with no
+# level, and running it on the first tick throws in Commands.executeCommandInContext (context.getLevel().getGameRules()).
+# Vanilla 26.2, MinecraftForge's and NeoForge's bodies and the merged one are the same instructions there; the server
+# prints "An unexpected error occurred while trying to execute that command" and runs on. A gate that fed "stop" on a
+# fixed timer therefore went red as "never announced a stop" whenever the machine was loaded enough that the boot
+# outlasted the timer (measured: gate-m3 with a 28 s boot against its 22 s timer). With a boot inside the timer this
+# writes the line at the same moment the timer did; only a slower boot moves it, to <settle> (default 5) seconds after
+# "Done (", so what the gate wanted to see run after the boot still gets some ticks.
+server_ready() {
+  local log="$1" seconds="$2" settle="${3:-5}" cap="${STOP_READY_CAP:-150}" stall="${STOP_READY_STALL:-60}"
+  local waited=0 still=0 size last=-1
+  sleep "$seconds"
+  until grep -aq 'Done (' "$log" 2>/dev/null; do
+    # Gone or going: a line written now would only meet a closed pipe (and a pipeline under pipefail would report it).
+    # The game's own stop and crash lines, every "launch stopped" the kernel prints when it refuses a launch, the
+    # launcher's refusal, and a JVM that died before the game started.
+    grep -aqE 'Stopping server|Failed to start the minecraft server|Encountered an unexpected exception|launch stopped|\[kernel-launch\] FATAL|Exception in thread "main"|Error occurred during initialization of VM|Could not find or load main class' \
+      "$log" 2>/dev/null && return 1
+    [ "$waited" -ge "$cap" ] && return 1
+    size=$(wc -c < "$log" 2>/dev/null || echo 0)
+    if [ "$size" = "$last" ]; then still=$((still + 1)); else still=0; last=$size; fi
+    [ "$still" -ge "$stall" ] && return 1
+    sleep 1; waited=$((waited + 1))
+  done
+  [ "$waited" -eq 0 ] || sleep "$settle"
+  return 0
+}
+stop_when_ready() {
+  server_ready "$@" && echo stop
+  return 0
+}
+
 # await_server <pid> <log> [limit-seconds] [grace-seconds] — wait for a clean stop, then guarantee it is gone.
 # Bounded on purpose: a hung server costs the timeout, not the afternoon.
 await_server() {
-  local pid="$1" log="$2" limit="${3:-90}" grace="${4:-20}" i
+  local pid="$1" log="$2" limit="${3:-90}" grace="${4:-20}" i announced=0
   for i in $(seq 1 "$limit"); do
     kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; port_was_free "$log"; return 0; }
-    grep -qE 'Stopping server|Failed to start the minecraft server' "$log" 2>/dev/null && break
+    grep -qE 'Stopping server|Failed to start the minecraft server' "$log" 2>/dev/null && { announced=1; break; }
     sleep 1
   done
   # "Stopping server" is printed when shutdown BEGINS, not when it ends — saving chunks and flushing the log come
@@ -291,7 +390,13 @@ await_server() {
   if kill -0 "$pid" 2>/dev/null; then
     # A dedicated server has no System.exit: once "Stopping server" is out, only a leaked non-daemon thread keeps
     # the JVM alive. That is a defect, not a slow save — count it.
-    echo "[kernel] FAIL server still alive ${grace}s after announcing its stop — killing it (a leaked non-daemon thread looks exactly like this)"
+    # Only after an announced stop: a server that never announced one within the limit (a "stop" it never read, a
+    # boot slower than the limit) is a different failure, and saying "leaked thread" sent a reader the wrong way.
+    if [ "$announced" -eq 1 ]; then
+      echo "[kernel] FAIL server still alive ${grace}s after announcing its stop — killing it (a leaked non-daemon thread looks exactly like this)"
+    else
+      echo "[kernel] FAIL server never announced a stop within ${limit}s — killing it (a stop it never read, or a boot slower than that)"
+    fi
     FAIL=1
   fi
   kill_tree "$pid"

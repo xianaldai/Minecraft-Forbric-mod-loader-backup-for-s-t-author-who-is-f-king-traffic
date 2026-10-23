@@ -50,6 +50,7 @@ class FabricFuelValuesInjectorTest {
 	@AfterEach void reset() {
 		System.clearProperty(FabricFuelValuesInjector.PROPERTY);
 		System.clearProperty(FabricFuelValuesInjector.RETURN_HOOKS_PROPERTY);
+		System.clearProperty(FabricFuelValuesInjector.CARRY_PROPERTY);
 	}
 
 	@Test void theBuilderGoesThroughFabricRightBeforeItIsBuiltAndTheTableThroughTheReturnHooksAfter() throws Exception {
@@ -72,7 +73,66 @@ class FabricFuelValuesInjectorTest {
 		assertEquals(List.of("apply", "build"), calls.subList(calls.size() - 2, calls.size()));
 		assertFalse(calls.contains("throughVanillaReturnHooks"));
 		byte[] fuel = NativeCoremodParityTest.read(MERGED, FUEL_VALUES);
+		byte[] bracketed = new FabricFuelValuesInjector().transform(FabricFuelValuesInjector.FUEL_VALUES_CLASS, fuel, null);
+		assertFalse(calls(method(node(bracketed), FabricFuelValuesInjector.BODY_DESC)).contains("takePendingBuilder"),
+				"the body is not short-circuited; only the carry's bracket is in it");
+		System.setProperty(FabricFuelValuesInjector.CARRY_PROPERTY, "off");
 		assertSame(fuel, new FabricFuelValuesInjector().transform(FabricFuelValuesInjector.FUEL_VALUES_CLASS, fuel, null));
+	}
+
+	/**
+	 * The carry on the real merged classes: vanilla's body reports the native point — the remove before {@code build()},
+	 * kept exactly as shipped so a guest's {@code @At(INVOKE)} on it still matches — and the table it builds, before the
+	 * short-circuit's join; every public mutator of the builder reports its call and its registries constructor the
+	 * registries; after weaving, the two-argument overload reports entering and each return. Once only, and nothing with
+	 * the carry off.
+	 */
+	@Test void theNativePointTheBuilderAndTheOuterOverloadReportToTheCarry() throws Exception {
+		byte[] fuel = NativeCoremodParityTest.read(MERGED, FUEL_VALUES);
+		byte[] out = new FabricFuelValuesInjector().transform(FabricFuelValuesInjector.FUEL_VALUES_CLASS, fuel, null);
+		MethodNode body = method(node(out), FabricFuelValuesInjector.BODY_DESC);
+		List<String> calls = calls(body);
+		int remove = calls.lastIndexOf("remove");
+		assertEquals(List.of("openNativePoint", "remove", "closeNativePoint", "nativeBuilding", "build", "nativeBuilt"),
+				calls.subList(remove - 1, remove + 5), "the bracket sits around the native point, the baseline right before the build, the report after it");
+		assertEquals("takePendingBuilder", calls.getFirst(), "the short-circuit still opens the body");
+		new Analyzer<>(new BasicVerifier()).analyze(FUEL_VALUES, body);
+		assertSame(out, FabricFuelValuesInjector.bracketTheNativePoint(FabricFuelValuesInjector.shortCircuitTheBody(out)), "idempotent");
+
+		byte[] builder = NativeCoremodParityTest.read(MERGED, FabricFuelValuesInjector.BUILDER);
+		byte[] reported = new FabricFuelValuesInjector().transform(FabricFuelValuesInjector.BUILDER_CLASS, builder, null);
+		ClassNode builderNode = node(reported);
+		List<String> reporting = new ArrayList<>();
+		for (MethodNode method : builderNode.methods) {
+			List<String> made = calls(method);
+			if (made.contains("recordCall")) {
+				assertTrue(made.subList(0, made.indexOf("recordCall")).stream().allMatch("valueOf"::equals),
+						method.name + " reports at its head, boxing its arguments first: " + made);
+				reporting.add(method.name + method.desc);
+			}
+			if (made.contains("builderMade")) reporting.add(method.name + method.desc);
+			new Analyzer<>(new BasicVerifier()).analyze(builderNode.name, method);
+		}
+		String b = "Lnet/minecraft/world/level/block/entity/FuelValues$Builder;";
+		assertEquals(java.util.Set.of("<init>(Lnet/minecraft/core/HolderLookup$Provider;Lnet/minecraft/world/flag/FeatureFlagSet;)V",
+				"remove(Lnet/minecraft/tags/TagKey;)" + b, "add(Lnet/minecraft/tags/TagKey;I)" + b, "add(Lnet/minecraft/world/level/ItemLike;I)" + b),
+				java.util.Set.copyOf(reporting), "the registries constructor and every public mutator, nothing else");
+		assertSame(reported, new FabricFuelValuesInjector().transform(FabricFuelValuesInjector.BUILDER_CLASS, reported, null), "idempotent");
+
+		byte[] woven = FabricFuelValuesInjector.afterMixin(FUEL_VALUES, out);
+		MethodNode outer = method(node(woven), OUTER_DESC);
+		List<String> outerCalls = calls(outer);
+		assertEquals("outerEntered", outerCalls.getFirst());
+		assertEquals("outerReturned", outerCalls.getLast(), "right before the return, after anything Mixin put there");
+		assertEquals(opcodes(method(node(out), STUB_DESC)), opcodes(method(node(woven), STUB_DESC)), "the forwarding stub is untouched");
+		assertSame(woven, FabricFuelValuesInjector.afterMixin(FUEL_VALUES, woven), "idempotent");
+		assertSame(builder, FabricFuelValuesInjector.afterMixin(FabricFuelValuesInjector.BUILDER, builder), "only FuelValues");
+
+		System.setProperty(FabricFuelValuesInjector.CARRY_PROPERTY, "off");
+		assertSame(builder, new FabricFuelValuesInjector().transform(FabricFuelValuesInjector.BUILDER_CLASS, builder, null));
+		assertFalse(calls(method(node(new FabricFuelValuesInjector().transform(FabricFuelValuesInjector.FUEL_VALUES_CLASS, fuel, null)),
+				FabricFuelValuesInjector.BODY_DESC)).contains("openNativePoint"));
+		assertSame(out, FabricFuelValuesInjector.afterMixin(FUEL_VALUES, out));
 	}
 
 	/**
@@ -88,7 +148,15 @@ class FabricFuelValuesInjectorTest {
 		MethodNode body = method(after, FabricFuelValuesInjector.BODY_DESC);
 		AbstractInsnNode first = body.instructions.getFirst();
 		while (first.getOpcode() < 0) first = first.getNext();
-		assertTrue(first instanceof MethodInsnNode call && call.name.equals("takePending"), "the body opens with the pending check");
+		assertTrue(first instanceof MethodInsnNode call && call.name.equals("takePendingBuilder"), "the body opens with the pending check");
+		// The pending builder joins the body's own build(): what Mixin puts at that call runs on it too.
+		org.objectweb.asm.tree.JumpInsnNode jump = (org.objectweb.asm.tree.JumpInsnNode) java.util.Arrays.stream(body.instructions.toArray())
+				.filter(i -> i.getOpcode() == Opcodes.IFNONNULL).findFirst().orElseThrow();
+		AbstractInsnNode joined = jump.label;
+		// Past the carry's baseline report (DUP, nativeBuilding), which takes the builder and leaves it on the stack.
+		while (joined.getOpcode() < 0 || joined.getOpcode() == Opcodes.DUP
+				|| joined instanceof MethodInsnNode report && report.name.equals("nativeBuilding")) joined = joined.getNext();
+		assertTrue(joined instanceof MethodInsnNode call && call.name.equals("build"), "the join is the body's build(), not its return");
 		long returns = java.util.Arrays.stream(body.instructions.toArray()).filter(i -> i.getOpcode() == Opcodes.ARETURN).count();
 		assertEquals(1, returns, "a RETURN or TAIL injector on the body sees one return, reached by both paths");
 		assertTrue(calls(body).contains("remove"), "the body itself, and fabric-content-registries' anchor in it, are still there");
@@ -154,15 +222,17 @@ class FabricFuelValuesInjectorTest {
 	 */
 	@Test void theBuiltTableReachesTheOverloadsReturnHookAndComesBack() throws Exception {
 		try (Game game = new Game(true)) {
-			Object table = game.table();
-			Object result = game.through(table);
-			assertSame(table, result, "no hook changed it, so the data map's table comes back");
-			assertSame(table, game.seenByReturnHook(), "the overload's return hook ran on the data map's table");
-			assertSame(table, game.hook.getField("seenOuter").get(null),
+			Object builder = game.builder();
+			Object table = game.build(builder);
+			Object result = game.through(builder, table);
+			assertNotNull(result);
+			assertSame(game.entries(table), game.entries(result), "the body built the data map's builder, not vanilla's: the same entries");
+			assertSame(result, game.seenByReturnHook(), "the overload's return hook ran on the table built from the data map's builder");
+			assertSame(result, game.hook.getField("seenOuter").get(null),
 					"the two-argument overload's return hook, the one the native servers reach first, ran on it too");
 			assertTrue((int) game.hook.getField("inner").get(null) < (int) game.hook.getField("outer").get(null),
 					"the inner overload's hook runs before the outer one's, as it does natively");
-			assertNull(game.takePending(), "nothing is left pending afterwards");
+			assertNull(game.takePendingBuilder(), "nothing is left pending afterwards");
 		}
 	}
 
@@ -170,8 +240,9 @@ class FabricFuelValuesInjectorTest {
 	@ExpectCaught("vanillaBurnTimes threw on the way through its return hooks")
 	@Test void withoutTheShortCircuitTheDataMapsTableIsKept() throws Exception {
 		try (Game game = new Game(false)) {
-			Object table = game.table();
-			assertSame(table, game.through(table));
+			Object builder = game.builder();
+			Object table = game.build(builder);
+			assertSame(table, game.through(builder, table));
 			assertNull(game.seenByReturnHook(), "the overload's return was never reached with that table");
 		}
 	}
@@ -182,10 +253,11 @@ class FabricFuelValuesInjectorTest {
 	 */
 	@Test void aHeadCancelDoesNotThrowAwayTheDataMapsTable() throws Exception {
 		try (Game game = new Game(true, true)) {
-			Object table = game.table(), replacement = game.table();
+			Object builder = game.builder();
+			Object table = game.build(builder), replacement = game.table();
 			game.hook.getField("replacement").set(null, replacement);
-			assertSame(table, game.through(table));
-			assertNull(game.takePending(), "and nothing is left pending");
+			assertSame(table, game.through(builder, table));
+			assertNull(game.takePendingBuilder(), "and nothing is left pending");
 		}
 	}
 
@@ -246,16 +318,37 @@ class FabricFuelValuesInjectorTest {
 					.getConstructor().newInstance());
 		}
 
-		Object through(Object table) throws Exception {
+		Object registries() throws Exception {
 			Class<?> provider = loader.loadClass("net.minecraft.core.HolderLookup$Provider");
-			Object registries = Proxy.newProxyInstance(loader, new Class<?>[] { provider }, (proxy, method, args) ->
+			return Proxy.newProxyInstance(loader, new Class<?>[] { provider }, (proxy, method, args) ->
 					method.getName().equals("toString") ? "registries" : null);
-			return kernel.getMethod("throughVanillaReturnHooks", fuel, provider,
-					loader.loadClass("net.minecraft.world.flag.FeatureFlagSet")).invoke(null, table, registries, null);
 		}
 
-		Object takePending() throws Exception {
-			return kernel.getMethod("takePending").invoke(null);
+		/** A builder made as populateFuelValues makes its own, from registries and features. */
+		Object builder() throws Exception {
+			return builder.getConstructor(loader.loadClass("net.minecraft.core.HolderLookup$Provider"),
+					loader.loadClass("net.minecraft.world.flag.FeatureFlagSet")).newInstance(registries(), null);
+		}
+
+		Object build(Object made) throws Exception {
+			return builder.getMethod("build").invoke(made);
+		}
+
+		/** A table's entry map: two tables built from one builder share it. */
+		Object entries(Object table) throws Exception {
+			java.lang.reflect.Field values = fuel.getDeclaredField("values");
+			values.setAccessible(true);
+			return values.get(table);
+		}
+
+		Object through(Object made, Object table) throws Exception {
+			Class<?> provider = loader.loadClass("net.minecraft.core.HolderLookup$Provider");
+			return kernel.getMethod("throughVanillaReturnHooks", builder, fuel, provider,
+					loader.loadClass("net.minecraft.world.flag.FeatureFlagSet")).invoke(null, made, table, registries(), null);
+		}
+
+		Object takePendingBuilder() throws Exception {
+			return kernel.getMethod("takePendingBuilder").invoke(null);
 		}
 
 		Object seenByReturnHook() throws Exception {

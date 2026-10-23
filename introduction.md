@@ -18,10 +18,11 @@ Terminology:
 | --- | --- |
 | **ecosystem** | Fabric, traditional MinecraftForge, NeoForge — `net.forbric.api.Ecosystem.FABRIC` / `FORGE` / `NEOFORGE` |
 | **Forge family** | MinecraftForge and NeoForge jointly. Two runtimes, two manifests (`META-INF/mods.toml`, `META-INF/neoforge.mods.toml`), two event buses |
-| **merged base** | `patched-mc-merged-26.2.jar`: Minecraft 26.2 carrying both Forge families' patches, byte-merged into one jar |
+| **merged base** | `patched-mc-merged-26.2.jar`: Minecraft 26.2 carrying both Forge families' patches, byte-merged into one jar; in a method both families patched, both families' edits are kept in one body wherever that can be proved (§2.4) |
 | **carrier** | one Forge family's runtime jar (`neoforge-runtime.jar`, `forge-runtime-interop.jar`), loaded as a passive ABI provider — its classes exist, its loader lifecycle never runs |
 | **boot side / game side** | code loaded by the system class loader vs. code defined by `ForbricClassLoader` |
 | **guest** | anything belonging to a third-party mod (guest mixin, guest jar) |
+| **native** | what a mod gets on its own loader: vanilla 26.2 under Fabric Loader for a Fabric mod, MinecraftForge's or NeoForge's own patched 26.2 for theirs. Every repair is judged against it (§16.1) |
 
 ---
 
@@ -33,8 +34,8 @@ every part of the kernel answers one of them.
 1. **Launch ownership.** Fabric starts Knot; MinecraftForge and NeoForge start ModLauncher/BootstrapLauncher with
    a JPMS module layer. Two transforming class loaders means two definitions of every game class.
 2. **One class, three patch sets.** Both Forge families patch the *same* `net.minecraft` classes with different
-   hooks, and a JVM can hold one version of each class. Something has to decide, per class and per method,
-   whose body survives — and then live with what the loser's mods expect.
+   hooks, and a JVM can hold one version of each class. Something has to put both families' edits into one body
+   where it can, decide per method where it cannot — and then live with what the loser's mods expect.
 3. **Lifecycles and registration windows.** Each ecosystem has its own phases, its own bus, its own window in
    which registries are writable, and its own idea of when the freeze happens.
 4. **Visibility.** Each loader keeps its own mod list. A mod asking its own loader "is Sodium installed?" or "which
@@ -82,16 +83,16 @@ ForbricClassLoader  (GAME side — the only loader that defines game/ecosystem c
 
 `forbric-kernel.jar` is parent-loaded and names no game type. Everything that references `net.minecraft.*`,
 `net.minecraftforge.*`, `net.neoforged.*` or `net.fabricmc.fabric.*` lives in `src/runtime/java`
-(package `net.forbric.kernel.runtime` and its `soak`/`transfer` subpackages, 130 files), is compiled `compileOnly` against the staged game artifacts,
+(package `net.forbric.kernel.runtime` and its `soak`/`transfer` subpackages, 156 files), is compiled `compileOnly` against the staged game artifacts,
 packaged as `forbric-kernel-runtime.jar`, nested at `META-INF/jars/` inside the boot jar, extracted at launch by
 `KernelBundledJars` and loaded as an owned jar.
 
 The boot side reaches the game side by *string* (`Class.forName`, `getMethod`, ASM owner names).
 `KernelRuntimeClasses` is the registry of every such string, and `KernelRuntimeClasses.verify(loader)` loads the
-whole seam through the finished pipeline at boot, so a boot jar built without its game half, or a renamed
-game-side method, fails at the top of the log rather than in the middle of a mod's construction.
-One game-side class, `net.forbric.kernel.runtime.KernelHudLayer`, is still emitted at runtime with an ASM
-`ClassWriter` (by `KernelHudBridge`); everything else on the game side is compiled.
+whole seam through the finished pipeline at boot (after the Fabric `preLaunch` entrypoints, §3.2 step 20), so a boot
+jar built without its game half, or a renamed game-side method, fails before the game starts rather than in the
+middle of a mod's construction. Everything on the game side is compiled: the one class that used to be emitted at
+runtime (`KernelHudLayer`, for the Fabric HUD bridge, §8) was retired with that bridge.
 
 ### 2.2 `ForbricClassLoader` and the delegation table
 
@@ -103,9 +104,11 @@ One game-side class, `net.forbric.kernel.runtime.KernelHudLayer`, is still emitt
   `net.fabricmc.api.`, `net.fabricmc.loader.api.`, the Fabric Loader internals in `FabricLoaderInternals` (by exact
   name), `net.forbric.api.`, and the kernel's boot packages (`boot`, `classloading`, `transform`, `mixin`, `access`,
   `mapping`, `metadata`, `discovery`, `fabric`, `util`, `interop`). Exactly one copy per JVM.
-- **ALWAYS_GAME** — `net.minecraft.`, `com.mojang.blaze3d.`, `net.minecraftforge.`, `net.neoforged.`,
-  `net.fabricmc.fabric.`, `net.forbric.kernel.runtime.`, `com.llamalad7.mixinextras.` and Mixin's synthetic
-  package. Defined here or not at all.
+- **ALWAYS_GAME** — the platform's own packages: `net.minecraft.`, `com.mojang.blaze3d.`, `net.minecraftforge.`,
+  `net.neoforged.`, `net.forbric.kernel.runtime.`, `com.llamalad7.mixinextras.` (bundled by the kernel) and Mixin's
+  synthetic package. Defined here or not at all. No mod's package is listed, fabric-api's included: its classes are
+  defined here by the child-first rule below because the loader owns its jar, and `MixinFit`, which asks this table
+  whether a target is the platform's or another mod's, judges a mixin into fabric-api as one into any other mod.
 - **otherwise child-first**: defined here if an owned jar has it, else the parent.
 
 `tryDefineGameClass` reads the bytes, runs the pre-Mixin chain (`setTransformer`), then the Mixin stage
@@ -134,13 +137,94 @@ code. They are built on the machine that runs them — by the installer for play
 
 | Artifact | What it is |
 | --- | --- |
-| `patched-mc-merged-26.2.jar` | vanilla 26.2 + MinecraftForge-patched 26.2 + NeoForge-patched 26.2, byte-merged by `net.forbric.tools.MergedBaseBuilder`. NeoForge's classes are the base and Forge's are spliced in; the committed report `forbric-loader/run/merged-base/merge-conflicts.txt` reads `forge=193 neo=10163 MERGED=612` classes and `CONFLICTS: methods=1000 fields=8 STRUCTURAL(superclass/field)=15` |
+| `patched-mc-merged-26.2.jar` | vanilla 26.2 + MinecraftForge-patched 26.2 + NeoForge-patched 26.2, byte-merged by `net.forbric.tools.MergedBaseBuilder`. NeoForge's classes are the base and Forge's are spliced in; in a method both families patched, both families' edits are kept in one body where the edit splice can prove it (§2.4). The report a build writes beside the jar (`merge-conflicts.txt`) reads, for the base the current tools build, `forge=184 neo=10150 MERGED=634` classes, `edit splice: methods=240 runs carried=350 already-present=85 conflicting=256 refused=201` and `CONFLICTS: methods=921 fields=8 STRUCTURAL(superclass/field)=19`. The jar also carries each platform's own classes, for reading only: `META-INF/forbric/native-reference/<FABRIC\|FORGE\|NEOFORGE>/` holds an index of every class of that platform's game by SHA-256 and the bytes of each one whose merged copy differs, never defined (`NativeGameReferences`; the native body of §7.4) |
 | `neoforge-runtime.jar` | NeoForge's `-universal` jar plus the libraries its userdev config declares, merged into one jar (`NeoForgeRuntimeBuilder`) |
 | `forge-runtime-interop.jar` | MinecraftForge's `-universal` jar plus its runtime libraries (`ForgeRuntimeBuilder`), then patched by `net.forbric.tools.RuntimeInteropPatcher` for interfaces the merge widened on NeoForge's behalf that Forge's own compiled implementations no longer satisfy. Staged under the coordinate `net.forbric:forge-runtime` |
 
 The carriers are *passive*: their classes are defined and their event buses used, but their loaders'
 discovery, sorting and lifecycle never run. The kernel supplies only the identity their code queries
 (`PassiveSeeder`, §3.2).
+
+### 2.4 The edit splice — both families' edits in one body
+
+Where both Forge families patched one method, the merge used to keep one family's body and record the other's hook
+as lost. `EditSplicer` (in `forbric-loader/src/tools`) keeps both edits instead, from a fact the merge could not see
+before:
+
+- **Provenance.** Both patched games are recompiled from patched sources and keep their `LineNumberTable`, so every
+  instruction carries the *patched* source line it came from. Each family's userdev artifact ships the patches that
+  produced those sources (MinecraftForge: 620 `.java.patch` files, plain unified diff; NeoForge: 881, DiffPatch's
+  `+_` form). `PatchLineProvenance` walks a patch and turns a patched line back into "vanilla line N" or "added by
+  this edit block". So each body splits exactly into the vanilla code the family left alone and the runs of
+  instructions its patch added — from the patch author's own record, not inferred from a diff of two compiles.
+- **Placement.** The vanilla parts of the two bodies are two compiles of the same statements and align instruction
+  by instruction. Each added run of the other family then has a place in the base body: just before the base's
+  counterpart of the vanilla instruction that follows it. At an insertion point both families use, MinecraftForge's
+  run goes first.
+- **What may be carried.** A run is carried only when it starts and ends at a statement boundary (empty operand stack)
+  on both sides; every jump out of it lands on its anchor or on an aligned vanilla instruction, nothing jumps into its
+  middle, and the exception regions covering it are the same in its own body and where it is inserted; every local
+  it reads holds what it holds in its own body (a local of its own gets a fresh slot); every base instruction that
+  can reach it has a counterpart that reaches it in its own body; and something in the result reaches it. An
+  insertion is carried statement by statement, so a statement the base already inserted at the same point runs once.
+- **What is a conflict.** A run that replaced vanilla lines replaces the base's copy only when the base left those
+  lines vanilla and none of the base's code feeds them. When the base changed the same lines, identical edits are
+  kept once, and different ones are a conflict: the base's edit stands and the report names what was lost and what
+  was kept (`both-changed`). When both patches added a member of one name and both edits of the method act on it, or
+  both dropped the same vanilla code and put their own in its place, the families reimplemented one feature and
+  running both would run it twice: a conflict too (`both-reimplemented`). Runs that belong together go together or
+  not at all — the copies of one `finally` block, a begin/end pair on one object, a statement and the one reading what
+  it computed, a removal and the moved statement relying on it — and a run whose partner cannot be carried is
+  withheld and the method planned again without it.
+- **Honesty checks.** Every spliced method is verified (`SimpleVerifier` over the merge's declaration graph, frames
+  recomputed); one that fails is refused whole and keeps the arbitration it had before. Then `MergedBaseBuilder`
+  checks what only the whole class shows and merges the class again until nothing changes: a carried unit that reads,
+  directly or through the methods it calls, a private field that nothing able to run writes is withheld (it would be
+  a `NullPointerException` waiting in the merged game); every method handle the class holds into itself must match
+  the kind of method it names, and base-side code must capture the base's own lambda — a class whose splices
+  introduce such a finding has all of them refused. A lambda both families compile as one vanilla lambda, captured
+  at the same vanilla place, stays where the per-method merge put it; a lambda body the realignment displaced, whose
+  edit then no longer runs, is written as that family's lost hook (its own row form) instead of disappearing from the
+  count. No class, method or mod name decides anything.
+- **The report.** The `=== edit splice` section of `merge-conflicts.txt` lists each method `SPLICED` or `NOT SPLICED
+  (reason)`, then per run: `+` carried, `=` kept once or a conflict (with the calls lost and kept), `x` refused, with
+  why.
+- **The loss ratchet.** `LostHookAttribution.platformCensus` counts every occurrence of a platform call a patched game
+  makes that the merged base no longer makes in the same caller. The splice took that from 794 to 409 on the
+  MinecraftForge side and 16 to 15 on the NeoForge side; the honesty checks then gave back what had been carried
+  wrongly (hooks that used to fire with their answer dropped are now counted as lost) and the count stands at 508 and
+  15. `MergedBaseHookLossRatchetTest` holds the merge to those ceilings — a merge-tool change may lower them, never
+  raise them — and checks that every hook-lost row names a method all three games have and a loss the base still has,
+  and that no caller goes unobserved. It reads a base only together with the build record `build-merged-base.sh`
+  writes beside it (`patched-mc-merged-26.2.jar.provenance.json`, which names jar and report by hash); CI builds such a
+  base from the prepared inputs and runs it (§16).
+- **A call into one side's delegate twin** (`DelegateTwinRoutes`, the builder's PASS 6). A family sometimes gives a
+  vanilla method `C(args)` a mode: its own `C(args, extra)` holds the body, `C(args)` forwards with constants, and one
+  caller passes another constant because the same family does the switched-off part in its own version of a caller
+  of that caller. Where the other family's `C` won the merge, that caller — taken whole from the first family, which
+  the other left vanilla — would skip the kept `C` and every hook in it, and leave the switched-off part to a
+  compensation the merge dropped. Such a call is pointed back at `C(args)` when that compensation is gone: no merged
+  caller keeps all of the first family's edit of it, and no part of that edit an edit splice carried into it does
+  what the mode switches off (each carried call is followed into the void calls its body makes, two deep, on that
+  family and its runtime, and compared with the calls the twin makes under a test of the mode parameter the site
+  changes, followed through every declaration that parameter is handed to; when that part cannot be read and some of
+  the edit was carried, the call is left, for judgment). On 26.2 exactly one call moves: `Block.playerDestroy` called
+  MinecraftForge's `dropResources(…, false)` while the merged `ServerPlayerGameMode.destroyBlock` is NeoForge's (which
+  leaves the experience to `handleBlockDrops`, where MinecraftForge's popped it itself), so a player's break popped no
+  experience and never posted `BlockDropsEvent`. The merged `destroyBlock` carries MinecraftForge's
+  `onBlockStartBreak` and `onPlayerDestroyItem` but not its `popExperience`, and the switched-off part is
+  `ForgeHooks.dropXpForBlock` and the `popExperience` it makes, so the call now reaches NeoForge's `dropResources`. The
+  other 21 candidates are left; each decision and its reason is in the report's `=== delegate-twin routes` section.
+
+Keeping both edits has a cost the kernel pays at run time: an edit of the other family can switch on a mechanism of
+that family's loader that never ran before. The merged `Bootstrap` now also runs MinecraftForge's own vanilla snapshot,
+which locks MinecraftForge's registry wrappers (the registration window opens that lock too, §3.4); the merged
+`Main.main` and `Minecraft.<init>` keep MinecraftForge's own loader calls (redirected or emptied, §3.3); and a method
+that now calls both families' hooks posts the MinecraftForge event natively, so every bridge forwarding it must stand
+down there (§8.1).
+
+The copy committed at `forbric-loader/run/merged-base/merge-conflicts.txt` is the report of the builder before the
+edit splice, kept as the fixture `LostHookAttributionTest` reads; it does not describe the current base.
 
 ## 3. Boot order
 
@@ -195,7 +279,7 @@ server rejects `--gameDir`, so `KernelBoot` strips it on that side. The game ver
    carrier, base or installed jar).
 10. **Class loader** — `new ForbricClassLoader(owned, bootLoader)`, rescue jars, jar families,
     `LoaderProbePolicy.bindGuestLoader`, `KernelFabricLauncher.install` (a mod's `addToClassPath` lands here).
-11. **Transform chain** — 91 `chain.register(…)` call sites (§6).
+11. **Transform chain** — 131 `chain.register(…)` call sites (§6).
 12. `loader.setTransformer((name, bytes) -> chain.applyBeforeMixin(name, bytes, ctx))`; the context class loader
     becomes the game loader;
     `KernelLifecycle`, `KernelHudBridge`, `LootTableEventDispatch` are bound; `KernelLoadReport` and
@@ -211,15 +295,25 @@ server rejects `--gameDir`, so `KernelBoot` strips it on that side. The game ver
     registration; `KernelMixinBootstrap.init`.
 15. `PassiveSeeder.reportDependencies()` — after Mixin, because half of what it reports (mixins meant for another
     mod that did not attach) is recorded while Mixin parses configs.
-16. `KernelRuntimeClasses.verify(loader)` — the kernel's own game side, through the finished pipeline.
-17. `PassiveSeeder.seedAll` — NeoForge `FMLLoader`, `ModList`, paths; MinecraftForge identity (idempotent).
-18. Audit reports (among them `MixinOverlapLint`, §7.6), `KernelLoadReport.writeEvidence()`, then
+16. `PassiveSeeder.seedAll` — NeoForge `FMLLoader`, `ModList`, paths; MinecraftForge identity (idempotent).
+17. Audit reports (among them `MixinOverlapLint`, §7.6), `KernelLoadReport.writeEvidence()`, then
     `CompatibilityDecision.requireContinuation(isClient)` — the pre-game decision point (§12.4).
+18. `NeoGraphicsBootstrappers.run` — NeoForge's `GraphicsBootstrapper` services (a provider listed in
+    `META-INF/services/…earlywindow.GraphicsBootstrapper` of a top-level `mods/` jar loaded as NeoForge, the SPI's own
+    rule), run where genuine FML runs them: first, before the game makes its window. Sodium's NeoForge build keeps
+    its pre-launch checks, graphics-adapter probe and driver workarounds there. A provider that throws costs its jar
+    (ERROR, every mod of that jar FAILED), not the launch; `-Dforbric.graphicsBootstrappers=off`. NeoForge's
+    `FMLConfig` says `earlyWindowControl=false`, as a genuine NeoForge with the early window off would: Forbric has
+    no early window.
 19. `KernelFabricEcosystem.runPreLaunch()` — Fabric `preLaunch` entrypoints, after Mixin, before any game class.
-20. Load the entry class (`net.minecraft.server.dedicated.DedicatedServer` / `…client.gui.screens.TitleScreen`
+20. `KernelRuntimeClasses.verify(loader)` — the kernel's own game side, through the finished pipeline. After
+    `preLaunch`, because proving a class links resolves every type its public methods name and so defined about 40
+    Minecraft classes; a mod that registers a mixin config from `preLaunch`, as Fabric allows, then found its targets
+    already defined (`MixinTargetAlreadyLoadedException` for Essential).
+21. Load the entry class (`net.minecraft.server.dedicated.DedicatedServer` / `…client.gui.screens.TitleScreen`
     is the census landmark; the invoked class is the game's `Main`). If `LifecycleHookInjector` did not find its
     trigger, **the kernel refuses to boot** (`missedRequiredExcision()`).
-21. `Main.main(gameArgs)` — vanilla boot, with the genuine loader trigger redirected.
+22. `Main.main(gameArgs)` — vanilla boot, with the genuine loader trigger redirected.
 
 ### 3.3 The redirected trigger
 
@@ -228,12 +322,18 @@ descriptor) one `invokestatic` in each:
 
 | Side | Genuine call in the merged base | Now calls |
 | --- | --- | --- |
-| server | `net.neoforged.neoforge.server.loading.ServerModLoader.load(Z)V` in `net.minecraft.server.Main.main`, after `Bootstrap.bootStrap()` | `KernelLifecycle.onServerModLoading(boolean)`, followed by Fabric's `Hooks.startServer(null, null)` marker (`-Dforbric.fabricHooks=off` omits it) |
+| server | `net.neoforged.neoforge.server.loading.ServerModLoader.load(Z)V` in `net.minecraft.server.Main.main`, after `Bootstrap.bootStrap()`; the edit-spliced base also keeps MinecraftForge's `if (!initSettings) ServerModLoader.load()` in front of it | `KernelLifecycle.onServerModLoading(boolean)` / `onServerModLoadingNoArg()`: each form is redirected, the kernel's window opens once per process (`KernelLifecycle.openWindow`), at whichever comes first, followed once by Fabric's `Hooks.startServer(null, null)` marker (`-Dforbric.fabricHooks=off` omits it) |
 | client | `net.neoforged.neoforge.client.loading.ClientModLoader.begin()V` in `net.minecraft.client.main.Main.main`, after `Bootstrap.validate()`, before `new Minecraft` | `KernelLifecycle.onClientModLoading()` |
 
 The client's later calls into both families' `ClientModLoader` (`finish`, `completeModLoading`) are stubbed by
 `MethodBodyNeuter`; `setupModResourcePacks` is redirected to `KernelLifecycle.onClientResourcePacks` instead
-(§9.2).
+(§9.2). What the edit-spliced base keeps of MinecraftForge's own loader is handled the same way, each where a kept
+call would otherwise run it: MinecraftForge's `ClientModLoader.begin(Minecraft, PackRepository,
+ReloadableResourceManager)` in `Minecraft.<init>` (its body *is* the MinecraftForge lifecycle) is emptied; its
+biome-modifier pass (kept in `initServer`) and its mod-pack finder (kept in `configurePackRepository`) are emptied on
+every side, because their work rides inside NeoForge's pass and the kernel's own packs (§9); and its
+`ImmediateWindowHandler` is given FML's own no-early-window provider before the game starts, because the kept
+`Window.<init>` guard dereferences it.
 
 On the client the same injector also makes `Main.logEarlyException` call `KernelLifecycle.onEarlyStartupFailure`
 first. That is vanilla's handler for the first three steps of `Main.main` (detecting the version, building and
@@ -253,13 +353,18 @@ Both sides run the same steps (comments in the source number them):
   2. construct every Forge-family `@Mod` (`KernelModLoader.constructMods`, §5.2/5.3);
   3. register guest `@EventBusSubscriber` classes (`KernelEventSubscribers.registerAll`);
   4. post `FMLConstructModEvent` to both families; inject MinecraftForge capabilities;
-  5. NeoForge `GameData.vanillaSnapshot`, then **unfreeze**; post `NewRegistryEvent`;
+  5. NeoForge `GameData.vanillaSnapshot`, then **unfreeze** (`openRegistrationWindow`: every gate between a
+     registration call and its registry, whoever closed it — vanilla's `frozen` flag, and MinecraftForge's wrapper
+     lock and frozen `ForgeRegistry`, which the edit-spliced `Bootstrap` sets because it also runs MinecraftForge's own
+     vanilla snapshot; step 9 puts back what it found closed); post `NewRegistryEvent`;
   6. fire `RegisterEvent` per registry on every bus, in NeoForge's registration order; then the MinecraftForge
      baseline (`KernelForgeBaseline.register`);
   7. open `minecraft:root` and run Fabric `main` entrypoints (on the client only when
      `-Dforbric.fabricMainInConstructor=off`; see §3.5);
   8. attribute events, spawn placements, `BlockEntityTypeAddBlocksEvent`, modded game-rule categories, NeoForge's
-     tooltip appenders;
+     tooltip appenders (`DefaultAttributes` is initialised before MinecraftForge's attribute events walk the
+     entity-type registry: a mod that registers entity types from that class's initialiser made the walk throw
+     `ConcurrentModificationException`, the event never finished, and no entity got MinecraftForge's attributes);
   9. `closeRegistrationWindow` (in a `finally`): link any block item still unlinked (normally none; §9.4),
      **freeze**, rebuild NeoForge's blockstate→id map, re-sort NeoForge's creative tabs.
 - **2a–2c3** verify the REGISTRATION bridges; publish the NeoForge baseline in `ModList`; load STARTUP/COMMON
@@ -291,8 +396,9 @@ Fabric and NeoForge need opposite states in the constructor, so the kernel has t
   registries (and MinecraftForge's registry gates), construct MinecraftForge mods that were held back because they
   reached for `Minecraft` too early, run Fabric `main` then `client` entrypoints (Fabric's `Hooks.startClient`
   order), re-close and re-freeze, open late CLIENT configs, then declare datapack registries. Around that freeze is
-  Fabric's registry freeze point: with fabric-registry-sync installed, a Fabric mod's `@Inject` at the HEAD or TAIL of
-  `BuiltInRegistries.freeze()`, or just before or after `bootStrap()`'s call of it, runs there
+  Fabric's registry freeze point: where a Fabric mixin defers the freeze (recognised by the redirect of
+  `Bootstrap`'s `bootStrap()` call that defers it, whoever declares it — fabric-registry-sync does), a Fabric mod's
+  `@Inject` at the HEAD or TAIL of `BuiltInRegistries.freeze()`, or just before or after `bootStrap()`'s call of it, runs there
   (`FabricFreezeHookMixinAdapter`), where native Fabric freezes — after the entrypoints, with `Minecraft.getInstance()`
   set. LiquidBounce builds its creative tabs from such an injector; left in `Bootstrap` it found no client and died.
 - `NeoClientSetupHookInjector` at the merged base's `ClientModLoader.finish()` call →
@@ -447,6 +553,15 @@ classpath (first-URL-wins would otherwise let it shadow the winner and contribut
   phase's entrypoints where the losing build's own entrypoint would have run: in Fabric Loader's order, where the
   library's id sorts (`ArbitratedAwayDispatchers.place`). A declared key the losing build holds while one of its
   queries asks for a key or type that is no constant is reported as a SUSPECTED finding instead of being guessed at.
+  `ArbitratedAwayEntrypoints` covers the other direction: entrypoints the losing Fabric build offers to *other* mods
+  under a key they dispatch (`modmenu` is the usual one) are declared on the library's presence alias, under its own
+  id, as natively. Only keys Fabric Loader does not drive itself (never `main`, `client`, `server`, `preLaunch`: the
+  winner initialised the library its own way), not one the winner already declares, not the library's own protocol,
+  not a key of a framework the losing build requires; and only an entrypoint the winner can satisfy — its classes
+  resolve, every member it uses on a class the winner ships exists with that descriptor, and no field it reads of a
+  losing-build-only class is written only by code that never runs. What it can run is read method by method from the
+  entrypoint's own methods, never through the losing build's lifecycle entry methods, which only Fabric Loader calls
+  (`-Dforbric.arbitratedAwayEntrypoints=off`).
   `MergeReport` writes `.forbric-kernel/merge-report.txt` explaining each decision.
 - `-Dforbric.crossJarArbitration=off` disables it entirely.
 
@@ -490,18 +605,38 @@ classpath (first-URL-wins would otherwise let it shadow the winner and contribut
   the constructor. Where Fabric refuses a value (several methods of one name, a private member) the kernel stays
   lenient: it opens the member, or takes the first static method.
 - The mod-facing API is vendored under its own names: `src/main/java/net/fabricmc/api` (7 files) and
-  `src/main/java/net/fabricmc/loader` (32 files: `loader.api.*` plus the narrow internals mods actually link against
-  — `FabricLoaderImpl`, `ModContainerImpl`, `EntrypointStorage`, `Hooks`, `FabricLauncher`/`FabricLauncherBase`,
-  `DefaultLanguageAdapter`, `StringUtil`, legacy `net.fabricmc.loader.FabricLoader`). `FabricLoaderInternals`
-  pins those internals to the parent by exact name; `-Dforbric.fabricImpl=off` withholds them. The API level
-  reported is `KernelFabricEcosystem.FABRIC_LOADER_API_LEVEL = "0.19.3"`. `FabricLoaderApiSurfaceTest` holds
-  `net.fabricmc.api` and `net.fabricmc.loader.api` to Fabric Loader 0.19.3's own jar (a local launcher's copy): every
-  public class, its supertypes, and every public or protected member by descriptor. The differences it accepts are
-  listed in the test (the interval algebra, which no mod in the local corpus calls); a new one is red. As on Fabric,
-  `getEntrypoints` builds every entry, leaves a null one out, and then throws one `EntrypointException` naming the
-  first failing mod; a container's `getEntrypoint()` throws one for its own entry, except for an Error construction
-  itself raised (a class that will not initialise), which leaves as it is. Unlike Fabric, the entries are those
-  that can be the asked type: one that cannot is left out rather than failing the key.
+  `src/main/java/net/fabricmc/loader` (40 files: `loader.api.*`, `EntrypointException` included and thrown where
+  Fabric Loader throws it, plus the narrow internals mods actually link against — `FabricLoaderImpl`,
+  `ModContainerImpl`, `EntrypointStorage`, `Hooks`, `FabricLauncher`/`FabricLauncherBase` and their legacy
+  `net.fabricmc.loader.launch.common` view, `DefaultLanguageAdapter`, `StringUtil`, legacy
+  `net.fabricmc.loader.FabricLoader`, and the metadata surface a mod uses to register a jar it unpacks at run time
+  as a Fabric mod: `ModMetadataParser`, `LoaderModMetadata`, `EntrypointMetadata`, `ModCandidateImpl`). A mixin config
+  such a mod adds after the boot is held to the guest rules of §7.2 and owned by the mod whose jar declares it.
+  `FabricLoaderInternals` pins those internals to the parent by exact name; `-Dforbric.fabricImpl=off` withholds them.
+  The API level reported is `KernelFabricEcosystem.FABRIC_LOADER_API_LEVEL = "0.19.3"`. `FabricLoaderApiSurfaceTest`
+  holds `net.fabricmc.api` and `net.fabricmc.loader.api` to Fabric Loader 0.19.3's own jar (a local launcher's copy):
+  every public class, its supertypes, and every public or protected member by descriptor. The differences it accepts
+  are listed in the test (the interval algebra, which no mod in the local corpus calls); a new one is red. As on
+  Fabric, `getEntrypoints` builds every entry, leaves a null one out, and then throws one `EntrypointException` naming
+  the first failing mod; a container's `getEntrypoint()` throws one for its own entry, except for an Error
+  construction itself raised (a class that will not initialise), which leaves as it is. Unlike Fabric, the entries
+  are those that can be the asked type: one that cannot is left out rather than failing the key. `getGameInstance()` answers
+  the `Minecraft` instance on a client (handed over by `Hooks.startClient` before the entrypoints) and the dedicated
+  server from its construction, as Fabric Loader's patch of the server entry does.
+- The builtin mods are `minecraft`, `java` and `fabricloader`. As Fabric Loader reads the jars nested in its own jar
+  as mods of `fabricloader` (0.19.5 nests MixinExtras), the kernel registers each kernel-bundled game-side jar that
+  carries a `fabric.mod.json` as a nested mod of `fabricloader` (`KernelFabricEcosystem.registerLoaderNested`): today
+  `mixinextras`, at the kernel's 0.5.4 where Fabric Loader 0.19.5 has 0.5.5. A guest copy of the same id or alias is
+  left out, as Fabric Loader leaves it out, and with `-Dforbric.kernelBundledFirst=off` the guest copy answers.
+  `util.PlatformIds` is the one list of ids a requirement is never held against: those three, the bundled
+  `mixinextras`, and the carriers' `forge`, `neoforge`, `fml` — never an id only some installed mod provides
+  (`fabric`, which older fabric-api builds provided, is a mod's like any other).
+- fabric-api is a mod like any other. The kernel reaches it only through its public API — `PayloadTypeRegistry`'s
+  static accessors (`FabricPayloadRegistries`, read by type: protocol, flow and the map of `TypeAndCodec`s),
+  `PacketContext.get()`, `Renderer.get()`/`Renderer.register`, `RegistryEntryAddedCallback.event`,
+  `ResourceCondition.CONDITION_CODEC`, a `FuelValueEvents.Context` of its own (`KernelFuelValueContext`) — or by what
+  its code does (the transaction engine, a register method's backing map: `PublicApiStorage`), never by the names its
+  implementation gives its classes, fields or mixins.
 - Entrypoints: `preLaunch` after Mixin (§3.2 step 19); `main` inside the registration window (server) or in
   `Minecraft.<init>` (client, default); `client` in `Minecraft.<init>`; `server` on the dedicated server. Each
   mod's entrypoint is invoked in isolation — one throwing mod is recorded and skipped — with a NeoForge
@@ -573,6 +708,14 @@ classpath (first-URL-wins would otherwise let it shadow the winner and contribut
   `super`, because fabric-api's injection in the super serves only the configuration listener and throws
   `Unknown addon` for the play one (`-Dforbric.playPayloadFallThrough=off`). `KernelClientSmoke`'s
   `-Dforbric.clientSmokeCarry=<tick>` drill drives the whole chain through the game's own key and mouse input.
+  Where the edit-spliced common listeners keep MinecraftForge's `ForgeHooks.onCustomPayload` call, it is offered only
+  a `ForgePayload` (`PayloadInterop.offerToForge`), as on MinecraftForge, whose codec decodes every channel it owns into
+  one; the kernel's own dispatch prologue stands by only where that kept call returns on its answer at the head of the
+  method. Fabric's payload receivers are found by the public `PacketSender` they implement and handed the shared
+  payload as Fabric's own codec reads it (`WirePayloads`). Each channel declaration reaches fabric-api's addon once and
+  a `minecraft:register` naming only channels already declared in the phase is not sent again
+  (`-Dforbric.channelDeclarationsOnce=off`); a mirrored channel's version names its origin and phase, never its
+  direction, so a client and a server agree on it.
 - **Item/fluid/energy transfer** — `KernelTransferInterop` + `runtime/transfer/` bridge Fabric's transfer API,
   NeoForge's `ResourceHandler` and MinecraftForge capabilities, and Team Reborn Energy when installed
   (`-Dforbric.transferBridge=off`, `-Dforbric.hopperFabricStorage=off`). Active only when the relevant APIs are
@@ -585,20 +728,20 @@ classpath (first-URL-wins would otherwise let it shadow the winner and contribut
 `predepends` topologically, then `sortIndex`, then registration order. `MIXIN` is terminal and cannot be registered
 into the chain. On 26.2 nothing is registered in `RAW_PATCH` or `DEOBF_REMAP`.
 
-What `KernelBoot` registers (91 call sites; some conditional):
+What `KernelBoot` registers (131 call sites; some conditional):
 
 | Phase | Registered |
 | --- | --- |
 | `ENV_STRIP` | `EnvironmentStripTransformer` |
 | `ACCESS` | `ClassTweakerTransformer` (Fabric), `access.AccessTransformer` built from every mod jar's **and both carriers'** `META-INF/accesstransformer*.cfg` — the carriers' ATs matter because where the merge kept the other family's body it kept that body's access (`MenuScreens.register` came out private) |
-| `COREMOD` | 86 registrations: the loader-probe rewriter, the Mixin-weaver slot (`FmlContextLoaderRewriter`, `ModuleClassLoaderInitInjector`), `GuestMixinPluginGuard`, the lifecycle redirect, `ForbricMergedBaseCompatTransformer`, the capability composition, and most of the 70 `*Injector` classes in `transform/`, each repairing one named seam the merge broke or landing one bridge (§8) |
+| `COREMOD` | 126 registrations: the loader-probe rewriter, the Mixin-weaver slot (`FmlContextLoaderRewriter`, `ModuleClassLoaderInitInjector`), `GuestMixinPluginGuard`, the lifecycle redirect, `ForbricMergedBaseCompatTransformer`, the capability composition, and most of the 103 `*Injector` classes in `transform/`, each repairing one named seam the merge broke or landing one bridge (§8) |
 | `FABRIC_BUILTIN` | `RestoredAccessTransformer` (re-applies access to members COREMOD restored), `MergedBaseFrameRecomputer` (recomputes a guest class's stack-map frames when they name a superclass the merge removed) |
 
 The post-Mixin stage (`KernelMixinBootstrap`) is a fixed composition:
 
 ```
-Mixin (via MixinWeaverSlot) → NativeCoremodParity → PostMixinFixups → InterfaceDefaultConflictRepair
-                           → ForgeTransferShapeAudit.certify
+Mixin (via MixinWeaverSlot) → NativeCoremodParity → PostMixinFixups → UncalledValueRelay
+                           → InterfaceDefaultConflictRepair → ForgeTransferShapeAudit.certify
 ```
 
 Notable repairs by family (read each class's javadoc for the case that motivated it):
@@ -615,16 +758,41 @@ Notable repairs by family (read each class's javadoc for the case that motivated
 - **Packs and data** — `DataPackHookInjector`, `ClientPackHookInjector`, `PackMetadataFailSoftInjector`,
   `PackOverlayMutabilityInjector`, `NullPackGuardInjector`, `PackScreenHiddenFilterInjector`,
   `RegistryDirectoryOwnerInjector`, `RegistryAliasParityInjector` (§9).
-- **UI** — `ModsButtonRedirector` (both families' pause-menu lambdas open `KernelModListScreen`),
-  `HudElementBridgeInjector`, `CreativePagerBridgeInjector`, `EarlyKeyMappingRegistrationInjector`,
-  `CreativeSearchTreesInjector`. The last is a producer/consumer split: the merged `SessionSearchTrees` kept
-  MinecraftForge's bodies for vanilla's `updateCreativeTooltips(Provider, List)` / `updateCreativeTags(List)` (and
-  for `getSearchTree`), which keep the trees in a private map, while the creative screen is NeoForge's and reads
-  `CreativeModeTabSearchRegistry`. The screen only rebuilds its own trees when `CreativeModeTabs.tryRebuildTabContents`
-  reports a change, so a mod that rebuilds the tabs itself and refreshes the search the vanilla way (TCDCommons, on
-  every join) left every creative search empty. The three bodies now call `KernelCreativeSearch`, which goes
-  through NeoForge's keyed methods for every tab with a search bar; `-Dforbric.creativeSearchTrees=off`.
-  `-Dforbric.clientSmokeCreativeSearch=<tick>[,query…]` types into the real creative screen and logs the grid.
+- **UI** — `ModsButtonRedirector` (both families' pause-menu lambdas open `KernelModListScreen`; where the merge left
+  one mods button per family in a menu, the first is kept), `HudElementBridgeInjector`, `ForgeHudPipelineInjector`
+  (the HUD stays on one pipeline, NeoForge's layer manager, where the merged `Hud` also kept MinecraftForge's overlay
+  tree: that tree's own build and its returning draw are dropped), `CreativePagerBridgeInjector` (the page state is
+  always the carrier's; when no Forge-family mod is installed, the guest pager draws its own page controls, as native
+  Fabric does, and turns the carrier's page through the Fabric interface), `CreativeTabOrderInjector` (a Fabric mod's
+  tabs are paged by the Fabric pager's rule inside NeoForge's one tab order, every other tab where NeoForge puts it;
+  `EcosystemTabPlacement`), `EarlyKeyMappingRegistrationInjector`, `CreativeSearchTreesInjector`. The last is a
+  producer/consumer split: the merged `SessionSearchTrees` keeps
+  MinecraftForge's `getSearchTree(Key)`, which joins a future from a private map nothing fills, defaulting to a future
+  nothing completes, while the creative screen is NeoForge's and reads `CreativeModeTabSearchRegistry`. A
+  MinecraftForge mod reading a search tree through it (as MinecraftForge's own creative screen does) waited forever.
+  An earlier merge also kept MinecraftForge's bodies for vanilla's `updateCreativeTooltips(Provider, List)` /
+  `updateCreativeTags(List)`, so a mod that rebuilds the tabs itself and refreshes the search the vanilla way
+  (TCDCommons, on every join) left every creative search empty; the current base keeps NeoForge's delegating bodies
+  for those two. Whichever bodies still read MinecraftForge's store now call `KernelCreativeSearch`, which goes
+  through NeoForge's keyed methods (for a producer, for every tab with a search bar); on the current base that is
+  `getSearchTree` alone. `-Dforbric.creativeSearchTrees=off`. gate-m55 calls `getSearchTree` from a MinecraftForge
+  canary. `-Dforbric.clientSmokeCreativeSearch=<tick>[,query…]` types into the real creative screen and logs the grid.
+- **The native shape back** — repairs that give the merged body back a shape the platform's own body has, so guest
+  injectors written against it land and run as natively (§7.4): `VanillaEarlyReturns` (the early `return`s vanilla
+  compiled, where a carrier folded a guard into one join or split the body; a split body's last piece gets its
+  method's), `LocalRanges` (a local's variable-table range covers its own uses again where the splice put reads in
+  front of it), `TailLocals` (a split method's tail holds the primitive locals vanilla's tail holds),
+  `LambdaInvocationThunkInjector` (an own virtual method reference materialised as one exact invocation a guest can
+  target), `ScopedClearRelayInjector` (a native `field.clear()` back where a carrier removes a computed subset of the
+  keys; `ScopedClearView`), and the delivery bookkeeping of §8.1 (`NativeDualEventInjector`), which never moves a game
+  instruction.
+- **Client rendering and equipment** — `ForgeModelDataFlowTransformer` + `KernelForgeModelData` (MinecraftForge's
+  block-model data flows through the merged client, which asks NeoForge's model questions, and its tessellation
+  entry's edge is entered wherever a block is tessellated), `GlideFreshEquipmentInjector` (`canGlide` answered from
+  the equipment while the carrier's cached gliding attribute has not caught up, as the native method always does).
+- **Configs** — `StaleWatchEventInjector` (a config file watch's handler runs only for a change made after the watch
+  was registered, so a config the tracker creates in an already-watched directory no longer fires a reload event;
+  `StaleWatchGuard`).
 - **Instrumentation** — `ClientSmokeTickInjector` (inert unless `-Dforbric.clientSmoke=true`),
   `EventChainAuditInjector` (inert unless `-Dforbric.eventChainAudit=<report>`), `ServerTickSamplerInjector`,
   `CompatibilityPromptTickInjector`, `ServerCompatibilityTickInjector`.
@@ -646,7 +814,7 @@ game build — the question a carrier bump asks.
 `mixinextras-fabric` (game-side, because its generated `LocalRef` classes must share the game's loader).
 `KernelMixinBootstrap.init` binds the service, registers every config, installs `KernelMixinErrorHandler`, installs
 the weaver as the last pipeline stage, then moves the environment to `INIT` and `DEFAULT`. Configs are prepared —
-and plugins constructed — on the first class through the transformer, which is `KernelRuntimeClasses.verify`.
+and plugins constructed — on the first class that passes through the transformer after `init`, not by `init` itself.
 
 Before the phase moves, each config is decorated as Fabric Loader's `MixinConfigDecorator` decorates it: the owning
 mod's id (`KEY_MOD_ID`, so Mixin's own messages name it) and, for a Fabric-owned config, the Mixin compatibility level
@@ -728,6 +896,14 @@ registration order only breaks ties, so the least-proven set becomes the outer w
    `MergedBaseMixinCompat.SUPPRESSED_MIXINS`, and `-Dforbric.suppressMixins=config:Mixin,…`, minus
    `-Dforbric.keepMixins`. Dropping a mixin also drops every mixin that depends on an interface it contributed.
 
+A config is read the way Mixin reads it (`MixinConfigJson`): Gson's lenient parse, so a config with comments (Essential
+ships its preprocessor's `//#if` lines) gets every adapter a plain one gets instead of none. A config a mod declares
+is one whatever its file is called. A relaxed child's `parent` config is relaxed too, since the child inherits the
+injector options it leaves out. A wrapper jar's declared config is dropped silently when the jar it nests carries it.
+A config registered after the boot (`Mixins.addConfiguration` from `preLaunch` or a jar added at run time) is relaxed
+like one registered at boot and owned by the mod whose jar declares it, and a mixin a config plugin adds is judged
+when Mixin first reads it (`-Dforbric.lateMixinJudgment=off`), so the adapters below plan for it as for a listed one.
+
 ### 7.3 `MixinFit` — resolution, not provenance
 
 `KernelGuestMixinAdapter` asks `MixinFit.evaluate` to resolve every anchor a guest mixin names — each `@Shadow`,
@@ -743,7 +919,19 @@ each injector's target method, each `@At(target=…)` — against the **post-cha
 Refinements: pure accessor/invoker mixins are always kept; anchors satisfied by another mod's mixin
 (`ForeignMixinTargets`, `MixinAddedMembers`) count as resolved; `@Group` injectors are judged as a group; an
 injector bound only to a merged-base method nothing in the merged game calls is **not** resolved (liveness,
-`MergedBaseUncalledMethods`, `-Dforbric.mixinFit.liveness=off`) unless an installed mod calls it; and a name-only
+`MergedBaseUncalledMethods`, `-Dforbric.mixinFit.liveness=off`) unless an installed mod calls it. "Nothing calls it"
+is a fixpoint over the merged jar, both carriers and the kernel, by one rule set shared with the census that writes
+`uncalled-methods.txt`: a call from a method that is itself uncalled, or from code the kernel silences, is no call; a
+private method is reached only by a call or handle naming its own class, a static one only by a static call naming
+its class or a subclass that does not declare it again, and an override's `super` call of itself is no call; a row
+needs the mod's own game to call the method from a place that runs there. The boot scan of the installed mods
+(`scanGuests`) reads their calls by the same rules, an `@Invoker` only for the method of its target class with that
+name and descriptor, and the row is re-checked on the live bytes. A method whose woven hooks the kernel relays to the
+carrier's own place (`UncalledValueRelay`, §7.4) is read as running for the ecosystems its census row names. An injector that stays bound only to such a method
+is reported by the final-class check as one that never runs (`CONFIRMED`, not required: it marks the mod's row and
+stops no launch). Physics Mod's collapse hook on a private `removeBlock` overload nothing calls (now moved onto the
+overload that runs, `MixinTwinRebind`, §7.4) and Create's hook on the static `RedStoneWireBlock.shouldConnectTo`
+nothing calls (now moved onto the carrier's decision, `UncalledDecisionEntries`, §7.4) used to read as running. And a name-only
 `@Inject` selector is **not** resolved when the method it binds — Mixin takes the first of that name the target
 declares — is not one the handler was written for (that method's arguments then the callback its return calls for, or
 the callback alone), which Mixin would reject as "Invalid descriptor" (`-Dforbric.mixinFit.handlerFit=off`): the merged
@@ -769,7 +957,9 @@ unjudged. `-Dforbric.guestInjectorPruner.refused=off` keeps such a mixin in fron
 summary then counts it apart. A `PARTIAL` or `UNFIT` mixin is first offered to `MixinRetarget`, and its plan is taken when the
 rewritten mixin misses fewer anchors, is one the adapter keeps, and adds no rejection — an `UNFIT` one's rewrite may
 keep none (`MixinRetarget.adopt`). A mixin the kernel leaves out by name is not judged at all, so it gets no verdict line
-and no place in the `PARTIAL` count. `MixinFitReport` runs the same judgement offline:
+and no place in the `PARTIAL` count. A `PARTIAL` verdict is read once more on the mixin as it is handed to Mixin,
+after every adapter (`KernelGuestMixinAdapter.judgeAsHanded`): an anchor an adapter moved onto a body that runs is
+withdrawn from the report with where it landed, and a mixin that now fits is resolved. `MixinFitReport` runs the same judgement offline:
 `MixinFitReport <merged-base.jar> <mods-dir> [--verbose]`.
 
 A miss is the merge's only if the mod's own platform had the member: vanilla 26.2 for a Fabric mod, MinecraftForge's
@@ -871,9 +1061,8 @@ hooks into other vanilla methods, goldenpotions' tab icon into another tab's lam
 where they read as fitting. Those four no longer move by R3: ViaFabricPlus 5.0.2's two are redirects of calls NeoForge
 replaced in place, which `ReplacedCallRedirects` moves instead (below). `-Dforbric.mixinRetarget.renameCensus=off` moves on
 the bytes alone again, `-Dforbric.mixinRetarget.renameCensus.leftExit=off` keeps every handler that can cancel out of a
-piece, and `-Dforbric.mixinRetarget.renameCensus.uncalled=off` keeps every injector out of the `UNCALLED` body), and per-surface Fabric adapters
-(`FabricBlockBreakMixinAdapter`, `FabricEntityMixinAnchors`, `FabricClientMixinAnchors`, `FabricEnchantmentMixinAdapter`,
-`FabricMiningMixinAdapter`, `FabricSoundMixinAdapter`, `FabricServerLanguageMixinAdapter`), and `MixinOperationSeamTransport`:
+piece, and `-Dforbric.mixinRetarget.renameCensus.uncalled=off` keeps every injector out of the `UNCALLED` body), `FabricClientMixinAnchors` (an empty redirect of a call the
+carrier widened, found from the source contract), and `MixinOperationSeamTransport`:
 a Fabric callback just before or after a call the mod's own game makes in the host method, where the merged host makes it
 through an inherited gateway instead (`Gui.extractRenderState`'s screen draw, which the merged `Gui` makes through
 `ForgeLayerInstance.drawScreen`), keeps its whole body and runs around that one call inside the gateway. A MixinExtras
@@ -895,8 +1084,13 @@ and every method that family's own game called vanilla's from calls the overload
 wrapped when it captures vanilla's arguments in other places than the overload has them: the outer takes the
 overload's arguments and hands the original vanilla's. It moves only while vanilla's method is still uncalled (no
 installed mod references it), only an `@Inject` capturing vanilla's arguments or none or an `@At`-driven kind whose
-contract is known (never a `@ModifyVariable`), and only where every `INVOKE`/`FIELD` point is held as often by both
-bodies. NeoForge gave `ModelBlockRenderer.shouldRenderFace` the block's own position and declared it before vanilla's,
+contract is known (never a `@ModifyVariable`) — or an `@Inject` capturing locals the old way at one `INVOKE` both
+methods make exactly once, where each captured local is one the overload holds there with that name and type (read
+by the moved handler as MixinExtras `@Local`s; Physics Mod's collapse hook, which captures MinecraftForge's
+`removeBlock(pos, canHarvest)` locals before `Block.destroy`, now runs in NeoForge's `removeBlock(pos, state,
+canHarvest, tool)`, the one the merged `destroyBlock` calls) — and only where every `INVOKE`/`FIELD` point is held as
+often by both bodies. The outer handler takes the moved handler's place in the mixin's declaration order, so handlers
+at one point run in the native order. NeoForge gave `ModelBlockRenderer.shouldRenderFace` the block's own position and declared it before vanilla's,
 so LiquidBounce's X-Ray face test, selected by name and taking vanilla's four arguments, used to bind NeoForge's
 overload, be rejected there and take the whole block-renderer mixin with it; `-Dforbric.mixinTwinRebind=off`. And
 `ThinnedCallOrdinals`: where the carrier makes a vanilla call fewer times — it replaced some occurrences with calls of its
@@ -923,13 +1117,106 @@ and not on the merged base as the kernel judges it. Only fabric-api's lines are 
 any other corpus named in `FORBRIC_ANCHOR_PACKS` is report-only (`build/reports/vanilla-anchor-census.txt`) — nothing
 fails on a third-party mod's line, so someone has to read the report.
 
+#### 7.4.1 Native equivalence — general mechanisms instead of special cases
+
+Moving an injector to where the merged base put the code is not yet what the mod gets natively. The injector has to
+land on the instruction it lands on in the mod's own game, run on exactly the executions it runs on there, and see
+the values it sees there. The mechanisms below do that. They replaced the per-surface Fabric adapters
+(`FabricBlockBreakMixinAdapter`, `FabricEntityMixinAnchors`, `FabricEnchantmentMixinAdapter`,
+`FabricMiningMixinAdapter`, `FabricSoundMixinAdapter`, `FabricServerLanguageMixinAdapter`,
+`FabricSectionCompilerMixinAdapter`, `FabricFluidFlowMixinAdapter`), the fluid-interaction and breathing adapters, the
+sound-contract and clear-all-veto rewrites, and every adapter that recognised one mod's mixin, handler or `@Local`
+name, one mod's bytecode template or a library's body by SHA-256. None of them is triggered by a name: each compares
+two bodies, the merged method as Mixin will receive it and the *native body* — the platform's own bytes of that method,
+read from the merged base's `native-reference` directories (§2.3), the platform being the one of the mod's own
+ecosystem (`MixinConfigOwners`).
+
+- **Reading two bodies.** `CodeAlignment` maps each native instruction to the merged instruction that is the same step
+  of the same program (one a carrier removed or rewrote maps to nothing); `ReturnAlignment` says which merged return
+  is which native return; `HandlerFlow` reads what a handler computes by data flow, so a contract holds for the
+  handler however it was compiled and fails for one that does anything more (instruction-count templates are gone);
+  `OperandStack`; `DeliveryBookkeeping` hands every adapter that decides where a point lands the game's own code,
+  without the kernel's delivery bookkeeping (§8.1) in the way; `MergedSourceRenames` compares a transported body under
+  the names Mixin gave its lambdas and helpers.
+- **Where a point lands.** `NativeOccurrences`/`NativeOccurrencePoint` count a call, field, store or expression point
+  over the native body and select only the merged occurrences that are its native ones, however many the carriers'
+  code added, dropped or reordered (`AddedCallOccurrences` numbers an unnumbered point the same way);
+  `NativeSliceOccurrences` finds a sliced point's call again by its operands and conditions where a carrier moved it
+  out of the slice; `MixinReturnOrdinals` counts a `RETURN` ordinal by which way out it is, not by position;
+  `MixinShiftedPoints` lands `shift = BY` on the instruction it lands on natively; `JoinedReturnExits` /
+  `MixinKeyActionAdapter` handle exits a carrier joined into one hook call before the final return (found also across
+  the return block `VanillaEarlyReturns` puts in front of the tail; and a global key — F2, F11 — that the carrier sends
+  into its hook where vanilla returned once `handleGlobalKeyPress` answered true keeps the final-return hooks off it).
+  A native occurrence whose operand the carrier changed is paired with its merged counterpart by the aligned consumer
+  of its value (Mod Menu's constant hook wraps three buttons, as natively, not NeoForge's mods button as a fourth).
+- **Where the code went.** `MixinStubRebind` (now also with slices, a state-sharing redirect together with its siblings,
+  a head argument modifier together with the head callback it reads, and a `@ModifyVariable` whose slot is pinned by
+  the value it holds natively; judged at the Mixin level the mod is woven at), `MixinBuilderStubRebind` (a vanilla
+  signature kept as a builder stub), `MixinTwinRebind` (above), `MixinRenamedBodyEdges` (an edge injector on a body a
+  carrier renamed also reaches each method that only forwards to it), `MixinSplitBodyEdges` + `SplitBodyRuns` (the
+  start and end of a method a carrier split into pieces are the start of the first piece and the end of the last, and
+  a cancel at the start skips the later pieces), `MixinForgeModelDataEdge`, `NativeCallInlining` (a carrier helper is
+  inlined back where a mod's injector names a call the helper took), `MixinFieldInitialiserPlacement` (a mixin field
+  initialiser right after `super()`), `MixinExpressionThunks` (a MixinExtras expression still finds a method reference
+  the kernel routed through a thunk). A moved handler keeps its place in the mixin's declaration order.
+- **Decisions the carrier replaced.** `CarrierDecisions` (an injector at a vanilla decision moves onto the decision the
+  carrier makes in its place, its answer's polarity mapped both ways), `CarrierGuardedPoints` (an `@Inject` the carrier
+  put behind a branch of its own moves back ahead of it), `CarrierDefaultChains` (a redirect of a vanilla call the
+  carrier now makes through an inherited implementation), `CarrierHelperResults` (an `@Inject` at a vanilla call the
+  carrier now makes inside a helper runs on the helper's answer, where that answer is proved to say whether the call
+  was made; inside a body the carrier renamed whole, the renamed-body rule takes precedence), `CarrierReturnedCalls`
+  (a wrap of a call whose answer was the method's answer), `CarrierMethodReferences` (a redirect inside a native lambda
+  the carrier replaced with a method reference; it reads the value the reference folds in by the chain's own rule and
+  says why when it declines — fabric-item-api's enchanting check, with Origins Legacy installed),
+  `UncalledDecisionEntries` (a `HEAD` injector on a static decision nothing in the merged game calls any more wraps the
+  carrier's own decision at each place the native game asked it, handed the native arguments, its cancel the answer
+  there — Create's redstone connection on `RedStoneWireBlock.shouldConnectTo`, where NeoForge asks the neighbour's
+  `canRedstoneConnectTo`; two mixins' hooks on one such decision become two wraps, so they run in the reverse of the
+  native order and a cancel by the first no longer skips the second), `ReplacedDecisionValues` (a `@ModifyExpressionValue` of a vanilla
+  decision), `NativeEntryRelay` (a native decision method called again so an injector at its entry runs),
+  `NativeDecisionIsland` + `NativeDecisionRelay` (the native method's decisions put back ahead of the carrier hook that
+  replaced them, their answers handed on to the carrier's code), `CallWitness` (a handler replayed after a relocated
+  call runs only when the call was really reached).
+- **Values and locals.** `NativeValueStores` (a `STORE` modifier at the store of the native value where a carrier
+  stores another value first), `NativeConsumerStores` (a modifier written for a local's one native store, moved to the
+  native read right after it), `NativeDeadValueConsumers` + `NativeValueRelay` (a value a guest changed is handed to
+  the carrier's own consumer where the merged method now computes it for nothing), `NativeLocalPins` (a by-type
+  `@Local` points at the local its own loader hands it), `NativeLocalMaterialization`, `MixinCapturedLocals` (a
+  `locals = CAPTURE_*` capture becomes `@Local`s that read the native locals), `MixinCameraRollAdapter`'s argument
+  lists (an argument-list hook moves from the call its slice picks natively to the widened call that plays its role),
+  and `MixinDelegationEquivalence` (report-only proof that an argument modifier with nothing to attach to loses
+  nothing).
+- **A method nothing calls, whose value the carrier computes elsewhere.** `UncalledValueRelay` runs after Mixin, not
+  on the mixin: when guest hooks were woven into a vanilla method the census lists as never called, and that method's
+  value is one the carrier computes in a place of its own, the woven body is copied into a relay of the same class
+  with three calls replaced by the kernel's — the raw draw answers nothing (the carrier already drew), the processing
+  answers the carrier's value, the effect records its amount instead of doing it — and the carrier's place runs it.
+  Every hook stays where Mixin put it and runs in its order. One contract today: `Block.tryDropExperience`, whose
+  value is NeoForge's `BlockDropsEvent` experience (§8). The relay is made only for hooks of an ecosystem whose own
+  game calls the method (a NeoForge hook there stays as dead as it is natively), only when the draw hands its value
+  straight to the processing, and a hook handed the method's provider gets what the native caller passed (a field of
+  the block, a static field, or a static call on constants, read off the caller's native body); anything else stays
+  as woven and is said in a WARN, and the final-class check still reports it.
+- **Names a rule sets a body aside under.** A rule that keeps a mod's handler body as a plain method under a wrapper
+  names it after the handler, the rule and the mixin (`MixinHandlerShim.asideName`; `markAsides` gives every
+  `$forbricOriginal` body its mixin's mark once all rules have run). Mixin merges a plain method into the target by
+  name: two mixins whose handlers share a name used to share one body, and the second wrapper ran the first mixin's
+  ("Method overwrite conflict"; with a cancellable and a non-cancellable hook, the game method threw).
+
+Each has an `-Dforbric.<name>=off` switch (§17) and a weave test that runs a synthetic mod with unrelated names through
+the real Mixin and MixinExtras with the switch on and off (`src/test/java/net/forbric/kernel/mixin/weave/`, 164 files).
+A mechanism counts as done only when the same mod also passes the rename experiment and the native comparison of §16.1.
+
 ### 7.5 Attribution
 
 `MixinConfigOwners` maps each config to its mod before registration, so Mixin's own failures name the mod (and
 `-Dforbric.mixinModIdDecoration` puts the mod id into generated handler names). `KernelMixinErrorHandler` puts
 prepare/apply failures on the mod's row without changing Mixin's decision. `FinalMixinApplications` observes each
 defined class after all stages — zero references to a handler prove it did not attach. `SupersededMixins` keeps a
-failure off the mod's row when a named kernel repair does *everything* that mixin did; `PluginDeclinedMixins` when
+failure off the mod's row when a named kernel repair does *everything* that mixin did; a mixin removed before Mixin
+read its config, whose repair has a witness, is a `SUSPECTED` note until a witness class is defined — `RESOLVED` when
+the repair is seen there, `CONFIRMED` when it is not or can no longer be proved (`LootSourceContracts.disproved`) — so
+fabric-loot-api-v3 no longer reads "did not finish loading" until the first world loads; `PluginDeclinedMixins` when
 the mod's own config plugin would have declined it; `ForeignMixinBreaks` records mixins written to attach to
 another mod that did not. `MixinCompatibility` carries one identity for a mixin from preflight to application.
 
@@ -947,7 +1234,7 @@ counts as its installed jar, and two jars of one mod id as one mod:
 | R4 | a `@Redirect` and another mod's `@WrapOperation`/`@ModifyExpressionValue` on one call | note |
 
 A wildcard/regex selector or a bare name on an unreadable target makes no claim; slices are not read. At boot
-(§3.2 step 18) it reads each config as `ForbricMixinService` served it to Mixin, after the kernel's drops, and
+(§3.2 step 17) it reads each config as `ForbricMixinService` served it to Mixin, after the kernel's drops, and
 records one `SUSPECTED` finding per mod and conflict, id `mixin-overlap:<owner>.<name><desc>[@<at>]`, the detail
 naming the other mod; it logs counts and elapsed ms (`-Dforbric.mixinOverlapLint=off` skips it). When a crash
 stack passes through a method with a recorded conflict, `CrashAttribution` names both mods. Offline:
@@ -955,11 +1242,12 @@ stack passes through a method with a recorded conflict, `CrashAttribution` names
 
 ## 8. Event bridges
 
-On the merged base the two Forge families' hooks competed for the same call sites and one won; the loser's hook
-is dead code, so that family's listeners sit on a bus nobody posts to. A MinecraftForge mod needs an instance of
-exactly `net.minecraftforge.…Event`, so re-emission is intrinsic.
+Where the two Forge families' hooks competed for one call site and the merge kept one, the loser's hook is dead code,
+and that family's listeners sit on a bus nobody posts to. A MinecraftForge mod needs an instance of exactly
+`net.minecraftforge.…Event`, so re-emission is intrinsic. Where the edit splice kept both hooks (§2.4), the game posts
+both events itself, and a bridge must not post the same one again (§8.1).
 
-- **Inventory** — `net.forbric.api.GameEventBridge` enumerates 96 bridges, each with the event, its install pass
+- **Inventory** — `net.forbric.api.GameEventBridge` enumerates 104 bridges, each with the event, its install pass
   and its **cost** in player terms. Passes: `GAME_BUS` (both sides), `CLIENT_GAME_BUS`, `CLIENT_MOD_BUS`,
   `CLIENT_INIT`, `REGISTRATION`, `CLIENT_HUD`, `ON_DEMAND`.
 - **Verification** — `net.forbric.api.EventBridges.verify(pass)` compares achieved against declared and names what
@@ -975,12 +1263,71 @@ exactly `net.minecraftforge.…Event`, so re-emission is intrinsic.
 - **The other directions** — NeoForge events the merged body no longer posts (`ItemTooltipEvent` via
   `KernelItemTooltips`, `ScreenEvent.Opening/Closing` via `NeoScreenEventsInjector`, conversion `Post` via
   `NeoConversionPostInjector`); Fabric API events fired from NeoForge's own sites where Fabric's mixin cannot fit
-  (`LootTableEventBridgeInjector` + `LootTableEventDispatch` for `LootTableEvents`, `KernelHudBridge` for
-  `HudElementRegistry`, `FabricFuelValuesInjector`, tooltip and block-break adapters).
+  (`LootTableEventBridgeInjector` + `LootTableEventDispatch` for `LootTableEvents`, `FabricFuelValuesInjector`, the
+  tooltip bridge). The merged server builds its fuel table in `populateFuelValues`; the fuel bridge hands that builder
+  to the restored `vanillaBurnTimes` facade, which jumps straight to its own `build()`, so a mod's wrap of that build
+  (Create's blaze cake, cardboard) adds its fuels once and the client's data-map table carries them. The Fabric half of `KernelHudBridge`, which redrew fabric-api's `HudElementRegistry` roots through
+  its implementation classes, is retired: fabric-rendering-v1's own `HudMixin` wraps now land, in the body the kernel
+  gives a method reference (`LambdaInvocationThunkInjector`), and the bridge had bridged 0 of 21 roots in every run.
+  MinecraftForge's `PlayLevelSoundEvent`s are forwarded from NeoForge's wherever the merged game plays a sound, with the
+  answer carried back (`KernelGameSoundEvents`).
+- **Experience from a break** — NeoForge computes it in `BlockDropsEvent` and pops it once in `handleBlockDrops`
+  (a player's break reaches that since the merge's delegate-twin pass, §2.4); MinecraftForge computes it in its
+  `BreakEvent` and popped it in its own `destroyBlock`, which is not the merged one; Fabric mods hook vanilla's
+  `Block.tryDropExperience`, which nothing in the merged game calls. `KernelGameBlockEvents` hands a MinecraftForge
+  decision (a listener's `setExpToDrop`, or a block whose experience only MinecraftForge's `getExpDrop` answers) to the
+  same break's `BlockDropsEvent` at `HIGHEST`, and at `LOWEST` runs the relay of `tryDropExperience`
+  (`UncalledValueRelay`, §7.4) for a block whose native `spawnAfterBreak` asked it (the census's callers, through a
+  class that only adds to its parent's), handing it the event's value and dropping what it would have popped. So a
+  Fabric mod's replaced or cancelled ore experience, or PuzzlesLib's experience event, decides the experience once,
+  where NeoForge pops it. Not equal: a MinecraftForge listener reading `getExpToDrop` sees MinecraftForge's own draw,
+  not the one NeoForge drops (a listener that sets it decides correctly); a NeoForge listener at `LOWEST` registered
+  after the kernel's sees the relayed value, one registered before sees the value before it.
 - **Audits** — `HookCallSiteCensus` (which hooks of `ForgeEventFactory`/`ForgeEventFactoryClient`/NeoForge
   `ClientHooks` the merged base still calls), `DeadEventAudit` + `ForgeBusSubscriptions` (who listens to a dead
   event, including subscriptions an annotation scan cannot see), `DeadHookWorklist` (the join, ordered by how many
   installed jars notice), `EventChainAudit` (every cross-bus post, checked by one rule set; gate-m41).
+
+### 8.1 One delivery per native dispatch — stand-down
+
+A bridge listens to a NeoForge event and posts the MinecraftForge one. A merged method that now calls both families'
+hooks on one path posts the MinecraftForge event natively *and* through the bridge. Measured with the event-chain
+audit on the first edit-spliced base, every MinecraftForge mod got the server, player, client and render ticks, each
+level's load, save and unload, log-in and log-out, system chat, mouse buttons, fog and block overlays twice. Unit tests
+and gate checks of the form "at least once" never saw it; the accounting below is per dispatch.
+
+- **Scoping the native delivery.** `transform.NativeDualEventInjector` finds, in each game method, the MinecraftForge
+  deliveries (a static call into a MinecraftForge hook whose body constructs and posts a MinecraftForge event, or an
+  inline post) and the NeoForge ones, looking only for the MinecraftForge events some bridge re-posts. It brackets the
+  NeoForge call in a scope (`net.forbric.api.NativeEventDelivery`) naming the MinecraftForge events delivered natively
+  on that path: *proved* when the MinecraftForge delivery dominates the NeoForge one or post-dominates its completion;
+  *recorded* when it can run earlier in the same invocation (what the MinecraftForge hook actually constructed is
+  committed for that invocation, so a hook that posts only under a condition covers exactly the times it delivered);
+  *faithful* when it comes later on a path the caller may bypass. For the last, `NativeDeliveryPaths` aligns the
+  merged body with MinecraftForge's own patched body of the same method (read from the native reference) and
+  classifies each edge that commits to skipping the call: one MinecraftForge's body skips on too (a shared guard)
+  excuses the event; one only the merged game has (an exit NeoForge's patch added) owes it, and the bridge's deferred
+  forward is delivered there (`NativeEventDelivery.bypassed`). What a caller records and owes belongs to one invocation
+  (`NativeEventDelivery.Invocation`, kept in a local of the caller), so a caller re-entered from its own dispatch
+  settles only its own. The cascade is accounted too: what each family's own listeners post inside its dispatch (the
+  client-command registration MinecraftForge's own login listener posts) counts as delivered for the bridge of the
+  counterpart. Events are matched by identity, never by class, and nothing keys on a caller, event or mod name.
+- **The bridge side.** `GameEventMultiplexer.guarded` makes a bridge ask `NativeEventDelivery.covered` with the event it
+  was handed and stand down for exactly that event. `DeadEventAudit.STAND_DOWN` lists, per bridge, the MinecraftForge
+  events its forward constructs (44 rows), beside the `BRIDGED` rows the dead-event judgement uses; a bridge with
+  neither could never stand down. NeoForge's mod-bus dispatcher counts as a post, so the two mod-bus forwards
+  (`TextureStitchEvent.Post`, `ModelEvent.BakingCompleted`) stand down too. Repairs that add a MinecraftForge call
+  beside a NeoForge one stand down only for a MinecraftForge call on the same object and the same path
+  (`NativeCallPairing`), not for its mere presence.
+- **Not in the way of mixins.** Each scope or recording opens right before the very hook call or post it is for and
+  closes right after it (and on an exception out of it), so a guest `@At("INVOKE")` on that call still finds it, and
+  every adapter that decides where a guest point lands reads the method without the bookkeeping
+  (`DeliveryBookkeeping`, §7.4.1).
+- **Accounting.** `EventChainAudit` records the game method and instruction that posted each event, credits a bridge
+  that stood down for the game's own delivery, and counts a forward the game also delivered as delivered twice;
+  gate-m41 requires every required bridge's posts, post by post, against MinecraftForge's bus by count, and accounts
+  for every stand-down by how it ended. A body that cannot be judged (MinecraftForge's own body unreadable, a NeoForge
+  post repeated in a loop, different branches) keeps its forward.
 
 ## 9. Datapacks, resources and data
 
@@ -993,7 +1340,10 @@ jar's `data/` — and both carriers' (`c:` convention tags, `neoforge:` damage t
 Metadata is read through NeoForge's `ResourcePackLoader.readWithOptionalMeta`, keeping root-pack overlays. Where
 the carriers ship the same file, tags are additive and NeoForge wins last-wins files. Fabric mods' data is served
 by fabric-api's own resource loader as on Fabric. `KernelPackFinders` lets a MinecraftForge mod add its own pack
-finder (`-Dforbric.modDataPacks=off` disables the Forge-family packs).
+finder (`-Dforbric.modDataPacks=off` disables the Forge-family packs). Each served jar declares the known pack its own
+platform declares (NeoForge: `KnownPack("neoforge", "mod/<ids>", <versions>)` for every mod file, the carrier
+included; MinecraftForge: none), so the NeoForge carrier's data-driven damage type no longer makes every world
+experimental and asks the player for a backup.
 
 ### 9.2 Client assets
 
@@ -1013,8 +1363,16 @@ merge mutating a list fabric-api has frozen (`KernelPackRepair` documents both).
 ### 9.4 Conditions, registries, data maps, worldgen
 
 - **Resource conditions** — three evaluators, because the merged `RegistryLoadTask` carries both families' patches:
-  `runtime.KernelFabricConditions` (`fabric:load_conditions`; fabric-api's own two mixins cannot fit),
-  `KernelNeoConditions`, `KernelForgeConditions` — each keeps one dialect from failing another's files.
+  `runtime.KernelFabricConditions` (`fabric:load_conditions`, judged with fabric-api's public
+  `ResourceCondition.CONDITION_CODEC` and `test()`; fabric-api's own two mixins cannot fit), `KernelNeoConditions`,
+  `KernelForgeConditions` — each keeps one dialect from failing another's files. `forge:condition` is judged only
+  inside MinecraftForge's own two readers (the data-file scan, through `ForgeHooks.readConditional`, and the
+  datapack-registry element decoder, through `ConditionCodec.wrap`), where NeoForge's `ConditionalOps` funnel asks it
+  again, with what genuine MinecraftForge judges it with: recipes against this reload's tags, a loot pool's condition
+  in place, `forge:conditional` variants. A condition type nobody registers is false in a data file, as on
+  MinecraftForge; one another ecosystem registers is that ecosystem's to decide; on a registry element, where
+  MinecraftForge's answer would lose the world, it loads and the log names the type
+  (`-Dforbric.forgeConditionFunnel=off`).
 - **Registry directories** — `RegistryDirectoryOwnerInjector` / `KernelRegistryDirectories`: `registryDirPath`
   answers as the owning ecosystem does. **Aliases** — `RegistryAliasParityInjector` / `KernelRegistryAliases`.
   **Reflection** — `RegistryWrapperAccessInjector` makes MinecraftForge's `NamespacedWrapper` and
@@ -1070,10 +1428,11 @@ translating pairwise:
 | Type | Role |
 | --- | --- |
 | `Ecosystem`, `Side` | the one ecosystem and side vocabulary |
-| `ForeignType` | 58 rows mapping one Forge-family concept to its MinecraftForge and NeoForge class names — names only; per-family divergence stays data |
+| `ForeignType` | 70 rows mapping one Forge-family concept to its MinecraftForge and NeoForge class names — names only; per-family divergence stays data |
 | `DiscoveredMod`, `UnifiedDependency`, `VersionPredicate`, `ModIds` | the mod and dependency model |
 | `ModPresence`, `ModCatalog` | "is X running", and the list a player sees with status `OK` / `DEGRADED` / `FAILED` |
 | `GameEventBridge`, `EventBridges` | the bridge inventory and its verification |
+| `NativeEventDelivery` | which MinecraftForge events the game is delivering itself on the current path, so a bridge stands down (§8.1) |
 | `ForgeLoadingList` | what MinecraftForge's `LoadingModList` is built from |
 | `CompatibilityFinding`, `CompatibilityFindings` | per-launch evidence ledger (§12) |
 
@@ -1153,7 +1512,7 @@ anything but its two explicit buttons starts with every mod.
 | `strict` | stops the launch; no window is shown |
 | anything else | treated as `strict` (fail closed) |
 
-The decision is asked at the pre-game boundary (§3.2 step 18), again at the end of loading (§3.4 step 3b on the
+The decision is asked at the pre-game boundary (§3.2 step 17), again at the end of loading (§3.4 step 3b on the
 server, `fireClientSetupLifecycle` on the client), and at `ServerStartedEvent` on a dedicated server (a required
 failure during world loading halts the server normally). A refusal throws `CompatibilityDecision.LaunchStopped`;
 `CompatibilityLaunchBoundary` turns it into exit code **78** and prints the report path; inside
@@ -1217,10 +1576,13 @@ java -jar forbric-kernel-installer.jar --doctor [--dir DIR] [--jdk PATH]
 
 ```
 forge userdev ─┬→ forge-runtime ───────────────┬→ patched-mc-forge ─┐
-               └───────────────────────────────┘                    ├→ patched-mc-merged
+               ├───────────────────────────────┘                    │
+               └→ (source patches: edit provenance) ────────────────┤
 neoforge userdev ─┬→ neoforge-runtime ──────────────────────────────┤
-                  └→ NFRT → patched-mc-neoforge ────────────────────┘
-vanilla 26.2.jar ───────────────────────────────────────────────────┘
+                  ├→ NFRT → patched-mc-neoforge ────────────────────┼→ patched-mc-merged
+                  └→ (source patches: edit provenance) ─────────────┤
+vanilla 26.2.jar ───────────────────────────────────────────────────┤
+versions/26.2/26.2.json's libraries (fetched only if a tool runs) ──┘
 forge-runtime ────────────────────────────────→ forge-runtime-interop   (what is staged)
 ```
 
@@ -1229,7 +1591,11 @@ forge-runtime ──────────────────────
   `gameJarNoRecomp` — binary patches, no decompiler, no `javac`).
 - `MergedBaseTool` unpacks `forbric-merge-tools.jar` from the installer's resources and runs
   `net.forbric.tools.MergedBaseBuilder` (`-Xmx4g`), `RuntimeInteropPatcher`, then `MergedLinkChecker` against the
-  packaged reviewed baseline. **An install fails unless the link check reports `new 0`.**
+  packaged reviewed baseline. **An install fails unless the link check reports `new 0`.** The merge is handed both
+  userdev artifacts (their source patches are the edit provenance of §2.4) and exactly the libraries the base
+  version's JSON lists for this platform, in classpath order, never a whole `libraries` folder: its field proofs follow
+  constructions into them. They are verified and, where missing, downloaded only once the merge or the interop patch
+  has found its output stale, so a reinstall served from the cache still works offline.
 - `--artifacts DIR` ("Built artifacts (leave empty)" in the window) is for developers only and skips the build.
   `GameArtifacts` takes the three jars from that directory alone and opens each before anything is downloaded or
   written: the merged base must be Minecraft 26.2 whose `net/minecraft/` classes refer to both
@@ -1276,16 +1642,20 @@ version is installed, pins, which artifacts are present or will be built, expect
 
 ## 14. What `forbric-loader/` is still for
 
-- **The merge tools.** `forbric-loader/src/tools/java/net/forbric/tools/` — `MergedBaseBuilder`,
-  `MergedLinkChecker`, `RuntimeInteropPatcher`, plus `AdditiveMethodMerger`, `MergeabilityCensus`,
-  `LostHookAttribution`, `EffectiveHookEvidence` — built by `:mergeToolsJar` into `forbric-merge-tools-0.1.0.jar`,
-  which the installer ships and runs. The reviewed link baseline is
-  `forbric-loader/src/test/resources/merge/link-check-baseline.txt`.
+- **The merge tools.** `forbric-loader/src/tools/java/net/forbric/tools/` — `MergedBaseBuilder`, `EditSplicer`,
+  `PatchLineProvenance`, `MergedLinkChecker`, `RuntimeInteropPatcher`, plus `AdditiveMethodMerger`,
+  `MergeabilityCensus`, `LostHookAttribution`, `EffectiveHookEvidence` — built by `:mergeToolsJar` into
+  `forbric-merge-tools-0.1.0.jar`, which the installer ships and runs. The reviewed link baseline is
+  `forbric-loader/src/test/resources/merge/link-check-baseline.txt`; the merge-loss ratchet is
+  `MergedBaseHookLossRatchetTest` (§2.4).
 - **The developer pipeline.** `run/build-patched-forge.sh`, `assemble-minecraftforge-runtime.sh`,
   `assemble-neoforge-runtime.sh`, `build-merged-base.sh`, `check-merged-links.sh` produce the staged artifacts
   under `forbric-loader/run/{merged-base,forge-runtime,neoforge-runtime}/` that the kernel's game side compiles
-  against and every gate runs on. `FORBRIC_OLD` (or `-Pforbric.stagedRoot`) points another worktree at them. The
-  committed `run/merged-base/merge-conflicts.txt` is the merge's report.
+  against and every gate runs on. `FORBRIC_OLD` (or `-Pforbric.stagedRoot`) points another worktree at them.
+  `build-merged-base.sh` writes the merge's report (`merge-conflicts.txt`) and a build record
+  (`patched-mc-merged-26.2.jar.provenance.json`: tool-source hashes, input hashes, jar and report hashes) beside the
+  jar. The committed `run/merged-base/merge-conflicts.txt` is the historical report of the builder before the edit
+  splice, a test fixture (§2.4).
 - **Test inputs.** The canary mod sources in `run/livemod-src*`/`testmod-src` (`build-testmods.sh`), and the
   mod sets in its run directories that gate-m0's discovery oracle reads.
 - **Installer payload.** The installer's bundle manifest still includes `net.forbric:forbric-loader` and
@@ -1310,22 +1680,23 @@ Forbric/
 ├── forbric-kernel/                THE KERNEL — own Gradle build and wrapper
 │   ├── build.gradle               boot jar (release 21), runtimeJar, transferTest, staged-artifact wiring
 │   ├── gradle.properties          ASM, sponge-mixin, MixinExtras, SAT4J, NightConfig … versions
-│   ├── src/main/java/net/forbric/api/          the unified API (15 files)
-│   ├── src/main/java/net/forbric/kernel/       boot (73), transform (99), mixin (50), fabric (12),
-│   │                                           metadata (11), access (7), classloading (5), discovery (4),
-│   │                                           interop (5), ui (5), util (5), mapping (3), soak (2)
-│   ├── src/main/java/net/fabricmc/             vendored Fabric API surface (37 files)
+│   ├── src/main/java/net/forbric/api/          the unified API (25 files)
+│   ├── src/main/java/net/forbric/kernel/       boot (105), transform (151), mixin (163), fabric (15),
+│   │                                           metadata (12), access (7), classloading (10), discovery (5),
+│   │                                           interop (23), ui (5), util (12), mapping (3), soak (2)
+│   ├── src/main/java/net/fabricmc/             vendored Fabric API surface (47 files)
 │   ├── src/main/resources/                     Mixin service registrations; mixin census tables
 │   ├── src/runtime/                            GAME side, net.forbric.kernel.runtime (+ soak/, transfer/)
 │   ├── src/test/, src/transferTest/            unit tests; transfer-engine tests
 │   ├── canary/                                 canary mods the gates build and load
 │   └── run/                                    gate-m*.sh, launch-kernel-{client,server}.sh, lib.sh,
 │                                               diff-oracle.sh, mixin-inventory.sh, merge-packs.sh,
-│                                               build-*-canary.sh, compat/ (sweep and evidence tooling)
+│                                               build-*-canary.sh, compat/ (sweep and evidence tooling,
+│                                               rename-mod.py: the rename experiment, §16.1)
 │
 ├── forbric-kernel-installer/      THE INSTALLER — src/main/java/net/forbric/installer/kernel/, packaging/
 │
-├── forbric-loader/                first generation; merge tools + artifact pipeline (§14)
+├── forbric-loader/                first generation; merge tools (edit splice) + artifact pipeline (§14)
 ├── forbric-installer/             the first generation's installer
 └── fabric-loader/                 gitignored upstream checkout for forbric-loader
 ```
@@ -1361,10 +1732,12 @@ java -cp <boot-cp> net.forbric.kernel.boot.Main --scan --mods <dir> --report out
   Team Reborn Energy 5.0.0 pinned by SHA-256 (`run/energy-api/energy-5.0.0.jar` or `-Pforbric.rebornEnergy`).
   Without the staged jars `compileRuntimeJava` is skipped and `jar` produces a boot jar with no game side — which
   is what CI builds. `KernelRuntimeClasses.verify` is what catches such a jar at launch.
-- **Unit tests.** Counted from source, not run: `src/test` has 2 624 `@Test` methods and 2 `@ParameterizedTest`
-  methods (two cases each) in 438 `*Test.java` files; `src/transferTest` has 61 `@Test` methods in 4 files
-  (annotations at line start, `grep` over tracked files). Many tests read the staged jars; gate-m0 fails on
-  *any* skipped test, because a skip there means the tests did not look at the real base.
+- **Unit tests.** Counted from source: `src/test` has 5 459 `@Test` methods and 6 `@ParameterizedTest` methods in
+  1 032 `*Test.java` files; `src/transferTest` has 71 `@Test` methods in 6 files (annotations at line start, `grep`
+  over tracked files). A full run on the staged base executes 6 536 tests. Many tests read the staged jars; gate-m0
+  fails on *any* skipped test, because a skip there means the tests did not look at the real base. The weave tests
+  (`mixin/weave/`) run synthetic mods with unrelated names through the real Mixin and MixinExtras, each with its
+  mechanism switched off as the control. Tests must pass on JDK 21 as well as 25 (the CI unstaged job is JDK 21).
 - **Gates.** 58 scripts, `forbric-kernel/run/gate-m*.sh`, each asserting on the real logs and files of a real
   instance, most with named negative controls (a `-D…=off` or input removal that must turn exactly the named
   checks red). `run/compat/gates-all.sh` discovers them by glob; `gates-parallel.py` overlaps them using each
@@ -1411,17 +1784,49 @@ java -cp <boot-cp> net.forbric.kernel.boot.Main --scan --mods <dir> --report out
   upstream downloads are cached and nothing derived is uploaded), then runs the same suite plus `transferTest` with
   `-Pforbric.requireFixtures=staged,game-side,mc-libraries,java-25`: every kind of fixture except third-party mod
   packs is present there, so a skip for any other kind, or an untagged skip, fails the job at the test that skipped.
-  The 136 tests that still skip all need third-party mod packs that are not in this repository, held to
-  `ci-prepared.tsv` the same way. Job `development-tools` runs
+  The 775 tests that still skip there are held to `ci-prepared.tsv` the same way: 773 need third-party mod packs that
+  are not in this repository, 2 are opt-in fixtures. The same job builds a merged base from the prepared inputs with
+  `build-merged-base.sh` and runs the merge-loss ratchet on it (§2.4), the one place it runs. Job `development-tools` runs
   `tools/dev.py tool-test` and the packaged link gate on Windows, Linux and macOS. kernel-prepared then runs four
   real dedicated-server gates on the same files: m1, m36, m46 and m53, whose mods are canaries built from this
   repository. The other gates (client, third-party packs, soak) need the developer's Mac: `tools/nightly/` runs
   them there every night from launchd (02:30, the soak on Sundays), commits each night's summary to the branch
   `ci-results` and sets the commit status `nightly/dev-mac` on the tested commit.
 
+### 16.1 Judging against the native game, and the rename experiment
+
+Tests and gates show the kernel does what its authors meant. Whether a mod behaves as on its own loader is a separate
+measurement, and every repair of a mod's behaviour is held to three proofs:
+
+1. **A synthetic sample** with unrelated names, woven through the real Mixin and MixinExtras with the mechanism on and
+   off (the weave tests above).
+2. **The rename experiment.** `run/compat/rename-mod.py rename` writes a jar that does what the mod does under other
+   names: every class under the mod's root packages moves to another package and class name (references, descriptors,
+   signatures, annotations, Mixin targets, MixinExtras definitions, refmaps and class-name strings follow), its mixin
+   configs, refmaps and access widener get other file names, and its mod ids become other ids (letters only: Forge's
+   Mixin drops a mod id's digits where it names merged members) wherever metadata, manifest, service files and
+   jar-in-jar metadata name them. Resource namespaces stay, and so do the strings the mod's code compares names
+   against; a probe or addon compiled against the mod moves with it (`--dependent`); a nested jar pinned by name and
+   digest is pinned again. `verify` reads the renamed jar back with `javap` and checks it is a pure renaming;
+   `compare` puts a run of the renamed jar beside a run of the original — the `-Dmixin.debug.export=true` census, the
+   `Mixing … into …` lines, the kernel's `[Forbric/…]` lines and compatibility report, probe files — with the new names
+   put back, and lists every difference. A repair passes when what remains is noise a second run of the original shows
+   too (timing, spawn point, list order) or follows from the new id's shape (the underscore alias only an id with `-`
+   gets). A mod that looks itself up by a literal id is renamed with its id kept. `ModRename.java` is the ASM half.
+3. **Native comparison.** The same mods run on native Fabric Loader 0.19.5, native NeoForge 26.2.0.88 and native
+   MinecraftForge 26.2-65.0.1, and are compared injector by injector: the instruction each injector lands on (the
+   export census, and the instructions around the landing point), whether the method it lands in runs in the game
+   (its callers, and the kernel's uncalled table), what in-game probes report (counts per frame, values, screenshots),
+   and the warnings. The same instruction, run on the same executions, with the same effect, is equivalent; anything
+   else is a named gap, or comes with a proof that no structural trigger can close it. The per-mod harness for this
+   lives on the developer machine, not in the repository; `rename-mod.py census`/`compare` and
+   `run/compat/control-diff.sh` are the parts that are.
+
+The last round's results are in §19.
+
 ## 17. System properties
 
-Set with `-D` on the JVM. The installed profile sets none. There are about 250 distinct `forbric.*` names in
+Set with `-D` on the JVM. The installed profile sets none. There are about 430 distinct `forbric.*` names in
 `src/main` and `src/runtime`; almost every repair has an `-Dforbric.<name>=off` switch, and turning one off logs a
 WARN stating what is lost. Those switches exist for bisecting and for gates' negative controls. The ones a
 developer reaches for:
@@ -1473,6 +1878,19 @@ developer reaches for:
 | `forbric.mergedBaseCompat` | `off`: drop the built-in incompatibility lists |
 | `forbric.disableMixinConfigs`, `forbric.enableMixinConfigs` | csv of configs to disable / force on |
 | `forbric.suppressMixins`, `forbric.keepMixins` | csv of `config:Mixin` to drop / keep |
+| `forbric.lateMixinJudgment` | `off`: a mixin a config plugin adds is not judged when Mixin first reads it |
+
+**Native-equivalence mechanisms** (§7.4.1, §6; each `=off` turns one off and logs what is lost):
+`forbric.nativeOccurrences`, `forbric.addedCallOccurrences`, `forbric.nativeSliceOccurrences`, `forbric.returnOrdinals`,
+`forbric.shiftedPoints`, `forbric.vanillaEarlyReturns`, `forbric.mixinStubRebind`, `forbric.builderStubRebind`,
+`forbric.mixinTwinRebind`, `forbric.renamedBodyEdges`, `forbric.splitBodyEdges`, `forbric.forgeModelDataEdge`,
+`forbric.nativeCallInlining`, `forbric.mixinFieldInitialisers`, `forbric.expressionThunks`, `forbric.carrierDecisions`,
+`forbric.carrierGuardedPoints`, `forbric.carrierDefaultChains`, `forbric.carrierHelperResults`,
+`forbric.carrierReturnedCalls`, `forbric.carrierMethodReferences`, `forbric.replacedDecisionValues`,
+`forbric.nativeEntryRelay`, `forbric.nativeDecisionIsland`, `forbric.placementCallWitness`, `forbric.nativeValueStores`,
+`forbric.nativeConsumerStores`, `forbric.nativeDeadValueConsumers`, `forbric.nativeLocalPins`,
+`forbric.nativeLocalMaterialization`, `forbric.capturedLocals`, `forbric.localRanges`, `forbric.tailLocals`,
+`forbric.scopedClearRelay`, `forbric.uncalledDecisionEntries`, `forbric.uncalledValueRelay`, `forbric.mixinAsideMarks`.
 
 **Diagnostics and test drivers**
 
@@ -1484,10 +1902,14 @@ developer reaches for:
 | `forbric.traceClassDefine` | csv of binary names; log a stack the first time each is defined |
 | `forbric.tickSampler` | `off`: no server tick-time sampling |
 
-**Selected repair switches** — `forbric.commonNetworkInterop`, `forbric.playPayloadFallThrough`, `forbric.chunkExecutorGuard`,
+**Selected repair switches** — `forbric.arbitratedAwayEntrypoints`, `forbric.graphicsBootstrappers`,
+`forbric.channelDeclarationsOnce`, `forbric.forgeConditionFunnel`, `forbric.forgeModelData`,
+`forbric.creativeTabEcosystemOrder`, `forbric.glideFreshEquipment`, `forbric.staleWatchGuard`,
+`forbric.commonNetworkInterop`, `forbric.playPayloadFallThrough`, `forbric.chunkExecutorGuard`,
 `forbric.forgeCapabilities`, `forbric.forgeWorldgen`, `forbric.transferBridge`, `forbric.hopperFabricStorage`,
 `forbric.clientResourcePreload`, `forbric.earlyConfigs`, `forbric.fabricHooks`, `forbric.fabricImpl`,
-`forbric.kernelBundledFirst`, `forbric.modDataPacks`, `forbric.modMenuStandIn`. `forbric.kernel.registryRedirect=true` enables an
+`forbric.kernelBundledFirst`, `forbric.modDataPacks`, `forbric.modMenuStandIn`, `forbric.forgeBreakExperience`,
+`forbric.supersededMixins`. `forbric.kernel.registryRedirect=true` enables an
 experimental registry-wrapper redirect.
 
 ## 18. Invariants
@@ -1514,25 +1936,118 @@ Break one and the failure usually surfaces far from the cause.
     against staged jars `compileOnly`; the installer builds them on the player's machine.
 11. **No catch is silent.** Every catch rethrows or reports to `Caught` (§12.5), and a unit test that makes the
     kernel carry on from a failure fails unless it says so with `@ExpectCaught`.
+12. **No repair keys on a name.** What triggers a repair is a shape — bytecode, descriptors, inheritance and
+    interface relations, a contract, whether an event is delivered — never a mod id, a mod's class or package name,
+    a jar name, a mixin config, mixin class, handler, `@Local` or `@Share` name, a mod's implementation class
+    (fabric-api is a mod: its public API may be called, its implementation is not named), a one-mod bytecode
+    template or a body hash. A mod is a sample and a test case, never the condition (§16.1).
+13. **One delivery per native dispatch.** A listener gets an event as many times as its own loader would give it:
+    a bridge stands down where the game delivers the event itself on that path, and owes it only where a way out
+    exists that the mod's own game does not have (§8.1). "At least once" is not a passing check.
+14. **The merge never loses more.** The merge-loss ratchet's ceilings only go down (§2.4).
 
 ## 19. Current state and known boundaries
 
 - **Minecraft 26.2 only**, Mojmap identity namespace. There is no remapping step: a jar compiled against another
   namespace is not translated (`kernel/mapping/` is carried over from the weld and is not on the boot path).
-- **The merged base is NeoForge's game with MinecraftForge spliced in.** Where both patched a method, one body
-  survived (1 000 method conflicts in the committed report); what the loser's mods lose is repaired case by case —
-  transformers, adapters, bridges — and what is not repaired is reported by `DeadEventAudit`,
-  `HookCallSiteCensus`, `FieldDriftAudit`, `AbiLinkAudit`, `CapabilityUseAudit`. Structural conflicts (two real
-  superclasses for `Entity`) have no bytecode-level resolution; MinecraftForge capabilities are composed back in by
-  transformer.
+- **The merged base is NeoForge's game with MinecraftForge spliced in, both edits kept where provable.** 240 methods
+  carry both families' edits; 921 both-patched methods still keep one family's body (the edit splice could not prove
+  a carry, or found a real conflict), and the merge loses 508 MinecraftForge and 15 NeoForge platform-call
+  occurrences, held there by the ratchet (§2.4). What the loser's mods lose is repaired by transformers, guest-mixin
+  mechanisms and bridges, and what is not repaired is reported by `DeadEventAudit`, `HookCallSiteCensus`,
+  `FieldDriftAudit`, `AbiLinkAudit`, `CapabilityUseAudit`. Structural conflicts (two real superclasses for `Entity`)
+  have no bytecode-level resolution; MinecraftForge capabilities are composed back in by transformer.
 - **`PARTIAL` mixins apply by default** — half-application is kept, visible, in preference to dropping working
   hooks.
 - **One class, one copy.** When two ecosystems' builds of a mod compete, one wins; the losing ecosystem sees a
   presence alias, not the mod's own platform glue.
 - **Measured, not promised.** `MOD_TEST_FAILURES.md` records a per-mod test (each jar alone with its required
-  dependencies, into a world, screenshot, exit) on three fresh random Modrinth sets against the current `main`
-  code: 89.0 % loaded without failure lines on average (91.8 % reached the world; 79.1 % with nothing reported
-  DEGRADED in the load report), against 80.5 % for release v0.2.0 on the same jars.
+  dependencies, into a world, screenshot, exit) on three fresh random Modrinth sets against `main` as of 2026-09-26
+  (`11ca1ffa`), before the edit splice: 89.0 % loaded without failure lines on average (91.8 % reached the world;
+  79.1 % with nothing reported DEGRADED in the load report), against 80.5 % for release v0.2.0 on the same jars. That
+  sweep has not been re-run on the edit-spliced base.
+- **Native comparison, last round.** 27 mods were measured against their native loaders by the method of §16.1
+  (instruction-level landing, liveness, in-game probes, rename experiment): Carpet, Create Fly, C2ME, Lithium (Fabric
+  and NeoForge builds), Physics Mod, Sodium (NeoForge), Continuity, Iris, Corpse, Shoulder Surfing with
+  CustomSkinLoader, fusion, Do a Barrel Roll, Controlify, Just Enough Characters, SpectreLib, Mod Menu, Forge Config API
+  Port, PuzzlesLib, Item Glint Relight, Jade, Essential, fabric-api, Balm, Architectury, Origins Legacy, Better Mount
+  HUD. 22 are equivalent; Lithium (Fabric) and Forge Config API Port are not only for reasons proven not closable,
+  and Mod Menu, fabric-api and Balm are not for the reasons below. Every rename experiment came out the same as the
+  original. The last round re-measured the ten rows below (on a base built by the current tools; the kernel at
+  `91dbfa5d`, then the experience relay, the delegate-twin rule and the aside names of this round on top):
+
+  | Mod | Verdict | What is left |
+  | --- | --- | --- |
+  | Mining experience, no mods | equivalent | a MinecraftForge listener that only reads `getExpToDrop` sees another draw |
+  | Carpet | equivalent | — |
+  | Create Fly (with fabric-api) | equivalent | fuel, redstone connection and the global keys are native now; report-only: its `FuelValuesMixin` still reads `SUSPECTED`, and a second preflight on the render thread prints `EntityMixin`'s old partial line again |
+  | PuzzlesLib (Fabric and NeoForge builds) | equivalent | its experience event is handed the vanilla value and decides once (50 and 100 for two breaks, as natively) |
+  | Mod Menu | not equivalent | the update checker announces an update for `fabricloader@0.19.3`; the carrier's branding line |
+  | fabric-api 0.161 | not equivalent | datagen's `TagsProviderMixin`; `AFTER` has two static call sites (fires once per break); the breathing rule; two proven items |
+  | Balm | not equivalent | `SCREEN_OPEN` reads; crop moisture (proven) |
+  | Origins Legacy (with fabric-api) | equivalent | — |
+  | Architectury | equivalent | — (the global keys measured in game this round) |
+  | Physics Mod | equivalent | — |
+
+**What is still not native-equivalent.** Proven not closable by any structural trigger (each proof kept):
+
+- Forge Config API Port's own `config/forgeconfigapiport.toml` is never written: the only code that reads or writes it
+  is the port's bundled copies of carrier classes (`ConfigTracker`, `ConfigurationScreen$TranslationChecker`), which
+  share their names with the NeoForge carrier's and can never be defined. Its three options are read from the
+  same-named entries of `fml.toml`.
+- With fabric-api, advanced tooltips show extra lines such as `[1 + 6]`: both ecosystems append to one shared tooltip.
+- Balm's crop-moisture hook: the carrier replaced the moisture check with a virtual `isFertile` call.
+- Lithium's Fabric build: three hopper injectors attach nowhere. NeoForge moved the neighbour notification into
+  `markAndNotifyBlock` and looks containers up in three steps (`ContainerOrHandler`) that cannot be split into
+  vanilla's two (Lithium's own NeoForge build does not apply them either). Only the hopper container cache, an
+  optimisation, is inactive.
+- Channel declarations: per join, `REGISTER` fires 5 times on the client and 4 on the server in the configuration
+  phase (native once each), 3 times in play (native 2), plus 3 `UNREGISTER`s.
+
+Located, not yet fixed (no impossibility proof):
+
+- Mod Menu: the `fabricloader` container reports version 0.19.3 — the Fabric Loader API level the kernel implements and
+  `FabricLoaderApiSurfaceTest` holds it to — where native reports the loader actually run (0.19.5), so Mod Menu's update
+  checker announces an update native does not; the loader-nested `mixinextras` is the kernel's 0.5.4 (native 0.5.5),
+  and the container's type is `builtin` (native `fabric`). Reporting a version the kernel does not implement would be
+  untrue, so this waits for the API itself to reach 0.19.5. The title screen also shows Forbric's own branding
+  line, `forbric-v<version> (N mods)` with N the jars in `mods/` (Mod Menu's count also takes in the mods bundled
+  inside them), which moves Mod Menu's up one line; the owner chose to keep it.
+- Balm's `SCREEN_OPEN` hook (a modifier at each read of `Gui.screen`) attaches at 3 reads where native has 4: the
+  carrier keeps the field in a local and reads it once less.
+- fabric-api: `PlayerBlockBreakEvents.AFTER` has two static call sites after `Block.destroy` (native one), though it
+  fires exactly once per break in every mode measured; the enchanting table's primary-item check goes through
+  NeoForge's `isPrimaryItemFor`, proven only for the disjunct it folds (the in-game enchanting probe matches native);
+  datagen's `TagsProviderMixin` attaches nowhere (Fabric data generation only).
+- Air under water: an entity that can breathe there (a player with water breathing, in water or a modded fluid; a
+  drowned) keeps its air value where native refills it by 4 per tick. That is NeoForge's carrier rule, left as
+  NeoForge decides it pending the owner's decision.
+- Experience: a MinecraftForge `BreakEvent` listener that only reads `getExpToDrop` sees MinecraftForge's own draw, not
+  the one NeoForge drops (a listener that sets it decides correctly). The relay of `tryDropExperience` (§7.4) declines,
+  with a WARN, a hook that reads or changes the raw draw or replaces the `popExperience` call, and runs for a block
+  only when what its native caller hands the provider can be read (a field, a static field, a static call on
+  constants); a NeoForge `BlockDropsEvent` listener at `LOWEST` registered before the kernel's sees the value before
+  the relay. Read from the bytecode, not measured: NeoForge's `handleBlockDrops` calls `spawnAfterBreak(…, false)`, so
+  a Fabric mod's own block whose `spawnAfterBreak` override pops experience when `dropXp` is true pops none.
+- Two mods' `HEAD` hooks on one static decision nothing calls any more (`UncalledDecisionEntries`) become two wraps of
+  the carrier's decision: they run in the reverse of the native order, and a cancel by the first no longer skips the
+  second (pinned by `UncalledDecisionTwoMixinsWeaveTest`; no measured mod has two such hooks).
+- For developers: a merged base built before the delegate-twin pass (§2.4) still gives no experience from mining, and
+  `UncalledMethodCensusTest` and gate-m43 fail on it; rebuild the staged base with the current tools (CI and the
+  installer always do).
+- Report-only noise, behaviour equivalent: Sodium's `WindowMixin` "partial 3/4", the `MixinOverlap` R3 warning on
+  Sodium and fabric-rendering, Continuity's stale "partial (kept)", the contended call-site warning for Shoulder
+  Surfing with CustomSkinLoader, Create's `FuelValuesMixin` `SUSPECTED` and the render thread's second preflight of
+  `EntityMixin`. The loader-nested `mixinextras.init.mixins.json` (no mixin, only MixinExtras' init) is now applied in
+  every pack, as Fabric Loader does, a MinecraftForge-only pack included, where native MinecraftForge has no such
+  config.
+- Not measured: Controlify's gamepad features (no gamepad); Sodium's NVIDIA/AMD/Intel workaround branches (only Apple
+  hardware was available; the code path is the same on both sides); the load point of a Fabric consumer's server
+  config under SpectreLib (`ServerAboutToStart` instead of `SERVER_STARTING`, both before the world loads; argued
+  from bytecode, no such consumer to run).
+- A deliberate difference: genuine NeoForge 26.2.0.88 crashes rendering a Corpse corpse (`NoSuchFieldError
+  NeoForgeMod.NAMETAG_DISTANCE`); `ZeroNameTagMigrationInjector` proves the field is only used to set 0 and reads
+  `Attributes.NAME_TAG_DISTANCE` instead, so the corpse renders without a name tag.
 - **Versions.** `forbric-kernel/build.gradle` says `0.1.0-SNAPSHOT`; the installer is `0.3.1-beta2`. `net.forbric.api`
   is internal and changes without notice.
 

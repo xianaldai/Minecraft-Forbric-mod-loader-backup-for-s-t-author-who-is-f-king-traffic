@@ -64,6 +64,24 @@ class LostHookAttributionTest {
 				MergeabilityCensus.conflicts(report).stream().map(c -> c[2]).toList());
 	}
 
+	/** The capturer realignment's row form is read with the family that lost the lambda body, and marked as such. */
+	@Test void displacedLambdaRowsAreInventoriedWithTheFamilyThatLostTheBody() throws Exception {
+		Path report = temporary.resolve("conflicts.txt");
+		Files.writeString(report, "game/A#tick()V (forge hook lost)\n"
+				+ "game/B#lambda$init$0(Lgame/Button;)V (" + MergedBaseBuilder.DISPLACED_LAMBDA + "forge hook lost)\n"
+				+ "game/C#lambda$static$6(Lgame/C;)Ljava/util/Optional; (" + MergedBaseBuilder.DISPLACED_LAMBDA + "neo hook lost)\n");
+		var rows = LostHookAttribution.conflicts(report);
+		assertEquals(3, rows.size());
+		assertFalse(rows.get(0).displacedLambda());
+		assertTrue(rows.get(1).displacedLambda());
+		assertEquals("lambda$init$0(Lgame/Button;)V", rows.get(1).method());
+		assertEquals("forge", rows.get(1).lostFamily());
+		assertFalse(rows.get(1).fieldInitKept());
+		assertTrue(rows.get(2).displacedLambda());
+		assertEquals("neo", rows.get(2).lostFamily());
+		assertEquals(List.of("forge", "forge", "neo"), MergeabilityCensus.conflicts(report).stream().map(c -> c[2]).toList());
+	}
+
 	/** A form nobody taught the parser must stop the run, not shrink the denominator. */
 	@Test void anUnrecognisedHookLostRowFailsInsteadOfDisappearing() throws Exception {
 		Path report = temporary.resolve("conflicts.txt");
@@ -75,6 +93,149 @@ class LostHookAttributionTest {
 			assertTrue(failure.getMessage().contains(row), failure.getMessage());
 			assertThrows(java.io.IOException.class, () -> MergeabilityCensus.conflicts(report), row);
 		}
+	}
+
+	/**
+	 * The edit splice appends a section of per-method decisions. It is read whole -- every entry and every run -- and
+	 * nothing in it is a hook-lost row, not even an entry whose text happens to end the way a row does.
+	 */
+	@Test void theEditSpliceSectionIsReadAndNeverCountedAsAHookLostRow() throws Exception {
+		Path report = temporary.resolve("conflicts.txt");
+		Files.writeString(report, String.join("\n",
+				"[merge] edit splice: methods=3 runs carried=3 already-present=1 conflicting=2 refused=1",
+				"",
+				"=== both-modified methods where one side's hook is LOST (see suffix for which) ===",
+				"game/A#tick()V (forge hook lost)",
+				"",
+				"=== restricted entry-hook merges (declined methods retain the existing arbitration) ===",
+				"game/A#tick()V DECLINED both sides must add an entry prefix",
+				"",
+				LostHookAttribution.SPLICE_SECTION + " both ecosystems' edits kept in one body (per run; lines are the other"
+						+ " side's patched source lines) ===",
+				"game/A#tick()V NOT SPLICED (no run could be carried over)",
+				"    = both-changed L10-11 the base changed the same vanilla lines differently; lost [ForgeHooks.tick], kept [EventHooks.tick]",
+				"game/B#run()V SPLICED",
+				"    + insert L20-21",
+				"    = same-edit L30-30 the base already has this inserted code",
+				"game/C#<init>()V SPLICED",
+				"    + replace L5-6",
+				"    x insert L7-7 run is not a statement in the other body",
+				"game/E#use(I)Z SPLICED",
+				"    + insert L1143-1126",
+				"    = both-changed L40-40 the base changed the same vanilla lines differently; lost [ForgeHooks.use], kept [no calls]",
+				"game/D#odd()V NOT SPLICED (vanilla parts do not align (3/9) like a row (forge hook lost)",
+				""));
+		var parsed = LostHookAttribution.report(report);
+		assertEquals(List.of(new LostHookAttribution.Conflict("game/A", "tick()V", "forge")), parsed.conflicts());
+		assertEquals(1, MergeabilityCensus.conflicts(report).size());
+		var splices = parsed.splices();
+		assertEquals(List.of("game/A#tick()V", "game/B#run()V", "game/C#<init>()V", "game/E#use(I)Z", "game/D#odd()V"),
+				splices.stream().map(s -> s.owner() + "#" + s.method()).toList());
+		assertEquals(List.of(false, true, true, true, false), splices.stream().map(LostHookAttribution.Splice::spliced).toList());
+		// Only a method the splice took can be residual, and only through a competing or refused run.
+		assertEquals(List.of(false, false, true, true, false), splices.stream().map(LostHookAttribution.Splice::residual).toList());
+		assertEquals("no run could be carried over", splices.get(0).reason());
+		assertEquals("vanilla parts do not align (3/9) like a row (forge hook lost", splices.get(4).reason());
+		var run = splices.get(3).runs().get(0);
+		assertEquals(List.of('+', "insert", 1143, 1126), List.of(run.mark(), run.kind(), run.firstLine(), run.lastLine()));
+		assertEquals(List.of(1, 2, 2, 2, 0), splices.stream().map(s -> s.runs().size()).toList());
+	}
+
+	/** A line of the section nobody taught the parser stops the run, as an unknown hook-lost row does. */
+	@Test void anUnrecognisedEditSpliceRowFailsInsteadOfBeingMisfiled() throws Exception {
+		Path report = temporary.resolve("conflicts.txt");
+		String heading = LostHookAttribution.SPLICE_SECTION + " both ecosystems' edits kept in one body ===\n";
+		for (String body : List.of("    + insert L1-2\n", "game/Z#ok()V SPLICED\ngame/A#tick()V MAYBE SPLICED\n",
+				"game/Z#ok()V SPLICED\n    ? insert L1-2\n", "game/Z#ok()V SPLICED\n    + insert 1-2\n",
+				"game/Z#ok()V SPLICED\ngame/A#tick()V (forge hook lost)\n", "game/Z#ok()V SPLICED\n\tx insert L1-1 tab\n")) {
+			Files.writeString(report, "game/Y#ok()V (neo hook lost)\n" + heading + body);
+			var failure = assertThrows(java.io.IOException.class, () -> LostHookAttribution.report(report), body);
+			assertTrue(failure.getMessage().contains("unrecognised edit-splice row"), failure.getMessage());
+			assertThrows(java.io.IOException.class, () -> LostHookAttribution.conflicts(report), body);
+			assertThrows(java.io.IOException.class, () -> MergeabilityCensus.conflicts(report), body);
+		}
+	}
+
+	/**
+	 * A method the splice took is no hook-lost row; when the splice reports one of its runs lost, the census says so
+	 * instead of calling the caller UNLISTED. A clean splice and a method the splice did not take stay as they were.
+	 */
+	@Test void aSplicedMethodThatLostARunIsSpliceResidualInTheCensus() {
+		String hook = "net/minecraftforge/common/ForgeHooks#tick()V";
+		ClassNode source = classNode("game/A", methodNode("residual", "()V", hook), methodNode("clean", "()V", hook),
+				methodNode("refused", "()V", hook), methodNode("listed", "()V", hook));
+		ClassNode merged = classNode("game/A", methodNode("residual", "()V"), methodNode("clean", "()V", hook),
+				methodNode("refused", "()V"), methodNode("listed", "()V"));
+		var carried = new LostHookAttribution.SpliceRun('+', "insert", 1, 1, "");
+		var splices = List.of(
+				new LostHookAttribution.Splice("game/A", "residual()V", true, null,
+						List.of(carried, new LostHookAttribution.SpliceRun('x', "insert", 2, 2, "run is not a statement"))),
+				new LostHookAttribution.Splice("game/A", "clean()V", true, null,
+						List.of(carried, new LostHookAttribution.SpliceRun('=', "same-edit", 3, 3, "already there"))),
+				new LostHookAttribution.Splice("game/A", "refused()V", false, "no run could be carried over",
+						List.of(new LostHookAttribution.SpliceRun('=', "both-changed", 4, 4, "lost [ForgeHooks.tick]"))),
+				new LostHookAttribution.Splice("game/A", "listed()V", false, "no shared vanilla code", List.of()));
+		var census = LostHookAttribution.platformCensus(Map.of(source.name, source), Map.of(merged.name, merged),
+				List.of(new LostHookAttribution.Conflict("game/A", "listed()V", "forge")), splices);
+		assertEquals(4, census.callers());
+		assertEquals(1, census.listedConflictCallers());
+		assertEquals(1, census.spliceResidualCallers());
+		Map<String, String> membership = census.calls().stream().collect(java.util.stream.Collectors.toMap(
+				LostHookAttribution.PlatformCall::caller, LostHookAttribution.PlatformCall::membership));
+		assertEquals(Map.of("game/A#residual()V", "SPLICE_RESIDUAL", "game/A#clean()V", "UNLISTED",
+				"game/A#refused()V", "UNLISTED", "game/A#listed()V", "LISTED"), membership);
+		// Membership labels; it never changes what is counted.
+		assertEquals(3, LostHookAttribution.rawLostOccurrences(census));
+		assertEquals(LostHookAttribution.rawLostOccurrences(census), LostHookAttribution.rawLostOccurrences(
+				LostHookAttribution.platformCensus(Map.of(source.name, source), Map.of(merged.name, merged), List.of())));
+		assertEquals(0, LostHookAttribution.unobservedOccurrences(census));
+	}
+
+	/**
+	 * A lambda the splice carried under a fresh name keeps its calls; a merged lambda of the same name holding another
+	 * body does not. Counting by caller name alone rewarded a lambda collision (MinecraftForge's body under NeoForge's
+	 * name) and charged the correct rename as a loss.
+	 */
+	@Test void aLambdaCarriedUnderAFreshNameKeepsItsCalls() {
+		String hook = "net/minecraftforge/client/gui/ModListScreen#open()V", neoCall = "net/neoforged/neoforge/client/ClientHooks#report()V";
+		ClassNode source = classNode("game/Pause", methodNode("lambda$menu$11", "(I)V", hook));
+		ClassNode renamed = classNode("game/Pause", methodNode("lambda$menu$11", "(I)V", neoCall),
+				methodNode("lambda$menu$11$forbricforge", "(I)V", hook));
+		var kept = LostHookAttribution.platformCensus(Map.of(source.name, source), Map.of(renamed.name, renamed), List.of());
+		assertEquals(0, LostHookAttribution.rawLostOccurrences(kept), "moved to its own name, not lost");
+		// Negative control: without the carried copy, the merged lambda of that name is another body and the call is lost.
+		ClassNode collided = classNode("game/Pause", methodNode("lambda$menu$11", "(I)V", neoCall));
+		var lost = LostHookAttribution.platformCensus(Map.of(source.name, source), Map.of(collided.name, collided), List.of());
+		assertEquals(1, LostHookAttribution.rawLostOccurrences(lost));
+		// And the other family's census sees its own lambda's call lost when the name holds MinecraftForge's body.
+		ClassNode neoSource = classNode("game/Pause", methodNode("lambda$menu$11", "(I)V", neoCall));
+		ClassNode forgeUnderNeoName = classNode("game/Pause", methodNode("lambda$menu$11", "(I)V", hook));
+		assertEquals(1, LostHookAttribution.rawLostOccurrences(LostHookAttribution.platformCensus(Map.of(neoSource.name, neoSource),
+				Map.of(forgeUnderNeoName.name, forgeUnderNeoName), List.of())));
+	}
+
+	/** The hooks a residual splice still lacks are attributed like a row's, by the bodies, to the family that lost them. */
+	@Test void aResidualSpliceIsAttributedToTheFamilyWhoseHookTheMergedBodyLacks() throws Exception {
+		String forge = "net/minecraftforge/common/ForgeHooks", neo = "net/neoforged/neoforge/event/EventHooks";
+		Path f = jar("forge.jar", forge, forge), n = jar("neo.jar", neo, neo);
+		Path merged = jar("merged.jar", neo, forge), carrier = temporary.resolve("empty.jar");
+		try (JarOutputStream ignored = new JarOutputStream(Files.newOutputStream(carrier))) { }
+		Path report = temporary.resolve("report.txt"), mods = Files.createDirectory(temporary.resolve("mods"));
+		Files.writeString(report, "game/B#tick()V (neo hook lost)\n\n" + LostHookAttribution.SPLICE_SECTION + " ... ===\n"
+				+ "game/B#tick()V NOT SPLICED (no shared vanilla code)\n"
+				+ "game/A#tick()V SPLICED\n    + insert L1-1\n    = both-changed L2-2 the base changed the same vanilla"
+				+ " lines differently; lost [ForgeHooks.tick], kept [EventHooks.tick]\n");
+		String output = run(new String[] {f.toString(), n.toString(), merged.toString(), carrier.toString(),
+				carrier.toString(), report.toString(), mods.toString()});
+		assertTrue(output.contains("conflicts=1 judged=1 no-modelled-direct-hook=0 unobserved=0"), output);
+		assertTrue(output.contains("game/A#tick()V lost-family=forge kind=SPLICE_RESIDUAL RAW-LOST [" + forge + "#tick()V]"), output);
+		assertFalse(output.contains("game/A#tick()V lost-family=neo"), "the base family's own hook is kept: " + output);
+		assertTrue(output.contains("spliced-residual=1 judged=1 no-modelled-direct-hook=0 unobserved=0"), output);
+		assertTrue(output.contains("caller=game/A#tick()V symbol=" + forge + "#tick()V scope=MODELLED_FACADE"
+				+ " conflict=SPLICE_RESIDUAL state=RAW_LOST"), output);
+		assertTrue(output.contains("caller=game/B#tick()V symbol=" + neo + "#tick()V scope=MODELLED_FACADE"
+				+ " conflict=LISTED state=RAW_LOST"), output);
+		assertTrue(output.contains("listed-conflict-callers=1 splice-residual-callers=1 unlisted-callers=0"), output);
 	}
 
 	/** The tracked historical report: every row the builder wrote as a hook loss is a row the tools judge. */

@@ -42,29 +42,16 @@ import net.forbric.kernel.util.ForbricLog;
  * the target — the cases the pre-mixin adapter ({@link KernelGuestMixinAdapter}) cannot pre-empt because the damage
  * is done by Mixin's own weaving. Runs on the post-Mixin bytes, so it can see mixin-added members.
  *
- * <p>Currently one entry: {@code fabric-resource-loader-v1}'s {@code PackMixin} adds a {@code parentsPredicate} field
- * initialized to {@code DEFAULT_PARENT_PREDICATE}. Mixin injects a field initializer after the constructor's
- * super/this call — but NeoForge's merged {@code Pack} 5-arg constructor recursively calls {@code new Pack(...)}
- * inside its child-building loop, and Mixin placed the initializer after THAT recursive call, i.e. inside the loop.
- * The loop is skipped for any pack with an empty children list — every top-level pack from {@code readMetaAndCreate}
- * — so their {@code parentsPredicate} stays {@code null}. {@code fabric$isHidden()} is {@code parentsPredicate !=
- * DEFAULT}, so a null makes EVERY top-level pack (including the vanilla data pack) read as a hidden mod pack;
- * {@code refreshAutoEnabledPacks} then strips them from the selected set, the vanilla datapack never loads, and 13
- * dynamic registries come up empty. The repair re-adds the initializer where Mixin should have put it: immediately
- * after {@code super()}, so {@code parentsPredicate} is DEFAULT for every pack regardless of children (the stray
- * in-loop assignment becomes a harmless repeat).
+ * <p>A mixin's field initialiser that Mixin put after a merged constructor's own constructions of its class, instead of
+ * after {@code super()}, is moved back there by {@link MixinFieldInitialiserPlacement} — recognised by the woven class's
+ * shape and the mixin's native class, whichever mod's field it is.
  */
 public final class PostMixinFixups {
-	private static final String PACK = "net/minecraft/server/packs/repository/Pack";
 	private static final String GUI_RENDERER = "net/minecraft/client/gui/render/GuiRenderer";
 	private static final String PIP_RENDERERS = "pictureInPictureRenderers";
 	private static final String MAP_DESC = "Ljava/util/Map;";
 	/** Mixin names every injected callback {@code handler$<id>$<method>}. */
 	private static final String HANDLER_PREFIX = "handler$";
-	private static final String FABRIC_PACK = "net/fabricmc/fabric/impl/resource/pack/FabricPack";
-	private static final String PARENTS_PREDICATE = "parentsPredicate";
-	private static final String DEFAULT_PARENT_PREDICATE = "DEFAULT_PARENT_PREDICATE";
-	private static final String PREDICATE_DESC = "Ljava/util/function/Predicate;";
 
 	/**
 	 * Merged-base fields this class SEEDS, as {@code owner#field}. {@link MixinFit} consults this so it does not
@@ -92,22 +79,26 @@ public final class PostMixinFixups {
 	public static byte[] apply(String name, byte[] bytes) {
 		if (bytes == null || !enabled()) return bytes;
 		String internal = name.replace('.', '/');
-		if (PACK.equals(internal)) return repairPackParentsPredicate(bytes);
+		bytes = MixinFieldInitialiserPlacement.repair(bytes, NativeGameReferences::reference, MixinStubRebind::ecosystemOf);
+		// A value a guest changed, whose native consumer the carrier replaced: handed to the carrier's own consumer of it.
+		bytes = NativeDeadValueConsumers.apply(internal, bytes, NativeGameReferences::reference, MixinStubRebind::ecosystemOf);
 		if (GUI_RENDERER.equals(internal)) return seedOrphanedPipRenderers(bytes);
 		if (MAPPED_REGISTRY.equals(internal)) bytes = askTheRegistryWhetherAnAliasTargetExists(bytes);
+		// The fuel table a native build hands its caller, after every return hook (FabricFuelValuesInjector.afterMixin).
+		bytes = net.forbric.kernel.transform.FabricFuelValuesInjector.afterMixin(internal, bytes);
 		return replayDelegatedConstructorInjections(internal, bytes);
 	}
 
 	private static final String MAPPED_REGISTRY = "net/minecraft/core/MappedRegistry";
-	/** {@code off} leaves fabric-registry-sync's alias-target warning reading {@code byLocation} directly. */
+	/** {@code off} leaves a mixin's alias-target warning reading {@code byLocation} directly. */
 	static final String ALIAS_PRESENCE_PROPERTY = "forbric.aliasPresenceParity";
-	/** The warning's own text, which is what marks the one {@code containsKey} this repair may touch. */
-	private static final String ALIAS_TARGET_WARNING = "Adding {} as an alias for {}, but the latter doesn't exist";
+	/** The registry's vanilla id map, which a MinecraftForge wrapper never fills. */
+	private static final String BY_LOCATION = "byLocation";
 
 	/**
-	 * Makes fabric-registry-sync's "alias target doesn't exist" warning ask the registry, not its vanilla map.
+	 * Makes a mixin's "alias target doesn't exist" warning ask the registry, not its vanilla map.
 	 *
-	 * <p>The mixin-added {@code MappedRegistry.addAlias} warns when {@code !this.byLocation.containsKey(target)}.
+	 * <p>fabric-registry-sync's mixin-added {@code MappedRegistry.addAlias} warns when {@code !this.byLocation.containsKey(target)}.
 	 * On the merged base {@code BuiltInRegistries.BLOCK} and {@code ITEM} are MinecraftForge
 	 * {@code NamespacedWrapper}s: their {@code register} goes to a {@code ForgeRegistry} and never writes the
 	 * inherited {@code byLocation}, so the check fails even when the target was registered first. More Nemo's
@@ -117,24 +108,28 @@ public final class PostMixinFixups {
 	 *
 	 * <p>The map read becomes {@code this.keySet()}, whose {@code contains} is the same exact, non-resolving lookup:
 	 * {@code byLocation}'s key set on a vanilla or NeoForge registry, the ForgeRegistry's own names on a wrapper.
-	 * Not {@code containsKey(Identifier)}, which fabric-api's {@code @ModifyVariable} and the parity injector both
+	 * Not {@code containsKey(Identifier)}, which an alias mixin's {@code @ModifyVariable} and the parity injector both
 	 * resolve through aliases, so an alias chain would change what the warning says. The answer then goes through
 	 * {@code KernelRegistryAliases.aliasTargetPresent}, which also knows NeoForge's own alias-first order.
 	 *
-	 * <p>Only the warning's check, found by the text right after it. The collision check before it ("already
-	 * present in registry", which throws) reads the same map for the ALIAS, and is left alone: making it see the
-	 * wrapper's names would turn a collision the game accepts today into a crash for a Forge-family mod.
-	 * Straight-line replacement with the same stack shape (the receiver, then the id, then a boolean), so every
-	 * frame stays valid. {@code -Dforbric.aliasPresenceParity=off} leaves the method as Mixin wove it.
+	 * <p>Only a check whose only consequence is a warning: {@code this.byLocation.containsKey(x)} whose "absent" path
+	 * goes straight into a logger's {@code warn} without throwing or returning first — whatever the method and the
+	 * message are called. The collision check before it ("already present in registry", which throws) reads the same
+	 * map for the ALIAS, and is left alone: making it see the wrapper's names would turn a collision the game accepts
+	 * today into a crash for a Forge-family mod. Straight-line replacement with the same stack shape (the receiver,
+	 * then the id, then a boolean), so every frame stays valid. {@code -Dforbric.aliasPresenceParity=off} leaves the
+	 * method as Mixin wove it.
 	 */
 	static byte[] askTheRegistryWhetherAnAliasTargetExists(byte[] bytes) {
 		if ("off".equalsIgnoreCase(System.getProperty(ALIAS_PRESENCE_PROPERTY, "on"))) return bytes;
-		if (!ByteScan.contains(bytes, ALIAS_WARNING_NEEDLE)) return bytes;
+		if (!ByteScan.contains(bytes, BY_LOCATION_NEEDLE) || !ByteScan.contains(bytes, WARN_NEEDLE)) return bytes;
 		ClassNode node = new ClassNode();
 		new ClassReader(bytes).accept(node, 0);
 		int repaired = 0;
+		List<String> where = new ArrayList<>();
 		for (MethodNode method : node.methods) {
-			if (!method.name.equals("addAlias") || (method.access & Opcodes.ACC_STATIC) != 0) continue;
+			if ((method.access & Opcodes.ACC_STATIC) != 0) continue;
+			int before = repaired;
 			for (AbstractInsnNode insn : method.instructions.toArray()) {
 				if (!(insn instanceof MethodInsnNode contains) || contains.getOpcode() != Opcodes.INVOKEINTERFACE
 						|| !contains.owner.equals("java/util/Map") || !contains.name.equals("containsKey")) continue;
@@ -142,8 +137,8 @@ public final class PostMixinFixups {
 				AbstractInsnNode map = key == null ? null : realPrevious(key);
 				if (!(key instanceof VarInsnNode load) || load.getOpcode() != Opcodes.ALOAD
 						|| !(map instanceof FieldInsnNode field) || field.getOpcode() != Opcodes.GETFIELD
-						|| !field.owner.equals(node.name) || !field.name.equals("byLocation")
-						|| !warnsNext(contains)) continue;
+						|| !field.owner.equals(node.name) || !field.name.equals(BY_LOCATION) || !field.desc.equals("Ljava/util/Map;")
+						|| !onlyWarnsWhenAbsent(contains)) continue;
 				method.instructions.set(field, new MethodInsnNode(Opcodes.INVOKEVIRTUAL, node.name, "keySet",
 						"()Ljava/util/Set;", false));
 				method.instructions.set(contains, new MethodInsnNode(Opcodes.INVOKESTATIC,
@@ -151,27 +146,41 @@ public final class PostMixinFixups {
 						"(Ljava/util/Set;Ljava/lang/Object;)Z", false));
 				repaired++;
 			}
+			if (repaired > before) where.add(method.name);
 		}
 		if (repaired == 0) return bytes;
-		ForbricLog.info("[Forbric/Aliases] post-mixin repair: fabric-registry-sync's addAlias asks the registry's own "
-				+ "key set whether an alias target exists — MinecraftForge's wrapped registries (block, item, …) never "
-				+ "fill the map it read, so every alias to a registered block warned that the block did not exist");
+		ForbricLog.info("[Forbric/Aliases] post-mixin repair: %s.%s asks the registry's own key set whether the target "
+				+ "it warns about exists — MinecraftForge's wrapped registries (block, item, …) never fill the map it read, "
+				+ "so every alias to a registered block warned that the block did not exist", node.name.replace('/', '.'),
+				String.join(", ", where));
 		ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
 		node.accept(writer);
 		return writer.toByteArray();
 	}
 
-	private static final byte[] ALIAS_WARNING_NEEDLE = ByteScan.needle(ALIAS_TARGET_WARNING);
+	private static final byte[] BY_LOCATION_NEEDLE = ByteScan.needle(BY_LOCATION);
+	private static final byte[] WARN_NEEDLE = ByteScan.needle("warn");
 
-	/** Whether the branch on this check leads straight into fabric-registry-sync's target-missing warning. */
-	private static boolean warnsNext(AbstractInsnNode check) {
-		AbstractInsnNode insn = check;
-		for (int i = 0; i < 4 && insn != null; i++) {
-			insn = insn.getNext();
-			while (insn != null && insn.getOpcode() < 0) insn = insn.getNext();
-			if (insn instanceof org.objectweb.asm.tree.LdcInsnNode ldc && ldc.cst instanceof String text) {
-				return text.startsWith(ALIAS_TARGET_WARNING);
-			}
+	/**
+	 * Whether the "absent" path of this {@code containsKey} goes straight into a logger's {@code warn}: the branch after
+	 * it, then — on the path taken when the key is missing — at most a few dozen straight-line instructions that end in
+	 * a call named {@code warn}, with no throw, return or other branch on the way.
+	 */
+	private static boolean onlyWarnsWhenAbsent(AbstractInsnNode check) {
+		AbstractInsnNode branch = check.getNext();
+		while (branch != null && branch.getOpcode() < 0) branch = branch.getNext();
+		if (!(branch instanceof org.objectweb.asm.tree.JumpInsnNode jump)) return false;
+		AbstractInsnNode insn;
+		if (jump.getOpcode() == Opcodes.IFNE) insn = jump.getNext();
+		else if (jump.getOpcode() == Opcodes.IFEQ) insn = jump.label;
+		else return false;
+		for (int seen = 0; insn != null && seen < 40; insn = insn.getNext()) {
+			int op = insn.getOpcode();
+			if (op < 0) continue;
+			seen++;
+			if (insn instanceof MethodInsnNode call && call.name.equals("warn")) return true;
+			if (op == Opcodes.ATHROW || (op >= Opcodes.IRETURN && op <= Opcodes.RETURN) || insn instanceof org.objectweb.asm.tree.JumpInsnNode
+					|| insn instanceof org.objectweb.asm.tree.TableSwitchInsnNode || insn instanceof org.objectweb.asm.tree.LookupSwitchInsnNode) return false;
 		}
 		return false;
 	}
@@ -468,47 +477,6 @@ public final class PostMixinFixups {
 		ForbricLog.info("[Forbric/Mixin] post-mixin repair: seeded GuiRenderer.%s with an empty map — NeoForge won the "
 				+ "byte-merge of the constructor and replaced it with pictureInPictureRendererPools, orphaning the "
 				+ "field that guest GUI mixins @Shadow", PIP_RENDERERS);
-		ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
-		node.accept(writer);
-		return writer.toByteArray();
-	}
-
-	private static byte[] repairPackParentsPredicate(byte[] bytes) {
-		ClassNode node = new ClassNode();
-		new ClassReader(bytes).accept(node, 0);
-
-		// Only if PackMixin actually applied (the field + the FabricPack interface are present).
-		boolean hasField = false;
-		if (node.fields != null) {
-			for (FieldNode f : node.fields) {
-				if (PARENTS_PREDICATE.equals(f.name) && PREDICATE_DESC.equals(f.desc)) {
-					hasField = true;
-					break;
-				}
-			}
-		}
-		boolean isFabricPack = node.interfaces != null && node.interfaces.contains(FABRIC_PACK);
-		if (!hasField || !isFabricPack) return bytes;
-
-		boolean changed = false;
-		for (MethodNode m : node.methods) {
-			if (!m.name.equals("<init>")) continue;
-			AbstractInsnNode superCall = superInitCall(m);
-			if (superCall == null) continue; // a this()-delegating ctor; the super()-calling one gets the init
-
-			InsnList init = new InsnList();
-			init.add(new VarInsnNode(Opcodes.ALOAD, 0));
-			init.add(new FieldInsnNode(Opcodes.GETSTATIC, PACK, DEFAULT_PARENT_PREDICATE, PREDICATE_DESC));
-			init.add(new FieldInsnNode(Opcodes.PUTFIELD, PACK, PARENTS_PREDICATE, PREDICATE_DESC));
-			m.instructions.insert(superCall, init);
-			m.maxStack = Math.max(m.maxStack, 2);
-			changed = true;
-		}
-		if (!changed) return bytes;
-
-		ForbricLog.info("[Forbric/Mixin] post-mixin repair: seeded Pack.parentsPredicate=DEFAULT after super() — "
-				+ "PackMixin's initializer was mis-woven into NeoForge's child-building loop, leaving top-level packs "
-				+ "(incl. the vanilla datapack) hidden");
 		ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
 		node.accept(writer);
 		return writer.toByteArray();

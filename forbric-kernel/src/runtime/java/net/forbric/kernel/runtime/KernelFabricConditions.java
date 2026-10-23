@@ -84,7 +84,8 @@ import net.forbric.kernel.util.ForbricLog;
  */
 public final class KernelFabricConditions {
 
-	private static final String IMPL = "net.fabricmc.fabric.impl.resource.conditions.ResourceConditionsImpl";
+	/** fabric-api's public condition interface: its {@code CONDITION_CODEC} reads the key's value, {@code test} decides. */
+	private static final String CONDITION_API = "net.fabricmc.fabric.api.resource.conditions.v1.ResourceCondition";
 	private static final String KEY = "fabric:load_conditions";
 
 	private static final AtomicInteger JUDGED = new AtomicInteger();
@@ -92,8 +93,14 @@ public final class KernelFabricConditions {
 	private static volatile boolean announced;
 	private static volatile boolean reportedAbsent;
 
+	/** fabric-api's verdict on an element carrying the key: keep it or not; null when it could not be judged. */
+	@FunctionalInterface
+	interface Evaluator {
+		boolean keep(JsonObject json, RegistryOps.RegistryInfoLookup lookup) throws Throwable;
+	}
+
 	/** Resolved once, lazily: the first decode can happen before fabric-api's own classes are reachable. */
-	private static volatile MethodHandle evaluator;
+	private static volatile Evaluator evaluator;
 	private static volatile boolean evaluatorResolved;
 
 	private KernelFabricConditions() {
@@ -112,8 +119,7 @@ public final class KernelFabricConditions {
 		return new Codec<Object>() {
 			@Override
 			public <T> DataResult<Pair<Object, T>> decode(DynamicOps<T> ops, T input) {
-				if (input instanceof JsonObject json && json.has(KEY)
-						&& !KernelSourceDecodeScopes.alreadyJudged(input, evaluatorHandle())) {
+				if (input instanceof JsonObject json && json.has(KEY) && !KernelSourceDecodeScopes.alreadyJudged(input, KEY)) {
 					Boolean keep = ask(json, ops);
 					if (Boolean.FALSE.equals(keep)) {
 						return DataResult.success(Pair.of((Object) Optional.empty(), ops.empty()));
@@ -137,12 +143,12 @@ public final class KernelFabricConditions {
 	/**
 	 * fabric-api's own verdict, or null when it could not be asked.
 	 *
-	 * <p>Their evaluator rather than a reimplementation, deliberately: their {@code CONDITION_CODEC} accepts both
-	 * the single-object form and the list form mods use interchangeably, and their policy on a condition that
-	 * fails to PARSE is "keep the element". Reproducing either by hand is how the two would drift.
+	 * <p>Their codec and their conditions rather than a reimplementation, deliberately: their public
+	 * {@code CONDITION_CODEC} accepts both the single-object form and the list form mods use interchangeably. Their
+	 * policy on a condition that fails to PARSE is "keep the element", and so is this.
 	 */
 	private static Boolean ask(JsonObject json, DynamicOps<?> ops) {
-		MethodHandle handle = evaluatorHandle();
+		Evaluator handle = evaluator();
 		if (handle == null) {
 			if (!reportedAbsent) {
 				reportedAbsent = true;
@@ -155,12 +161,13 @@ public final class KernelFabricConditions {
 		RegistryOps.RegistryInfoLookup lookup =
 				ops instanceof RegistryOps<?> registry ? registry.lookupProvider : null;
 		try {
-			boolean keep = (boolean) handle.invoke(json, KEY, (Identifier) null, lookup);
+			boolean keep = handle.keep(json, lookup);
 			int judged = JUDGED.incrementAndGet();
 			if (!announced) {
 				announced = true;
 				ForbricLog.info("[Forbric/Conditions] a native decode without a completed source guard asks Fabric's "
-						+ "resource-condition evaluator directly; completed source predicate/input scopes take precedence (%s)", IMPL);
+						+ "resource-condition evaluator directly; completed source predicate/input scopes take precedence (%s.CONDITION_CODEC)",
+						CONDITION_API);
 			}
 			if (!keep) {
 				ForbricLog.info("[Forbric/Conditions] %s said no to a data file — %d of %d element(s) carrying the "
@@ -175,28 +182,112 @@ public final class KernelFabricConditions {
 		}
 	}
 
-	private static MethodHandle evaluatorHandle() {
+	private static Evaluator evaluator() {
 		if (evaluatorResolved) return evaluator;
 		synchronized (KernelFabricConditions.class) {
 			if (evaluatorResolved) return evaluator;
-			try {
-				Class<?> impl = Class.forName(IMPL, false, KernelFabricConditions.class.getClassLoader());
-				evaluator = MethodHandles.lookup().findStatic(impl, "applyResourceConditions",
-						MethodType.methodType(boolean.class, JsonObject.class, String.class, Identifier.class,
-								RegistryOps.RegistryInfoLookup.class));
-			} catch (Throwable absent) {
-				Caught.expected(absent);
-				evaluator = null;
-			}
+			evaluator = publicApiEvaluator(KernelFabricConditions.class.getClassLoader());
 			evaluatorResolved = true;
 			return evaluator;
 		}
 	}
 
-	/** Test seam: fabric-api is not on any test classpath, so the evaluator has to be substitutable. */
+	/**
+	 * fabric-api's own judgement through its public API: the key's value parsed by {@code ResourceCondition.CONDITION_CODEC}
+	 * and asked {@code test(lookup)}; a value that does not parse keeps the element, as fabric-api's own evaluator does.
+	 * Null when the API is not there.
+	 */
+	static Evaluator publicApiEvaluator(ClassLoader loader) {
+		try {
+			Class<?> api = Class.forName(CONDITION_API, false, loader);
+			Object codec = api.getField("CONDITION_CODEC").get(null);
+			java.lang.reflect.Method test = api.getMethod("test", RegistryOps.RegistryInfoLookup.class);
+			if (!(codec instanceof Codec<?> conditions)) return null;
+			return (json, lookup) -> {
+				DataResult<?> parsed = conditions.parse(com.mojang.serialization.JsonOps.INSTANCE, json.get(KEY));
+				if (parsed.result().isEmpty()) {
+					ForbricLog.debug("[Forbric/Conditions] %s did not parse (%s) — the element is kept, as fabric-api keeps it",
+							KEY, parsed.error().map(Object::toString).orElse("?"));
+					return true;
+				}
+				try {
+					return (boolean) test.invoke(parsed.result().get(), lookup);
+				} catch (java.lang.reflect.InvocationTargetException thrown) {
+					throw thrown.getCause() != null ? thrown.getCause() : thrown;
+				}
+			};
+		} catch (ClassNotFoundException absent) {
+			Caught.expected(absent);
+			return null;
+		} catch (Throwable t) {
+			Caught.warn(t, "[Forbric/Conditions] fabric-api's public condition API is there but could not be read; %s is "
+					+ "not judged", KEY);
+			return null;
+		}
+	}
+
+	private static final String TYPES = "net.fabricmc.fabric.api.resource.conditions.v1.ResourceConditions";
+
+	/** fabric-api's own type lookup, {@code ResourceConditions.getConditionType}; substitutable for the tests. */
+	private static volatile java.util.function.Predicate<String> registeredTypes = KernelFabricConditions::askFabricApi;
+	private static volatile MethodHandle typeLookup;
+	private static volatile boolean typeLookupResolved;
+
+	/**
+	 * Whether fabric-api's resource-condition registry has this type id -- false without fabric-api, and for an id that
+	 * does not parse. What MinecraftForge's leniency asks to tell a type another ecosystem owns from one nobody here owns.
+	 */
+	static boolean registers(String id) {
+		return Identifier.tryParse(id) != null && registeredTypes.test(id);
+	}
+
+	private static boolean askFabricApi(String id) {
+		MethodHandle lookup = typeLookupHandle();
+		if (lookup == null) return false;
+		try {
+			Object type = lookup.invoke(Identifier.tryParse(id));
+			return type != null;
+		} catch (Throwable t) {
+			Caught.warn(t, "[Forbric/Conditions] could not ask fabric-api whether it registers the resource condition "
+					+ "type %s — read as not registered there", id);
+			return false;
+		}
+	}
+
+	private static MethodHandle typeLookupHandle() {
+		if (typeLookupResolved) return typeLookup;
+		synchronized (KernelFabricConditions.class) {
+			if (typeLookupResolved) return typeLookup;
+			try {
+				Class<?> types = Class.forName(TYPES, false, KernelFabricConditions.class.getClassLoader());
+				typeLookup = MethodHandles.lookup().findStatic(types, "getConditionType",
+						MethodType.methodType(Class.forName("net.fabricmc.fabric.api.resource.conditions.v1.ResourceConditionType",
+								false, KernelFabricConditions.class.getClassLoader()), Identifier.class));
+			} catch (ClassNotFoundException absent) {
+				Caught.expected(absent);
+				typeLookup = null;
+			} catch (Throwable t) {
+				Caught.warn(t, "[Forbric/Conditions] fabric-api's public condition-type lookup is there but could not be "
+						+ "read; its types read as not registered");
+				typeLookup = null;
+			}
+			typeLookupResolved = true;
+			return typeLookup;
+		}
+	}
+
+	/** Test seam: fabric-api's registered condition types, replaced. */
+	static void bindRegisteredTypesForTest(java.util.function.Predicate<String> types) {
+		registeredTypes = types;
+	}
+
+	/**
+	 * Test seam: fabric-api is not on any test classpath, so the evaluator has to be substitutable — as a handle taking
+	 * {@code (JsonObject, String, Identifier, RegistryInfoLookup)}, asked with the key, no id and the lookup.
+	 */
 	static void bindForTest(MethodHandle handle) {
 		synchronized (KernelFabricConditions.class) {
-			evaluator = handle;
+			evaluator = handle == null ? null : (json, lookup) -> (boolean) handle.invoke(json, KEY, (Identifier) null, lookup);
 			evaluatorResolved = true;
 			announced = false;
 			reportedAbsent = false;

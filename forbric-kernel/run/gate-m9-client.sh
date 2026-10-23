@@ -88,9 +88,11 @@ step "launch the client into $WORLD via quick-play ($(ls -1 "$RUNDIR/mods"/*.jar
 #                                      Off, a Fabric codec reading PacketContext.get() from inside NeoForge's
 #                                      splitter sees null; with Polymer in the pack that is update_recipes
 #                                      failing to encode and the client disconnected at world join.
-#   -Dforbric.itemTooltipBridge=off -> 1 red ("a NeoForge mod can add a line to an item's tooltip"). Off, the
-#                                      merged getTooltipLines posts only MinecraftForge's event and every
-#                                      NeoForge mod's tooltip line goes into a list nobody built.
+#   -Dforbric.itemTooltipBridge=off -> 1 red ("a NeoForge mod can add a line to an item's tooltip") on a base whose
+#                                      getTooltipLines carries only MinecraftForge's call. Off, it posts only
+#                                      MinecraftForge's event and every NeoForge mod's tooltip line goes into a list
+#                                      nobody built. A base that posts NeoForge's natively stays green: the switch
+#                                      turns off the repair, not the game's own call.
 #   -Dforbric.fabricMainInConstructor=off -> 2 red ("Fabric main entrypoints run where Fabric runs them",
 #                                                   "and not in the pre-Minecraft window"). Off, a Fabric mod that
 #                                                   caches Minecraft.getInstance() from onInitialize caches null:
@@ -526,6 +528,14 @@ check_absent "and pressing it did not fail" "could not press the title screen's 
 # here is what a player reads off the button; which class draws it is upstream's business.
 check "the Forge-family mods button is labelled as ours" \
   "pause-menu button: [^ ]+ \"Mods \(Forbric\)\"" "$LOG"
+# And exactly once, on each screen. A base that keeps both families' edits of createPauseMenu carries both families'
+# mods buttons, and once both open the unified list the pause menu showed "Mods (Forbric)" twice, as an icon and as a
+# full-width row under Options. That was seen on screen, never in a log line: the check above is ">= 1" and stayed
+# green. Counted in the game log alone, because $LOG carries every line of it twice.
+PAUSE_OURS=$(grep -acE 'pause-menu button: [^ ]+ "Mods \(Forbric\)"' "$GAMELOG" 2>/dev/null)
+TITLE_OURS=$(grep -acE 'title-screen button #[0-9]+: [^ ]+ "Mods \(Forbric\)"' "$GAMELOG" 2>/dev/null)
+assert_eq "the pause menu shows the unified mods button once" "1" "${PAUSE_OURS:-0}"
+assert_eq "and so does the title screen" "1" "${TITLE_OURS:-0}"
 check "pressing it opens the unified list" \
   "the mods button opened: net\.forbric\.kernel\.runtime\.KernelModListScreen"   "$LOG"
 check_absent "and pressing it did not fail" "could not press the pause menu's mods button" "$LOG"
@@ -741,29 +751,31 @@ PY_DEDUP
 [ $? -eq 0 ] || FAIL=1
 # M9_LOAD_REPORT_DEDUP_END
 
-step "a mixin the kernel took over does not report a loss that did not happen (must PASS)"
-# fabric-resource-conditions' SimpleJsonResourceReloadListenerMixin cannot apply here: NeoForge's patch of
-# scanDirectory made the value Optional and reordered the lambda's captures, so the descriptor Mixin expects is
-# not the one the mod was built against. BOTH of that mixin's members are the fabric:load_conditions evaluator,
-# and the kernel does that job one level down on ConditionalOps' own funnel — covering every consumer instead of
-# this one call site.
+step "fabric-resource-conditions' reload-listener mixin applies, so nothing has to take it over (must PASS)"
+# fabric-resource-conditions' SimpleJsonResourceReloadListenerMixin could not apply here for a long time: NeoForge's
+# patch of scanDirectory made the value Optional and reordered the lambda's captures, so the descriptor Mixin expects
+# was not the one the mod was built against. The kernel then did that job one level down, on ConditionalOps' own
+# funnel, and SupersededMixins resolved the failure so the mod was not marked for a loss that did not happen.
 #
-# So the mod lost nothing, and marking it reports a loss that did not happen. A report that cries wolf is worse
-# than no report: the next real one is read the same way. RED with M9_EXTRA_JVM=-Dforbric.supersededMixins=off,
-# which turns it back into an ordinary marked failure — that is how the claim gets checked against the game.
-#
-# The failure is recorded like any other and resolved only when ConditionalOps is DEFINED with the kernel's wrap
-# in its bytes (SupersededMixins), so the line asserted is the resolution, not the handler's "stays marked until
-# that repair is seen" -- the table naming a repair is a claim. Also RED with -Dforbric.fabricConditions=off.
-# KernelMixinErrorHandlerTest runs this block against the handler's and the proof's own output.
+# Since MixinDecodeScopeAdapter (2b9c8baa) carries the mixin's source decode guard and its closed marker consumer
+# into the native parse scope, it is judged FIT and applies whole: Fabric's own guard judges those files, and the
+# kernel's funnel stands aside for any input a completed source guard already judged. So the line asserted is the
+# adapter keeping the guard, and the superseded resolution is now a regression, not a pass -- it means the mixin
+# failed and fell back. RED with M9_EXTRA_JVM=-Dforbric.decodeSourceScopes=off (the mixin fails and is superseded
+# again). MixinDecodeScopeAdapterTest greps the adapter's real output with the first pattern;
+# KernelMixinErrorHandlerTest runs the block between the markers against the handler's and the proof's own output.
+check "its source decode guard is kept as it is handed to Mixin" \
+  "Forbric/Mixin\] net\.fabricmc\.fabric\.mixin\.resource\.conditions\.SimpleJsonResourceReloadListenerMixin retains source decode guards" "$LOG"
 # M9_SUPERSEDED_MIXIN_BEGIN
-check "the failure is resolved as superseded, by the repair seen in the defined ConditionalOps" \
-  "Forbric/Mixin\].*SimpleJsonResourceReloadListenerMixin is superseded.*seen in the defined net\.neoforged\.neoforge\.common\.conditions\.ConditionalOps, so its mod is not marked" "$LOG"
+check_absent "it applied: it never failed, and no repair had to supersede it" \
+  "Forbric/Mixin\].*SimpleJsonResourceReloadListenerMixin (failed to apply|is superseded)" "$LOG"
 check_absent "and its mod is not marked" \
   "Forbric/Mixin\].*SimpleJsonResourceReloadListenerMixin.*is marked" "$LOG"
 # M9_SUPERSEDED_MIXIN_END
-check "and the conditions are still judged by someone" \
-  "Forbric/Conditions\] Fabric's own resource-condition evaluator is live" "$LOG"
+# A decode no source guard owns -- a datapack registry element through ConditionalOps -- is still judged, by the
+# kernel asking Fabric's own evaluator. RED with M9_EXTRA_JVM=-Dforbric.fabricConditions=off.
+check "and the conditions no source guard owns are still judged" \
+  "Forbric/Conditions\] a native decode without a completed source guard asks Fabric's resource-condition evaluator directly" "$LOG"
 
 step "each carrier's own screens have their own text (must PASS)"
 # The carriers keep a second translation table beside Minecraft's, because the text on it -- the loading screen,
@@ -834,8 +846,10 @@ check_absent "no block state is left without a mod's per-state flags" \
 check "NeoForge's splitter encodes in Fabric's packet context" \
   "\[Forbric/Net\] .*GenericPacketSplitter.encode now runs inside the connection's Fabric packet context" "$LOG"
 
+# Either the repair posts NeoForge's event, or the merged base posts it natively and the repair stood down (a merge
+# that keeps both families' edits gives getTooltipLines NeoForge's call back); the gate asks for the outcome.
 check "a NeoForge mod can add a line to an item's tooltip" \
-  "\[Forbric/Tooltips\] NeoForge's ItemTooltipEvent is posted beside MinecraftForge's" "$LOG"
+  "\[Forbric/(Tooltips\] NeoForge's ItemTooltipEvent is posted|MergedBaseCompat\] [^ ]+\.getTooltipLines already posts NeoForge's ItemTooltipEvent) beside MinecraftForge's" "$LOG"
 
 check "Fabric main entrypoints run where Fabric runs them" \
   "\[Render thread/INFO\]: \[Forbric/Fabric\] invoked [1-9][0-9]* Fabric main entrypoint\(s\) in the Minecraft.<init> window" "$LOG"

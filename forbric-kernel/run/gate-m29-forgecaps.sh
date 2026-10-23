@@ -44,11 +44,23 @@ check "server reached Done" 'Done \(' "$LOG"
 check "the roots were composed"        'Capabilities\] composed MinecraftForge capabilities into net\.minecraft\.world\.entity\.Entity' "$LOG"
 check "block entities were composed"   'Capabilities\] composed MinecraftForge capabilities into net\.minecraft\.world\.level\.block\.entity\.BlockEntity' "$LOG"
 check "levels were composed"           'Capabilities\] composed MinecraftForge capabilities into net\.minecraft\.world\.level\.Level' "$LOG"
-check "ServerLevel gathers again"      'Capabilities\] ServerLevel\.<init> gathers MinecraftForge level capabilities again' "$LOG"
-check "LevelChunk writes its provider" 'Capabilities\] LevelChunk\.<init> writes Forge.s own capability provider again' "$LOG"
+# These three sites are kept natively by a merge that keeps both sides' edits, and lost by one that does not. The
+# repair restores what was lost and stands by, saying so, where the base kept it; either line means the site has
+# MinecraftForge's code, and neither appears with -Dforbric.forgeCapabilities=off. Asking only for the repair's line
+# read a base that kept the code as a missing repair (the edit-spliced base: all three red, every probe below green).
+check "ServerLevel gathers again"      'Capabilities\] ServerLevel\.<init> (gathers MinecraftForge level capabilities again|already gathers MinecraftForge level capabilities in the merged base.s own bytes)' "$LOG"
+check "LevelChunk writes its provider" 'Capabilities\] LevelChunk\.<init> (writes Forge.s own capability provider again|already writes Forge.s own capability provider in the merged base.s own bytes)' "$LOG"
 check "the ITEM_HANDLER token got its getType" 'Capabilities\] capability token net\.minecraftforge\.common\.capabilities\.ForgeCapabilities\$4 given its getType' "$LOG"
 check "injectCapabilities ran"         'Capabilities\] ran MinecraftForge.s injectCapabilities' "$LOG"
 check "the audit reports the composed feature, not a gap" 'Capabilities\] [1-9][0-9]* mod jar\(s\) use MinecraftForge.s capability system — composed into' "$LOG"
+
+step "boot 1: MinecraftForge's server lifecycle reaches the canary once per event"
+# A merged initServer and runServer that keep both families' edits call MinecraftForge's lifecycle hooks natively;
+# the kernel's forwards stand down there. Before they did, each event arrived twice and the SERVER config loaded twice
+# with two file watchers (two RELOADING lines per edit), and nothing here counted.
+check_exactly "ServerStartingEvent once" 'ForbricLive\] ServerStartingEvent RECEIVED' "$LOG" 1
+check_exactly "ServerStartedEvent once"  'ForbricLive\] ServerStartedEvent RECEIVED' "$LOG" 1
+check_exactly "the SERVER config loads once" 'ForbricLive/CFG\] LOADING forbriclive-server\.toml' "$LOG" 1
 
 step "boot 1: twelve canary probes"
 check "AttachCapabilitiesEvent delivered"      'ForbricLive/CAPS\] AttachCapabilitiesEvent\.BlockEntities RECEIVED for BellBlockEntity' "$LOG"
@@ -63,7 +75,7 @@ check "ServerLevel dispatcher present"         'ForbricLive/CAPS\] dispatcher pr
 # E7: the merge dropped MinecraftForge's constructor initializers for LivingEntity.handlers, furnace.handlers and
 # the chiseled bookshelf's itemHandler while keeping every reader. Found by gate-m9: the first mob death crashed the
 # integrated server in invalidateCaps ("this.handlers" is null). RED with -Dforbric.forgeCapabilities=off.
-check "the lost initializers were replayed"   'Capabilities\] net\.minecraft\.world\.entity\.LivingEntity\.<init> assigns handlers again' "$LOG"
+check "the lost initializers were replayed"   'Capabilities\] net\.minecraft\.world\.entity\.LivingEntity\.<init> (assigns handlers again|already assigns handlers in the merged base.s own bytes)' "$LOG"
 check "a living entity answers ITEM_HANDLER and survives remove()" 'ForbricLive/CAPS\] living entity equipment handler present=true remove\(\) invalidated without error=true' "$LOG"
 check "a furnace answers the sided ask"       'ForbricLive/CAPS\] furnace sided handler slots=[1-9]' "$LOG"
 check_absent "no probe failure"     'ForbricLive/CAPS\] probe FAILED' "$LOG"

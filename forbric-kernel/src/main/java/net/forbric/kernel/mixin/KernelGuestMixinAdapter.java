@@ -29,7 +29,6 @@ import java.util.Set;
 import java.util.function.Function;
 
 import com.electronwill.nightconfig.core.UnmodifiableConfig;
-import com.electronwill.nightconfig.json.JsonFormat;
 
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
@@ -103,6 +102,61 @@ public final class KernelGuestMixinAdapter {
 	private static final java.util.Set<String> REJECTING =
 			java.util.Collections.synchronizedSet(new java.util.LinkedHashSet<>());
 
+	/**
+	 * A PARTIAL verdict as the config-time pass read it, kept to be read again on the mixin as Mixin is handed it
+	 * ({@link #judgeAsHanded}): the passes that move an injector off a body nothing calls run when Mixin loads the class,
+	 * after this verdict, so "never runs" here can be said of an injector that will land on a body that runs.
+	 */
+	private record Handed(String configName, String pkg, String mixin, Function<String, byte[]> resource, MixinAddedMembers.View added,
+			NativeAbsentTargets.Context nativeView, MixinFit.Result kept) {
+	}
+
+	/** Internal mixin name → its config-time PARTIAL verdict, until the mixin is handed to Mixin. */
+	private static final Map<String, Handed> HANDED = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * Reads a mixin PARTIAL at config time again as it is handed to Mixin, once, after every adapter has had its say: an anchor
+	 * the config-time read missed — an injector said never to run, on a body nothing calls — that now lands where the merged
+	 * game runs it is withdrawn from what the boot says of the mixin, with where it landed. A mixin that now fits leaves the
+	 * partial count, and its preflight row is resolved; one still partial keeps its row (the final ledger decides each
+	 * injector), and the line names what is still missing. Says nothing when nothing changed.
+	 */
+	static void judgeAsHanded(ClassNode node) {
+		if (node == null) return;
+		Handed handed = HANDED.remove(node.name);
+		if (handed == null) return;
+		try {
+			org.objectweb.asm.ClassWriter writer = new org.objectweb.asm.ClassWriter(0);
+			node.accept(writer);
+			MixinFit.Result fit = MixinFit.evaluate(writer.toByteArray(), handed.resource(), net.forbric.kernel.classloading.DelegationPolicy::alwaysGame,
+					handed.added(), handed.nativeView());
+			List<String> landed = new ArrayList<>();
+			for (String missing : handed.kept().unresolved()) if (!fit.unresolved().contains(missing)) landed.add(missing);
+			if (landed.isEmpty()) return;
+			String key = handed.configName() + ":" + handed.mixin();
+			boolean fits = fit.verdict() == MixinFit.Verdict.FIT;
+			ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s as handed to Mixin — %d anchor(s) the config-time read missed now land "
+							+ "where the merged game runs them, withdrawn: %s; verdict %s→%s%s", MixinConfigOwners.describe(handed.configName()),
+					handed.mixin(), landed.size(), String.join(", ", landed), handed.kept().verdict(), fit.verdict(),
+					fits ? "" : " (" + fit.reason() + ")");
+			if (fits) {
+				PARTIAL.remove(key);
+				REJECTING.remove(key);
+				MixinCompatibility.resolveAs(MixinCompatibility.id(handed.configName(), handed.pkg() + "." + handed.mixin()), handed.configName(),
+						"every anchor lands where the merged game runs it, as the mixin is handed to Mixin");
+			}
+		} catch (RuntimeException unreadable) {
+			Caught.warn(unreadable, "[Forbric/Mixin] could not read guest mixin %s again as it is handed to Mixin; its config-time verdict stands",
+					node.name);
+		}
+	}
+
+	private static void handed(String configName, String pkg, String mixin, Function<String, byte[]> resource, MixinAddedMembers.View added,
+			NativeAbsentTargets.Context nativeView, MixinFit.Result kept) {
+		if (configName == null || pkg == null || mixin == null || kept == null) return;
+		HANDED.put(pkg.replace('.', '/') + "/" + mixin.replace('.', '/'), new Handed(configName, pkg, mixin, resource, added, nativeView, kept));
+	}
+
 	/** Records one, keyed so the same mixin evaluated twice counts once. */
 	static void notePartial(String configName, String mixin) {
 		if (configName == null || mixin == null) return;
@@ -137,6 +191,60 @@ public final class KernelGuestMixinAdapter {
 
 	/** {@code -Dforbric.guestMixinAdapter=off} turns the derived scan off (leaving only the hand list). */
 	static final String PROPERTY = "forbric.guestMixinAdapter";
+	/** {@code -Dforbric.lateMixinJudgment=off}: a mixin a config's plugin adds is not judged when Mixin reads it ({@link #judgeLate}). */
+	public static final String LATE_PROPERTY = "forbric.lateMixinJudgment";
+
+	/** The mixin classes a config listed, which the config-time pass has judged (or will): internal names. */
+	private static final java.util.Set<String> JUDGED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+	/** A config with a plugin, by package: what the late judgment of a mixin its plugin adds needs. */
+	private record LateConfig(String configName, String pkg, String pluginClass, boolean required, Function<String, byte[]> resource,
+			int configMinimum, NativeAbsentTargets.Context nativeView) { }
+	private static final Map<String, LateConfig> LATE = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * Judges a mixin a config's plugin added from {@code getMixins()} as the config-time pass judges a listed one, when
+	 * Mixin first reads it: such a mixin is in no list, so the pass never saw it, and no carrier retarget (MixinRetarget's
+	 * moves onto renamed, split, helper-carried or relocated bodies) was ever planned for it. Create's client config adds
+	 * its model-baking mixins that way when Fabric's renderer API is absent; its normals wrap on
+	 * {@code UnbakedCuboidGeometry.bake} stayed on the stub NeoForge forwards to the builder overload, and never ran.
+	 * Only the retarget is taken (a plan MixinRetarget would adopt for a listed mixin); Mixin already selected the mixin,
+	 * so nothing is left out. A class of no plugin config's package, or one already judged, is left alone.
+	 * {@code -Dforbric.lateMixinJudgment=off} leaves plugin-added mixins unjudged, as before.
+	 */
+	public static void judgeLate(String internalName, byte[] classBytes) {
+		if (!enabled() || "off".equalsIgnoreCase(System.getProperty(LATE_PROPERTY, "on")) || internalName == null || classBytes == null
+				|| JUDGED.contains(internalName) || LATE.isEmpty()) return;
+		LateConfig config = null;
+		for (String p = parentPackage(internalName); p != null && config == null; p = parentPackage(p)) config = LATE.get(p);
+		if (config == null || !JUDGED.add(internalName)) return;
+		String mixin = internalName.substring(config.pkg().replace('.', '/').length() + 1).replace('/', '.');
+		try {
+			if (isPureAccessorMixin(classBytes) || isExplicitlyKept(config.configName(), mixin)) return;
+			Function<String, byte[]> resource = config.resource();
+			MixinAddedMembers.View added = MixinAddedMembers.before(config.configName(), mixin, resource);
+			byte[] judged = adaptedSourceProtocols(classBytes, resource);
+			judged = ForbricMixinService.absorbedCallbacksAsLoaded(judged, resource);
+			judged = MixinDecodeScopeAdapter.asLoaded(ReplacedCallRedirects.asLoaded(MixinPlayerWorldCallbackAdapter.asLoaded(judged, resource),
+					resource), resource);
+			judged = MixinStructurePlacementAdapter.asLoaded(judged, resource);
+			// …and an injector at the start of a model-data overload nothing calls, judged with the edge twin it is given.
+			judged = MixinForgeModelDataEdge.asLoaded(judged, resource);
+			MixinFit.Result fit = MixinFit.evaluate(judged, resource, net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added,
+					config.nativeView());
+			if (fit.verdict() != MixinFit.Verdict.PARTIAL && fit.verdict() != MixinFit.Verdict.UNFIT) return;
+			ForbricLog.info("[Forbric/Mixin] %s:%s was added by its config's plugin, so it is judged as Mixin reads it — %s (%s)",
+					MixinConfigOwners.describe(config.configName()), mixin, fit.verdict(), fit.reason());
+			retargeted(config.configName(), config.pkg(), mixin, config.pluginClass(), classBytes, config.required(), judged, fit, resource,
+					added, config.configMinimum(), new ArrayList<>(), config.nativeView());
+		} catch (RuntimeException perMixin) {
+			Caught.warn(perMixin, "[Forbric/Mixin] could not judge plugin-added mixin %s; it is left as its plugin added it", internalName);
+		}
+	}
+
+	private static String parentPackage(String internalName) {
+		int slash = internalName.lastIndexOf('/');
+		return slash <= 0 ? null : internalName.substring(0, slash);
+	}
 
 	public static boolean enabled() {
 		return !"off".equalsIgnoreCase(System.getProperty(PROPERTY, "on"));
@@ -201,7 +309,7 @@ public final class KernelGuestMixinAdapter {
 
 		UnmodifiableConfig config;
 		try (Reader reader = new InputStreamReader(new ByteArrayInputStream(configJson), StandardCharsets.UTF_8)) {
-			config = JsonFormat.fancyInstance().createParser().parse(reader);
+			config = MixinConfigJson.parse(reader);
 		} catch (RuntimeException | java.io.IOException notAMixinConfig) {
 			Caught.warn(notAMixinConfig, "[Forbric/Mixin] could not parse mixin config %s; none of its mixins is checked "
 					+ "against the merged base", configName);
@@ -210,11 +318,23 @@ public final class KernelGuestMixinAdapter {
 
 		String pkg = asString(config.get(List.of("package")));
 		if (pkg == null || pkg.isEmpty()) return List.of();
+		String pkgPath = pkg.replace('.', '/');
+		// Before the lists: a config plugin can add every mixin the config has, and those are known only by its package.
+		MixinStubRebind.notePackage(pkgPath, MixinConfigOwners.ecosystemOf(configName), configName);
 
 		LinkedHashSet<String> mixins = appliedEntries(config, side);
+		for (String listed : mixins) JUDGED.add(pkgPath + "/" + listed.replace('.', '/'));
+		String plugin = asString(config.get(List.of("plugin")));
+		if (plugin != null) {
+			net.forbric.api.Ecosystem owner = MixinConfigOwners.ecosystemOf(configName);
+			Object require = config.get(List.of("injectors", "defaultRequire"));
+			LATE.put(pkgPath, new LateConfig(configName, pkg, plugin, Boolean.TRUE.equals(config.get(List.of("required"))), resource,
+					require instanceof Number n ? Math.max(0, n.intValue()) : 0,
+					raw == null || base == null || owner == null ? NativeAbsentTargets.Context.NONE
+							: new NativeAbsentTargets.Context(raw, declaredDefaultRequire(config), owner, base, declaringMod(configName, owner))));
+		}
 		if (mixins.isEmpty()) return List.of();
 
-		String pkgPath = pkg.replace('.', '/');
 		// A config that declares a plugin can have switched a mixin off itself, and the plugin is never asked
 		// about an entry this method removes. PluginDeclinedMixins holds the attribution back to ask it later.
 		String pluginClass = asString(config.get(List.of("plugin")));
@@ -273,6 +393,8 @@ public final class KernelGuestMixinAdapter {
 				// …and a callback on a vanilla method the merged class no longer declares (StructureTemplate.placeEntities),
 				// which binds nothing as compiled, is judged where the adapter moves it.
 				judged = MixinStructurePlacementAdapter.asLoaded(judged, resource);
+				// …and an injector at the start of a model-data overload nothing calls, judged with the edge twin it is given.
+				judged = MixinForgeModelDataEdge.asLoaded(judged, resource);
 				MixinFit.Result fit = MixinFit.evaluate(judged, resource,
 						net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added, nativeView);
 				List<String> groupFailures = MixinGroupConstraints.failures(MixinFit.parse(judged), resource, added);
@@ -370,6 +492,7 @@ public final class KernelGuestMixinAdapter {
 						suspectDrift(configName, pkg, mixin, pluginClass, classBytes, required, kept);
 						notePartial(configName, mixin, kept);
 						preflight(configName, pkg, mixin, pluginClass, classBytes, required, kept.reason(), kept.unresolved());
+						handed(configName, pkg, mixin, resource, added, nativeView, kept);
 						ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s applies only partially on the merged base "
 								+ "— %s (kept; -Dforbric.mixinFit=strict drops these%s)", MixinConfigOwners.describe(configName), mixin,
 								kept.reason(), rejectionNote(kept));
@@ -463,6 +586,7 @@ public final class KernelGuestMixinAdapter {
 			notePartial(configName, mixin, after);
 			suspectDrift(configName, pkg, mixin, pluginClass, classBytes, required, after);
 			preflight(configName, pkg, mixin, pluginClass, classBytes, required, after.reason(), after.unresolved());
+			handed(configName, pkg, mixin, resource, added, nativeView, after);
 			ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s still applies only partially — %s%s",
 					MixinConfigOwners.describe(configName), mixin, after.reason(), rejectionNote(after));
 		}
@@ -533,12 +657,14 @@ public final class KernelGuestMixinAdapter {
 		List<String> evidence = new ArrayList<>(reasons);
 		evidence.add("kernel suppressed this mixin: an injector in it Mixin rejects outright");
 		if (superseded != null) {
-			// The kernel's measured decision, with a named repair doing the whole job: not a loss the player decides on,
-			// and resolved once the repair is seen in the class the game defines, as the same mixin's apply failure was.
-			report(MixinCompatibility.id(configName, binary), configName, pkg, mixin, pluginClass, classBytes,
-					"the kernel leaves out its mixin " + mixin + " on the merged game", CompatibilityFinding.Confidence.CONFIRMED,
-					false, evidence);
-			SupersededMixins.awaitProof(configName, binary);
+			// The kernel's measured decision, with a named repair doing the whole job: not a loss the player decides on.
+			// Left out before Mixin reads the config, so nothing is lost until the target class is defined; the row is a
+			// note until the repair is seen in the class the game defines, or shown not to be there.
+			String detail = "the kernel leaves out its mixin " + mixin + " on the merged game";
+			evidence.add(SUPERSEDE_PENDING);
+			report(MixinCompatibility.id(configName, binary), configName, pkg, mixin, pluginClass, classBytes, detail,
+					CompatibilityFinding.Confidence.SUSPECTED, false, evidence);
+			SupersededMixins.awaitProofProvisionally(configName, binary, detail, evidence);
 		} else {
 			report(MixinCompatibility.id(configName, binary), configName, pkg, mixin, pluginClass, classBytes,
 					"guest mixin " + mixin + " did not fit the merged game and was left out",
@@ -639,7 +765,7 @@ public final class KernelGuestMixinAdapter {
 		if (sources.isEmpty()) return;
 		UnmodifiableConfig config;
 		try (Reader reader = new InputStreamReader(new ByteArrayInputStream(configJson), StandardCharsets.UTF_8)) {
-			config = JsonFormat.fancyInstance().createParser().parse(reader);
+			config = MixinConfigJson.parse(reader);
 		} catch (RuntimeException | java.io.IOException notAMixinConfig) {
 			Caught.warn(notAMixinConfig, "[Forbric/Mixin] could not parse mixin config %s; its named suppressions are not "
 					+ "reported", configName);
@@ -662,15 +788,23 @@ public final class KernelGuestMixinAdapter {
 				Caught.warn(unreadable, "[Forbric/Mixin] could not read the targets of %s:%s; its removal is reported "
 						+ "without them", MixinConfigOwners.describe(configName), mixin);
 			}
+			String detail = "the kernel leaves out its mixin " + mixin + " on the merged game";
+			List<String> evidence = new ArrayList<>(List.of("kernel suppressed this mixin by name", "source=" + e.getValue(),
+					"config required=" + required));
+			// A repair claims this mixin's whole job: nothing is lost before its target class is defined, so the row is
+			// a note until the repair is seen, or shown not to be there (SupersededMixins.awaitProofProvisionally).
+			boolean superseded = SupersededMixins.replacementFor(pkg + "." + mixin) != null;
+			if (superseded) evidence.add(SUPERSEDE_PENDING);
 			report(MixinCompatibility.id(configName, pkg + "." + mixin), configName, pkg, mixin, pluginClass, targets,
-					"the kernel leaves out its mixin " + mixin + " on the merged game",
-					CompatibilityFinding.Confidence.CONFIRMED, false,
-					List.of("kernel suppressed this mixin by name", "source=" + e.getValue(), "config required=" + required));
-			if (SupersededMixins.replacementFor(pkg + "." + mixin) != null) {
-				SupersededMixins.awaitProof(configName, pkg + "." + mixin);
-			}
+					detail, superseded ? CompatibilityFinding.Confidence.SUSPECTED : CompatibilityFinding.Confidence.CONFIRMED,
+					false, evidence);
+			if (superseded) SupersededMixins.awaitProofProvisionally(configName, pkg + "." + mixin, detail, evidence);
 		}
 	}
+
+	/** The evidence a superseded removal carries while its repair has not been seen yet. */
+	static final String SUPERSEDE_PENDING = "a kernel repair claims this mixin's whole job: a loss only once the repair's "
+			+ "witness class is defined without it, resolved once it is seen there";
 
 	/** Every {@code @Mixin} target, dotted, in declaration order — the names Mixin asks a config plugin about. */
 	private static List<String> dottedTargets(byte[] mixinBytes) {

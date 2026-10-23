@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -43,6 +44,8 @@ import java.util.function.Consumer;
  *   vanilla 26.2.jar ───────────────────────────────────────────────────┘
  *
  *   forge-runtime ────────────────────────────────→ forge-runtime-interop   (what actually gets staged)
+ *
+ *   versions/26.2/26.2.json's libraries ──→ read by the merge and the interop patch, fetched only if they run
  * </pre>
  *
  * <p>Everything lands under {@code <mcDir>/.forbric-build/}, one directory that can be deleted wholesale, and
@@ -124,14 +127,16 @@ final class ArtifactBuilder {
 		// ---- the merge, and the interop patch the merge makes necessary ----
 		log.accept("");
 		log.accept("== merging ==");
+		MergedBaseTool.Libraries libraries = baseLibraries(mcDir, mcVersion, new MojangDownloader(log));
 		MergedBaseTool merge = new MergedBaseTool(tools, log);
 		ArtifactResult merged = merge.merge(jvm, vanilla, forgePatched.file, neoPatched.file,
 				forgeRuntime.file, neoRuntime.file,
 				out.resolve("patched-mc-merged-" + mcVersion + ".jar"),
 				out.resolve("merge-conflicts.txt"),
-				MERGED + ":" + mcVersion, mcDir.resolve("libraries"));
+				MERGED + ":" + mcVersion, libraries, forgeUserdev, neoUserdev);
 		ArtifactResult interop = merge.interop(jvm, forgeRuntime.file,
-				out.resolve("forge-runtime-interop.jar"), FORGE_RUNTIME + ":" + mcVersion, merged.file, neoRuntime.file, mcDir.resolve("libraries"));
+				out.resolve("forge-runtime-interop.jar"), FORGE_RUNTIME + ":" + mcVersion, merged.file, neoRuntime.file,
+				libraries);
 		// After the interop patch, not before: the check resolves against what actually gets staged.
 		merge.linkCheck(jvm, merged.file, neoRuntime.file, interop.file);
 
@@ -149,5 +154,43 @@ final class ArtifactBuilder {
 					+ " (" + (Files.size(e.getValue()) / (1024 * 1024)) + " MB)");
 		}
 		return result;
+	}
+
+	/**
+	 * The base version's libraries as the merge tools read them: exactly the jars {@code versions/<mc>/<mc>.json}
+	 * lists for this platform, verified against it and, where missing or not matching, downloaded into
+	 * {@code <mcDir>/libraries} -- the paths a launcher would use, so it finds them in place -- and handed over in
+	 * the order the JSON lists them. Nothing else in that folder reaches the tools, however many other versions sit
+	 * there.
+	 *
+	 * <p>The merge needs them because proving a merged field is built the same way on both sides follows the
+	 * construction into them, and a launcher fetches them only on the first launch, which has not happened in a
+	 * directory no launcher has started this version in. But only a tool that runs reads them: this resolves on the
+	 * first {@link MergedBaseTool.Libraries#jars()} -- after the merge or the interop patch has found its output
+	 * stale -- and keeps the answer for the other. A reinstall whose artifacts are all cached never asks, so it
+	 * neither reads the version JSON nor touches the network.
+	 */
+	static MergedBaseTool.Libraries baseLibraries(Path mcDir, String mcVersion, MojangDownloader downloader) {
+		return new MergedBaseTool.Libraries() {
+			private List<Path> jars;
+
+			@Override
+			public List<Path> jars() throws IOException {
+				if (jars == null) {
+					jars = downloader.downloadLibraries(Installer.minecraftLibraryArtifacts(baseJson(mcDir, mcVersion)),
+							mcDir.resolve("libraries"));
+				}
+				return jars;
+			}
+		};
+	}
+
+	/** {@code versions/<mc>/<mc>.json}, which lists the libraries a launcher fetches for it. */
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> baseJson(Path mcDir, String mcVersion) throws IOException {
+		Path json = mcDir.resolve("versions").resolve(mcVersion).resolve(mcVersion + ".json");
+		Object parsed = Json.parse(Files.readString(json, java.nio.charset.StandardCharsets.UTF_8));
+		if (!(parsed instanceof Map)) throw new IOException(json + " is not a version JSON");
+		return (Map<String, Object>) parsed;
 	}
 }

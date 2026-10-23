@@ -26,8 +26,10 @@ import net.forbric.kernel.mixin.MixinKeyActionAdapter;
  * {@code TAIL}. The native body is a stand-in with vanilla 26.2's six returns in vanilla's order; the game body joins
  * the global key, the release and the press into one {@code ClientHooks.onKeyInput} call before its final return.
  *
- * <p>The probe presses, repeats and releases one key. The native run is the reference: ordinal 4 is the release, and
- * ordinal 5 and TAIL are the final return, which a release never reaches. Adapted, the game run hears exactly that —
+ * <p>The probe presses, repeats and releases one key, then presses a global key, which the game handles at once. The
+ * native run is the reference: ordinal 4 is the release, and ordinal 5 and TAIL are the final return, which a release
+ * never reaches, nor a global key (natively keyPress returns right after its handler answers true; the game body sends it
+ * into NeoForge's join, and the final hooks are guarded by that answer, seen where it is made). Adapted, the game run hears exactly that —
  * with NeoForge's event in between. With {@code -Dforbric.keyActionCallbacks=off} both ordinal hooks find no return
  * of their number and are lost, and TAIL also hears the release.
  */
@@ -38,15 +40,19 @@ class KeyActionExitsWeaveTest {
 	private static final String TARGET = "net/minecraft/client/KeyboardHandler";
 
 	private static final String NATIVE = WeaveHarnessMain.DONE + " 1=[keyecho final G, keyecho tail] | 2=[keyecho final G,"
-			+ " keyecho tail] | 0=[keyecho release G]";
+			+ " keyecho tail] | 0=[keyecho release G] | global=[]";
 	private static final String ADAPTED = WeaveHarnessMain.DONE + " 1=[neoforge G1, keyecho final G, keyecho tail]"
-			+ " | 2=[neoforge G2, keyecho final G, keyecho tail] | 0=[keyecho release G, neoforge G0]";
+			+ " | 2=[neoforge G2, keyecho final G, keyecho tail] | 0=[keyecho release G, neoforge G0] | global=[neoforge F21]";
+	/** MixinReturnOrdinals on its own: the final return re-counted, the release hook lost, the release heard at the final return. */
+	private static final String RETURN_ORDINALS_ONLY = WeaveHarnessMain.DONE + " 1=[neoforge G1, keyecho final G, keyecho tail]"
+			+ " | 2=[neoforge G2, keyecho final G, keyecho tail] | 0=[neoforge G0, keyecho final G, keyecho tail]"
+			+ " | global=[neoforge F21, keyecho final F2, keyecho tail]";
 	private static final String UNADAPTED = WeaveHarnessMain.DONE + " 1=[neoforge G1, keyecho tail]"
-			+ " | 2=[neoforge G2, keyecho tail] | 0=[neoforge G0, keyecho tail]";
+			+ " | 2=[neoforge G2, keyecho tail] | 0=[neoforge G0, keyecho tail] | global=[neoforge F21, keyecho tail]";
 
 	@TempDir static Path work;
 	private static Path fixture;
-	private static WeaveHarness.Result nativeRun, adapted, off;
+	private static WeaveHarness.Result nativeRun, adapted, off, keyOnlyOff, ordinalsOnlyOff;
 
 	@BeforeAll static void weave() throws Exception {
 		List<Path> sources;
@@ -62,13 +68,34 @@ class KeyActionExitsWeaveTest {
 		fixture = WeaveHarness.fixture(work, "keyexits", game, withNativeReference(work, nativeFixture, TARGET, CONFIG, SOURCES.resolve(CONFIG)));
 		nativeRun = run("native", nativeFixture, Map.of());
 		adapted = run("adapted", fixture, Map.of());
-		off = run("adapter-off", fixture, Map.of(MixinKeyActionAdapter.PROPERTY, "off"));
+		// MixinReturnOrdinals would re-count the final RETURN by its way out on its own: off too, or the control shows
+		// what one adapter without the other does, not the ordinals as compiled.
+		off = run("adapter-off", fixture, Map.of(MixinKeyActionAdapter.PROPERTY, "off", net.forbric.kernel.mixin.MixinReturnOrdinals.PROPERTY, "off"));
+		keyOnlyOff = run("key-only-off", fixture, Map.of(MixinKeyActionAdapter.PROPERTY, "off"));
+		ordinalsOnlyOff = run("ordinals-only-off", fixture, Map.of(net.forbric.kernel.mixin.MixinReturnOrdinals.PROPERTY, "off"));
+	}
+
+	/**
+	 * What each of the two stages does alone, so neither control hides the other. MixinKeyActionAdapter alone is the whole
+	 * repair: it places the release on NeoForge's join and gates the final return and TAIL by action, and marks the points
+	 * counted, so MixinReturnOrdinals has nothing left to do here. MixinReturnOrdinals alone re-counts the final RETURN by
+	 * its way out, but cannot place the release (no merged return is the native release) nor keep the final return and
+	 * TAIL from hearing it: the release hook is lost and a release reaches the final hooks.
+	 */
+	@Test void theKeyActionAdapterIsTheRepairAndReturnOrdinalsAloneIsNot() {
+		assertTrue(ordinalsOnlyOff.printedLine(ADAPTED) && losses(ordinalsOnlyOff).isEmpty(),
+				"the key-action adapter alone must be the whole repair — " + ordinalsOnlyOff.describe());
+		assertTrue(keyOnlyOff.printedLine(RETURN_ORDINALS_ONLY), keyOnlyOff.describe());
+		List<WeaveHarness.Finding> lost = losses(keyOnlyOff);
+		assertEquals(1, lost.size(), lost.toString());
+		assertTrue(lost.getFirst().id().contains("#heardRelease("), lost.toString());
+		assertFalse(adaptedHolds(keyOnlyOff), "without the key-action adapter the adapted trail must not hold");
 	}
 
 	@Test void theGameHearsEachActionWhereTheNativeBodyDoes() throws Exception {
 		assertTrue(nativeRun.printedLine(NATIVE), nativeRun.describe());
 		assertTrue(adaptedHolds(adapted), adapted.describe() + "\nfindings " + adapted.findings());
-		assertEquals(trail(NATIVE), trail(ADAPTED).replaceAll("neoforge G\\d(, )?", "").replace(", ]", "]"),
+		assertEquals(trail(NATIVE), trail(ADAPTED).replaceAll("neoforge (G|F2)\\d(, )?", "").replace(", ]", "]"),
 				"apart from NeoForge's event, the adapted trail is the native one");
 		WeaveHarness.assertWovenAndVerified(adapted, TARGET, fixture);
 	}

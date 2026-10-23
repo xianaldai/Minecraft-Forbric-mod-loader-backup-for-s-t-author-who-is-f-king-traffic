@@ -72,6 +72,25 @@ class MixinTwinRebindTest {
 	}
 
 	/**
+	 * Two mixins on one target whose handlers share a name (Balm's and Architectury's ServerPlayer openMenu): each moved body
+	 * is set aside under a name of its own mixin. Under one shared name Mixin added it once and failed the second mixin
+	 * ("Meta method … not located"), which stopped the game at start with both mods installed.
+	 */
+	@Test void twoMixinsWithOneHandlerNameSetTheirBodiesAsideApart() {
+		ClassNode renderer = renderer(1, 1);
+		List<String> inners = new ArrayList<>();
+		for (String owner : List.of("org/example/first/RendererHook", "org/example/second/RendererHook")) {
+			ClassNode mixin = mixin(owner, "drawSide", "(Z" + GETTER + STATE + DIRECTION + POS + ")Z",
+					injector(MODIFY_RETURN, "shouldRenderFace", at("RETURN")));
+			assertEquals(1, MixinTwinRebind.adapt(mixin, name -> renderer));
+			MethodNode inner = mixin.methods.stream().filter(m -> m.name.startsWith("drawSide" + MixinHandlerShim.INNER_SUFFIX)).findFirst().orElseThrow();
+			inners.add(inner.name);
+			assertEquals(0, MixinTwinRebind.adapt(mixin, name -> renderer), "set aside once");
+		}
+		assertNotEquals(inners.get(0), inners.get(1), inners.toString());
+	}
+
+	/**
 	 * LiquidBounce's shape: a return modifier selected by name, taking vanilla's four arguments after the result. Mixin
 	 * binds the name to NeoForge's overload, declared first, and rejects it there; moved, an outer handler takes the
 	 * overload's arguments and hands the original the four it was written for.
@@ -87,12 +106,29 @@ class MixinTwinRebindTest {
 		MethodNode outer = method(mixin, "drawSide");
 		assertEquals("(Z" + GETTER + POS + STATE + DIRECTION + POS + ")Z", outer.desc);
 		assertEquals(List.of("shouldRenderFace" + OVERLOAD), selectors(outer));
-		MethodNode inner = method(mixin, "drawSide" + MixinHandlerShim.INNER_SUFFIX);
+		MethodNode inner = method(mixin, MixinHandlerShim.asideName(mixin.name, "drawSide", MixinHandlerShim.INNER_SUFFIX));
 		assertEquals("(Z" + GETTER + STATE + DIRECTION + POS + ")Z", inner.desc);
 		assertNull(MixinFit.injectorOf(inner), "the original is no injector any more");
 		// this, the result, then the overload's level, state, direction and neighbour — never its own position.
 		assertEquals(List.of(0, 1, 2, 4, 5, 6), loads(outer));
 		assertEquals(inner.name, call(outer).name);
+	}
+
+	/**
+	 * The outer handler takes the moved handler's place among the mixin's methods, as MixinStubRebind's does: Mixin applies
+	 * a class's injectors in declaration order, and where two land on one point that is the order they run in. Appended, it
+	 * would run after a handler declared below it.
+	 */
+	@Test void theOuterHandlerKeepsTheHandlersDeclarationSlot() {
+		ClassNode renderer = renderer(1, 1);
+		ClassNode mixin = mixin("com/example/xray/RendererMixin", "drawSide", "(Z" + GETTER + STATE + DIRECTION + POS + ")Z",
+				injector(MODIFY_RETURN, "shouldRenderFace", at("RETURN")));
+		MethodNode below = new MethodNode(Opcodes.ACC_PRIVATE, "declaredBelow", "()V", null, null);
+		mixin.methods.add(below);
+		assertEquals(1, MixinTwinRebind.adapt(mixin, name -> renderer));
+		MethodNode outer = method(mixin, "drawSide");
+		assertEquals(0, mixin.methods.indexOf(outer), "the outer sits where the handler was declared");
+		assertTrue(mixin.methods.indexOf(outer) < mixin.methods.indexOf(below));
 	}
 
 	/** An @Inject takes all of a method's arguments or none: the outer takes all five, and hands on the four and the callback. */

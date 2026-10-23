@@ -35,10 +35,28 @@ public final class KernelSourceDecodeScopes {
   catch(ReflectiveOperationException|RuntimeException|LinkageError unproved){Caught.warn(unproved,"[Forbric/Conditions] source predicate evaluation ownership could not be recorded for %s.%s%s; native condition fallback remains active",owner,name,descriptor);}
   return result;
  }
- static boolean alreadyJudged(Object input,MethodHandle evaluator){
-  Scope scope=ACTIVE.get();if(scope==null||evaluator==null)return false;
-  try { var info=MethodHandles.lookup().revealDirect(evaluator);return scope.judged.stream().anyMatch(j->j.input==input&&j.owner==info.getDeclaringClass()&&j.name.equals(info.getName())&&j.type.equals(info.getMethodType())); }
-  catch(RuntimeException unproved){Caught.warn(unproved,"[Forbric/Conditions] the condition evaluator %s could not be identified; the element is judged again",evaluator);return false;}
+ /**
+  * Whether a source guard of the active decode scope has already judged this very input by {@code key}: its verdict
+  * stands. A judgement counts when the predicate the guard asked comes from a class whose constant pool holds the key it
+  * judges — the JSON key a condition format is read under ("fabric:load_conditions"), which is the data both sides agree
+  * on, not what the mod calls its evaluator. A guard that asked something else about the same input judged something else.
+  */
+ static boolean alreadyJudged(Object input,String key){
+  Scope scope=ACTIVE.get();if(scope==null||key==null)return false;
+  for(Judgement judgement:scope.judged)if(judgement.input==input&&mentions(judgement.owner,key))return true;
+  return false;
+ }
+ private static final ClassValue<Map<String,Boolean>> MENTIONS=new ClassValue<>(){
+  @Override protected Map<String,Boolean> computeValue(Class<?> owner){return new java.util.concurrent.ConcurrentHashMap<>();}
+ };
+ /** Whether {@code owner}'s class file holds {@code key} as a constant (a UTF-8 constant pool entry), read once per key. */
+ private static boolean mentions(Class<?> owner,String key){
+  return MENTIONS.get(owner).computeIfAbsent(key,wanted->{
+   ClassLoader loader=owner.getClassLoader();if(loader==null)return false;
+   try(java.io.InputStream in=loader.getResourceAsStream(owner.getName().replace('.','/')+".class")){
+    return in!=null&&net.forbric.kernel.util.ByteScan.constantPoolNames(in.readAllBytes(),new byte[][]{net.forbric.kernel.util.ByteScan.poolEntry(wanted)})[0];
+   }catch(java.io.IOException|RuntimeException unreadable){Caught.warn(unreadable,"[Forbric/Conditions] could not read %s to see whether it judges %s; its verdict is not taken as one",owner.getName(),wanted);return false;}
+  });
  }
  /** Only a transported original cancellation callback creates this consumer. Its delegate is called unchanged. */
  public static final class OwnedConsumer implements Consumer<Object> {

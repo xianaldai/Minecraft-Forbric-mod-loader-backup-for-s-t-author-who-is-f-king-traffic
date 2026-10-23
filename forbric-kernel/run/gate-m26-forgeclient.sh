@@ -84,6 +84,17 @@ step "a MinecraftForge fluid's client extensions are asked on the render path (H
 check "the canary placed its water source" 'ForbricLive/FLUID\] water at -?[0-9]+ -?[0-9]+ -?[0-9]+: Block\{minecraft:water\}' "$LOG"
 check "MinecraftForge fluid extensions were consulted while rendering" 'Forbric/Fluids\] MinecraftForge client extensions consulted for [1-9][0-9]* fluid' "$LOG"
 
+# Whether the merged Hud names MinecraftForge's overlay tree (a both-edits base builds and draws it there itself),
+# for the HUD assertion below.
+HUD_MERGED="${MERGED:-$RUN_OLD/merged-base/patched-mc-merged-26.2.jar}"
+if ! javap -cp "$HUD_MERGED" net.minecraft.client.gui.Hud >/dev/null 2>&1; then
+  echo "[kernel] FAIL cannot read Hud from the merged base ($HUD_MERGED)"; FAIL=1; HUD_TREE=unread
+elif javap -c -p -cp "$HUD_MERGED" net.minecraft.client.gui.Hud 2>/dev/null | grep -aq 'Method net/minecraftforge/client/gui/overlay/ForgeLayeredDraw\.'; then
+  HUD_TREE=kept
+else
+  HUD_TREE=absent
+fi
+
 # M26_ASSERTIONS_BEGIN — exercised against synthetic logs without launching the game.
 step "the canary subscribed, entered its save and completed real consumer observations"
 # The thread name is the assertion: "main" is the pre-Minecraft window, "Render thread" is Minecraft.<init>.
@@ -137,9 +148,12 @@ check "registered layer was baked" 'ForbricLive/CLIENT\] layer forbriclive:probe
 check "stone has tint sources" 'ForbricLive/CLIENT\] stone tint sources: [1-9][0-9]*' "$LOG"
 
 step "a MinecraftForge mod's HUD overlay actually draws (must PASS)"
-# The merged base carries ZERO references to ForgeLayeredDraw: NeoForge's GuiLayerManager won that byte merge
-# outright, so nothing built MinecraftForge's overlay tree, nothing posted AddGuiOverlayLayersEvent, and a mod
-# that added a HUD overlay registered it into an object the game never renders.
+# A merged base whose Hud is NeoForge's alone carries ZERO references to ForgeLayeredDraw: nothing built
+# MinecraftForge's overlay tree, nothing posted AddGuiOverlayLayersEvent, and a mod that added a HUD overlay
+# registered it into an object the game never renders. One that kept both families' edits builds that tree in
+# Hud.<init> and draws it in place of NeoForge's layer manager, returning before the manager draws — so no NeoForge
+# or Fabric layer drew, and once the kernel silenced the tree's vanilla leaves, no vanilla HUD either. The kernel
+# drops those two calls there (ForgeHudPipelineInjector) and builds the tree itself onto NeoForge's manager.
 #
 # DRAWS, not registrations. The event arriving proves only that a tree exists to register into; the canary's own
 # layer counting twenty real frames is what proves it reaches the screen. RED with
@@ -150,6 +164,16 @@ check "and its layer drew real frames" \
   'ForbricLive/CLIENT\] overlay layer DREW 20 frames' "$LOG"
 check "the stack is on NeoForge's layer manager" \
   "Forbric/HudBridge\] MinecraftForge's overlay stack is on NeoForge's layer manager" "$LOG"
+# Exact both ways against the base this run booted (HUD_TREE, read before these assertions so they stay a function
+# of the log): a Hud that kept MinecraftForge's tree must have had its own build and draw dropped, and one that did not
+# must have had nothing to drop.
+if [ "${HUD_TREE:-absent}" = kept ]; then
+  check "the merged Hud's own MinecraftForge build and draw were dropped" \
+    "Forbric/HudBridge\] net.minecraft.client.gui.Hud kept MinecraftForge's own overlay tree \(built in 1 place\(s\), drawn instead of NeoForge's layer manager in 1\)" "$LOG"
+else
+  check_absent "a merged Hud without MinecraftForge's tree had nothing dropped" \
+    "Forbric/HudBridge\] net.minecraft.client.gui.Hud kept MinecraftForge's own overlay tree" "$LOG"
+fi
 
 step "a MinecraftForge picture-in-picture renderer has somewhere to be found (must PASS)"
 # GuiRenderer declares vanilla's Class -> renderer map, reads it in ONE place and writes it NOWHERE: NeoForge's

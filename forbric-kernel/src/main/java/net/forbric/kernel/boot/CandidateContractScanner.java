@@ -72,7 +72,6 @@ final class CandidateContractScanner {
 		}
 		return Map.copyOf(events);
 	}
-	private static final Set<String> PLATFORM = Set.of("java", "minecraft", "forge", "neoforge", "fabricloader", "fabric", "fml", "mixinextras");
 	static final int HELPER_DEPTH_LIMIT = 32;
 	static final int HELPER_NODE_LIMIT = 256;
 	static final int HELPER_INSTRUCTION_LIMIT = 32768;
@@ -130,7 +129,7 @@ final class CandidateContractScanner {
 					.filter(d -> d.appliesOn(side == EnvType.SERVER ? Side.DEDICATED_SERVER : Side.CLIENT)).toList();
 			List<UnifiedDependency> symbolDependencies = new ArrayList<>();
 			for (UnifiedDependency dependency : mandatory) {
-				if (PLATFORM.contains(dependency.getModId())) continue;
+				if (net.forbric.kernel.util.PlatformIds.provides(dependency.getModId())) continue;
 				String key = providedKey(dependency.getModId(), metadata);
 				// DependencyAudit owns a missing installation and a version nobody installed: it warns, offers its
 				// dialog and loads the mod anyway. Arbitration only decides between installed candidates, so a
@@ -150,7 +149,7 @@ final class CandidateContractScanner {
 			}
 			// Negative constraints are dependency constraints too (PLAN.md:62): prefer the build the mod can run with.
 			for (Exclusion exclusion : mod.exclusions()) {
-				if (PLATFORM.contains(exclusion.modId())) continue;
+				if (net.forbric.kernel.util.PlatformIds.provides(exclusion.modId())) continue;
 				String key = providedKey(exclusion.modId(), metadata); if (key == null) continue;
 				Set<Path> excluded = new LinkedHashSet<>(), maybe = new LinkedHashSet<>();
 				for (var candidate : metadata.entrySet()) {
@@ -312,7 +311,7 @@ final class CandidateContractScanner {
 			Map<String, Map<String, Set<String>>> mixinAdded, List<JointCandidateSelector.Rule> rules) {
 		try {
 			byte[] bytes = jar.read(name); if (bytes == null) { rules.add(unknown(source, "config:" + name, "mixin config not readable")); return; }
-			var config = com.electronwill.nightconfig.json.JsonFormat.fancyInstance().createParser().parse(new StringReader(new String(bytes, java.nio.charset.StandardCharsets.UTF_8)));
+			var config = net.forbric.kernel.mixin.MixinConfigJson.parse(bytes);
 			String pkg = config.get("package"); if (pkg == null) return;
 			boolean required = Boolean.TRUE.equals(config.get("required"));
 			boolean unconditional = config.get("plugin") == null;
@@ -700,8 +699,7 @@ final class CandidateContractScanner {
 		for (String configName : metadata.mixins()) {
 			try {
 				byte[] bytes = jar.read(configName); if (bytes == null) continue;
-				var config = com.electronwill.nightconfig.json.JsonFormat.fancyInstance().createParser().parse(
-						new StringReader(new String(bytes, java.nio.charset.StandardCharsets.UTF_8)));
+				var config = net.forbric.kernel.mixin.MixinConfigJson.parse(bytes);
 				String pkg = config.get("package"); if (pkg == null) continue;
 				for (String section : List.of("mixins", side == EnvType.SERVER ? "server" : "client")) {
 					Object raw = config.get(section); if (!(raw instanceof List<?> mixins)) continue;

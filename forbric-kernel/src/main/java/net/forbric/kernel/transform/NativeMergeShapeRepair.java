@@ -19,8 +19,9 @@ public final class NativeMergeShapeRepair {
             BiFunction<Ecosystem, String, ClassNode> originals) {
         this.classes = classes; this.originals = originals;
     }
+    /** {@code owner} may be null: the hierarchy is then read from {@code resources} alone. */
     public static NativeMergeShapeRepair production(ClassNode owner, Function<String, byte[]> resources) {
-        Map<String, ClassNode> cache = new HashMap<>(); cache.put(owner.name, owner);
+        Map<String, ClassNode> cache = new HashMap<>(); if (owner != null) cache.put(owner.name, owner);
         return new NativeMergeShapeRepair(name -> {
             if (cache.containsKey(name)) return cache.get(name);
             // Raw selected resources avoid recursively entering this repair through getPreMixinClassBytes.
@@ -34,9 +35,17 @@ public final class NativeMergeShapeRepair {
             cache.put(name, node); return node;
         }, NativeGameReferences::reference);
     }
-    public boolean dropSuperclassStubs(ClassNode owner) { return dropDelegates(owner, true); }
-    public boolean dropDefaultStubs(ClassNode owner) { return dropDelegates(owner, false); }
-    private boolean dropDelegates(ClassNode owner, boolean superclass) {
+    public boolean dropSuperclassStubs(ClassNode owner) { return owner.methods.removeAll(provedDelegates(owner, true)); }
+    public boolean dropDefaultStubs(ClassNode owner) { return owner.methods.removeAll(defaultStubs(owner)); }
+    /**
+     * The delegates {@link #dropDefaultStubs} removes from {@code owner}, without removing them: each is a pure
+     * {@code I.super.m()} the merge introduced (neither native class declares it), no superclass implements it, and
+     * the complete interface closure has exactly one maximally specific default, the same one {@code I.super.m()}
+     * reaches. Removing such a method leaves every call to it dispatching to the same code. ForgeTransferShapeAudit
+     * digests an audited class as if exactly these were gone, so its fingerprint folds what this proves and no more.
+     */
+    public List<MethodNode> defaultStubs(ClassNode owner) { return provedDelegates(owner, false); }
+    private List<MethodNode> provedDelegates(ClassNode owner, boolean superclass) {
         List<MethodNode> remove = new ArrayList<>();
         for (MethodNode method : owner.methods) {
             MethodInsnNode call = delegate(method);
@@ -48,7 +57,7 @@ public final class NativeMergeShapeRepair {
             int inherited = superclassImplementation(owner, method);
             if (superclass ? inherited == 1 : inherited == 0 && sameDefault(owner, called, method)) remove.add(method);
         }
-        owner.methods.removeAll(remove); return !remove.isEmpty();
+        return remove;
     }
     /** Both original classes must be known, and neither may have declared this method intentionally. */
     private boolean introduced(ClassNode owner, MethodNode method) {
@@ -118,7 +127,8 @@ public final class NativeMergeShapeRepair {
         }
         visiting.remove(owner.name); result.put(owner.name, owner); return true;
     }
-    private static MethodInsnNode delegate(MethodNode method) {
+    /** The call a pure delegate {@code public R m(A a) { return Owner.super.m(a); }} makes to an interface, or null. */
+    static MethodInsnNode delegate(MethodNode method) {
         if ((method.access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE | Opcodes.ACC_SYNCHRONIZED)) != Opcodes.ACC_PUBLIC
                 || !method.tryCatchBlocks.isEmpty()) return null;
         List<AbstractInsnNode> code = code(method); Type[] args = Type.getArgumentTypes(method.desc);

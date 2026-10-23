@@ -9,7 +9,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import com.electronwill.nightconfig.core.UnmodifiableConfig;
-import com.electronwill.nightconfig.json.JsonFormat;
 import org.objectweb.asm.tree.*;
 
 /** Source-discovered SDK protocol conflicts. A configuration, package or handler name never decides policy. */
@@ -34,11 +33,13 @@ public final class MergedBaseMixinCompat {
     static synchronized void discover(String configName,byte[] configBytes,Function<String,byte[]> resources) {
         if(configName==null||configBytes==null||resources==null)return;
         SUPPRESSED_MIXINS.removeIf(entry->entry.startsWith(configName+":"));
+        FabricRegistryInitializationMixinAdapter.forgetDeferredFreezes(configName);
+        net.forbric.kernel.transform.RegistrySyncParityInjector.forgetMixins(configName);
         PINNED_CONTRACTS.removeIf(row->row.pin().startsWith(configName+":"));
         REASONS.keySet().removeIf(entry->entry.startsWith(configName+":"));
         SOURCES.keySet().removeIf(entry->entry.startsWith(configName+":"));
         try(var reader=new InputStreamReader(new ByteArrayInputStream(configBytes),StandardCharsets.UTF_8)) {
-            UnmodifiableConfig config=JsonFormat.fancyInstance().createParser().parse(reader);
+            UnmodifiableConfig config=MixinConfigJson.parse(reader);
             Object packageValue=config.get(List.of("package"));if(!(packageValue instanceof String pkg))return;
             // The class each mixin was compiled against, where the adapters read a point written without its owner or
             // descriptor: the declaring mod's family, published before any config is read, since a mixin's own family is
@@ -51,6 +52,13 @@ public final class MergedBaseMixinCompat {
                     byte[] bytes=resources.apply(pkg.replace('.','/')+"/"+entry.replace('.','/')+".class");if(bytes==null)continue;
                     ClassNode node=new ClassNode();new org.objectweb.asm.ClassReader(bytes).accept(node,org.objectweb.asm.ClassReader.EXPAND_FRAMES);
                     String identity=configName+":"+entry;SOURCES.put(identity,node.name.replace('/','.'));
+                    FabricRegistryInitializationMixinAdapter.noteDeferredFreeze(configName,node,family,natives);
+                    net.forbric.kernel.transform.RegistrySyncParityInjector.noteMixin(configName,node,resources);
+                    FabricCreativePagerMixinAdapter.noteSelectionHooks(node);
+                    if(FabricCreativePagerMixinAdapter.matches(node))FabricCreativePagerMixinAdapter.noteGuestControls(node,
+                            withCode(resources.apply(FabricCreativePagerMixinAdapter.TARGET+".class")),
+                            net.forbric.api.ModPresence.forgeFamilyMods().size());
+                    SupersededMixins.noteMixin(node,resources);
                     if(!enabled()||explicitlyKept(identity))continue;
                     String reason=refusal(node,resources,natives);
                     if(reason==null)continue;
@@ -61,6 +69,11 @@ public final class MergedBaseMixinCompat {
                 }
             }
         }catch(Exception unreadable){net.forbric.kernel.util.Caught.warn(unreadable,"[Forbric/Mixin] cannot inspect source protocols in %s; its remaining mixins are not checked",configName);}
+    }
+    /** A class with its code, from raw bytes, or null. */
+    private static ClassNode withCode(byte[] bytes) {
+        if(bytes==null)return null;
+        ClassNode node=new ClassNode();new org.objectweb.asm.ClassReader(bytes).accept(node,0);return node;
     }
     /**
      * Why the source mixin is refused, or null. {@code natives} gives the class the mod was compiled against: each gate
@@ -75,11 +88,13 @@ public final class MergedBaseMixinCompat {
             return "source has a closed consuming-Reader callback pair which cannot remain half-applied while pruning is disabled";
         if(FabricRegistryInitializationMixinAdapter.conflicts(node,natives)&&FabricRegistryInitializationMixinAdapter.adapt(copy(node),classes,natives)==0)
             return "source callback repeats or defers the kernel-owned registry freeze; its tracker protocol could not be adapted";
-        if(FabricRegistryLoaderMixinAdapter.matches(node,natives)&&FabricRegistryLoaderMixinAdapter.adapt(copy(node),classes,natives)==0)
-            return "registry-loader: source ScopedValue callback propagation does not fit the current registry-loader overloads";
+        if(FabricRegistryLoaderMixinAdapter.wrapsDeadCall(node,classes,natives)&&FabricRegistryLoaderMixinAdapter.adapt(copy(node),classes,natives)==0)
+            return "registry-loader: source wraps a loader call the carrier left dead, and the wrap does not fit the widened overloads that replaced it";
         if(FabricCreativePagerMixinAdapter.matches(node)&&FabricCreativePagerMixinAdapter.adapt(copy(node),name->parse(resources.apply(name+".class")))==0)
             return "source implements a second creative pager, and its keyboard callback could not share the carrier pager";
-        if(ForbricMixinService.registerSourceCallbacks(node))
+        // A callback group that is all of its mixin supersedes the mixin; one that is only part of it has its role injectors
+        // taken out where Mixin reads the class (LootSourceCallbacks.stripPartialGroup), and the rest of the mixin applies.
+        if(ForbricMixinService.registerSourceCallbacks(node)&&net.forbric.kernel.boot.LootSourceCallbacks.whole(node.name))
             return "the complete original callback group is registered on its proved current caller/bridge contract; final definitions witness its retained bodies";
         String loot=bridgedLootDispatch(node,resources);
         if(loot!=null)return loot;
@@ -116,5 +131,5 @@ public final class MergedBaseMixinCompat {
     public static boolean contractSuppressed(String target,String contract){return PINNED_CONTRACTS.stream().anyMatch(row->row.target().equals(target)&&row.contract().equals(contract)&&pinInForce(row.pin()));}
     public static boolean targetSuppressed(String target){return SUPPRESSED_MIXINS.stream().anyMatch(pin->PINNED_CONTRACTS.stream().anyMatch(row->row.pin().equals(pin)&&row.target().equals(target))&&pinInForce(pin));}
     public static boolean protocolSuppressed(String protocol){return REASONS.entrySet().stream().anyMatch(entry->entry.getValue().startsWith(protocol+":")&&pinInForce(entry.getKey()));}
-    static void reset(){indexed=false;SUPPRESSED_MIXINS.clear();PINNED_CONTRACTS.clear();REASONS.clear();SOURCES.clear();}
+    static void reset(){indexed=false;SUPPRESSED_MIXINS.clear();PINNED_CONTRACTS.clear();REASONS.clear();SOURCES.clear();SupersededMixins.forgetClaims();}
 }

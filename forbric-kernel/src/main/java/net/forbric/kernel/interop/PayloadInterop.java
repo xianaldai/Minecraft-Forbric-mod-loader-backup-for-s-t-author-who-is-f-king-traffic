@@ -34,6 +34,8 @@ import java.util.WeakHashMap;
 
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ForeignType;
+import net.forbric.kernel.classloading.ForbricClassLoader;
+import net.forbric.kernel.classloading.LoaderProbePolicy;
 import net.forbric.kernel.util.Caught;
 import net.forbric.kernel.util.ForbricLog;
 
@@ -50,11 +52,6 @@ import net.forbric.kernel.util.ForbricLog;
  * all game/loader API interaction is reflective against the Knot class loader that owns the live classes.
  */
 public final class PayloadInterop {
-	private static final String FABRIC_REGISTRY = "net.fabricmc.fabric.impl.networking.PayloadTypeRegistryImpl";
-	private static final String FABRIC_REGISTRATION_PAYLOAD = "net.fabricmc.fabric.impl.networking.RegistrationPayload";
-	private static final String FABRIC_COMMON_VERSION_PAYLOAD = "net.fabricmc.fabric.impl.networking.CommonVersionPayload";
-	private static final String FABRIC_COMMON_REGISTER_PAYLOAD = "net.fabricmc.fabric.impl.networking.CommonRegisterPayload";
-	private static final String FABRIC_SERVER_ADDON_PACKAGE = "net.fabricmc.fabric.impl.networking.server.";
 	private static final String NEO_NETWORK_REGISTRY = ForeignType.NETWORK_REGISTRY.binary(Ecosystem.NEOFORGE);
 	private static final String NEO_REGISTER_PAYLOAD = "net.neoforged.neoforge.network.payload.MinecraftRegisterPayload";
 	private static final String NEO_UNREGISTER_PAYLOAD = "net.neoforged.neoforge.network.payload.MinecraftUnregisterPayload";
@@ -165,75 +162,276 @@ public final class PayloadInterop {
 		return Proxy.newProxyInstance(loader, new Class<?>[] { streamCodec }, new CodecInvocationHandler(candidates));
 	}
 
-	/**
-	 * Called by the Fabric-channel-addon mixin. Returns {@code Boolean.TRUE} only when the target's original
-	 * {@code handle(...)} method should be considered complete and skipped.
-	 */
-	public static Boolean handleFabricChannelRegistrationAddon(Object addon, Object payload) {
-		// Every decision this method makes, under -Dforbric.debug. Added because the one question the code could not
-		// answer from its own log was the only one that mattered when multiplayer broke: did the client's channel
-		// declaration reach the server at all, and if not, which of the five branches below swallowed it. Each
-		// branch that returns now says so; "nothing in the log" used to be the answer to all five.
-		probe(() -> "addon " + simpleName(addon) + " <- " + payloadId(payload) + " [" + simpleName(payload) + "]");
-		bootstrapMirrors(loaderFor(addon, payload));
-		Boolean commonNegotiation = handleFabricCommonNegotiationAddon(addon, payload);
-		if (commonNegotiation != null) {
-			probe(() -> "  common-networking negotiation handled it -> " + commonNegotiation);
-			return commonNegotiation;
-		}
+	/** What a payload handed to a Fabric receiver leaves to do once that receiver is done, on this thread. */
+	private static final class AfterReceiver {
+		final Object receiver;
+		final Object handed;
+		/** How many {@code handle}s of the same receiver the handed payload has gone on into (a subclass calling super's). */
+		int nested;
+		Object forgeDeclaration;
+		Runnable neoForgeHalf;
+		boolean protocolMovesAreNeoForges;
 
-		Registration registration = registration(payload);
-		if (registration == null) {
-			probe(() -> "  not a channel registration; leaving it to the addon's own body");
+		AfterReceiver(Object receiver, Object handed) {
+			this.receiver = receiver;
+			this.handed = handed;
+		}
+	}
+
+	private static final ThreadLocal<AfterReceiver> AFTER_RECEIVER = new ThreadLocal<>();
+
+	/**
+	 * Called at the head of a Fabric payload receiver's {@code handle(CustomPacketPayload)} — a class implementing fabric-api's
+	 * public {@code PacketSender} that declares that method ({@code CommonNetworkInteropInjector}). Returns the payload
+	 * the receiver goes on with.
+	 *
+	 * <p>Fabric and NeoForge both speak the peer's channel declarations ({@code minecraft:register}/{@code unregister}) and
+	 * the common-networking negotiation ({@code c:version}/{@code c:register}), each with its own payload class for the
+	 * same wire format; one codec decoded the packet, so this receiver can be handed NeoForge's class. The receiver gets the
+	 * payload as Fabric's own codec reads the same bytes ({@link WirePayloads}) and handles it with its own code, as on
+	 * Fabric; NeoForge is told with the payload as NeoForge's codec reads them. Nothing here names Fabric's payload classes
+	 * or its receiver's members.
+	 *
+	 * <p>The order of the halves is a wire contract on BOTH ends:
+	 * <ul>
+	 *   <li>A channel declaration: NeoForge's bookkeeping first (and Forge's, which rides on its head hook). On the server,
+	 *       Fabric's registration handling runs its configuration start synchronously, and Fabric's registry-sync task
+	 *       sends {@code fabric:registry/sync} from inside it; NeoForge's {@code checkPacket} vetoes any channel the client
+	 *       has not declared, and it learns the client's channels from exactly this {@code onMinecraftRegister}. Then
+	 *       Fabric's own handling, which on the client sends the client's own {@code minecraft:register}. MinecraftForge's
+	 *       declaration last ({@link #fabricInboundDone}): it is one more {@code minecraft:register}, and a Fabric server
+	 *       treats the FIRST register it receives as the client's complete declaration.</li>
+	 *   <li>The common negotiation: both ecosystems queue the server's tasks for it and answer it on the client, and the two
+	 *       answers must not both go out, nor a task be finished twice. Fabric's receiver runs first, for Fabric's own state
+	 *       (the negotiated version, the peer's channels); the moves it makes on the wire — finishing a common-networking
+	 *       task, sending a {@code c:version}/{@code c:register} answer through its {@code PacketSender} — stand aside while
+	 *       it runs ({@link #fabricSendStandsAside}, {@link #finishEquivalentCommonTask}). NeoForge's handler then runs once,
+	 *       when the receiver is done, and makes them: its answer carries every channel NeoForge knows, the Fabric ones the
+	 *       kernel mirrored into it included, and its task finish is the one the server's queue expects.</li>
+	 * </ul>
+	 */
+	public static Object fabricInbound(Object receiver, Object payload) {
+		AfterReceiver going = AFTER_RECEIVER.get();
+		if (going != null && going.receiver == receiver && going.handed == payload) {
+			// The receiver's own override handing the payload on to the handle it overrides: already arbitrated.
+			going.nested++;
+			return payload;
+		}
+		AFTER_RECEIVER.remove();
+		if (payload == null) return payload;
+		String id = payloadId(payload);
+		probe(() -> "Fabric receiver " + simpleName(receiver) + " <- " + id + " [" + simpleName(payload) + "]");
+		bootstrapMirrors(loaderFor(receiver, payload));
+		boolean registration = isDinnerboneChannelRegistration(id), negotiation = isCommonNegotiation(id);
+		if (!registration && !negotiation) {
 			if (ForbricLog.debugEnabled()) describeFrozenRegistrySnapshot(payload);
+			return payload;
+		}
+		Object connection = valueOfType(receiver, "net.minecraft.network.Connection");
+		Object listener = connection == null ? null : invokeNoArg(connection, "getPacketListener");
+		Object protocol = listener == null ? null : invokeNoArg(listener, "protocol");
+		Object flow = connection == null ? null : invokeNoArg(connection, "getReceiving");
+		if (connection == null || protocol == null || flow == null) {
+			probe(() -> "  no connection phase on the receiver; left to its own body as handed");
+			return payload;
+		}
+		Object idValue = invokeNoArg(invokeNoArg(payload, "type"), "id");
+		Object fabricCodec = typeAndCodecCodec(fabricTypeAndCodecOnly(idValue, protocol, flow));
+		Object neoCodec = neoCodec(idValue, protocol, flow);
+		Object neo = WirePayloads.decodedBy(neoCodec, payload, java.util.Arrays.asList(fabricCodec));
+		Object fabric = WirePayloads.decodedBy(fabricCodec, payload, java.util.Arrays.asList(neoCodec));
+		probe(() -> "  as NeoForge reads it: " + simpleName(neo) + "; as Fabric reads it: " + simpleName(fabric));
+		if (fabric == null) {
+			probe(() -> "  Fabric's codec could not read it; the receiver gets it as handed, NeoForge is not told here");
+			return payload;
+		}
+		AfterReceiver after = new AfterReceiver(receiver, fabric);
+		if (registration) {
+			Registration declared = registration(neo);
+			if (declared != null) {
+				DECLARATION_DEFERRED.set(Boolean.TRUE);
+				try {
+					syncNeoChannels(connection, declared.register, declared.channels);
+				} finally {
+					DECLARATION_DEFERRED.set(Boolean.FALSE);
+				}
+				if (declared.register) after.forgeDeclaration = connection;
+				probe(() -> "  " + (declared.register ? "register" : "unregister") + " " + declared.channels.size()
+						+ " channel(s) told to NeoForge: " + declared.channels);
+			} else {
+				probe(() -> "  NeoForge could not read the declaration; its half was skipped");
+			}
+		} else if (neo != null) {
+			after.protocolMovesAreNeoForges = true;
+			if ("c:version".equals(id)) {
+				after.neoForgeHalf = () -> invokeNeoNetworkRegistry("checkCommonVersion", listener, neo);
+			} else {
+				after.neoForgeHalf = () -> {
+					declaredPlayChannels(connection, neo);
+					invokeNeoNetworkRegistry("onCommonRegister", listener, neo);
+				};
+			}
+		}
+		AFTER_RECEIVER.set(after);
+		return fabric;
+	}
+
+	/**
+	 * Called before each return of the same {@code handle}: NeoForge's half of a common negotiation, and the Forge
+	 * declaration a channel registration held back.
+	 */
+	public static void fabricInboundDone(Object receiver) {
+		AfterReceiver after = AFTER_RECEIVER.get();
+		if (after == null || after.receiver != receiver) return;
+		if (after.nested > 0) {
+			after.nested--;
+			return;
+		}
+		AFTER_RECEIVER.remove();
+		if (after.neoForgeHalf != null) after.neoForgeHalf.run();
+		if (after.forgeDeclaration != null) declareForgeChannels(after.forgeDeclaration);
+	}
+
+	/** Whether a Fabric receiver is handling a common negotiation on this thread, whose wire moves are NeoForge's. */
+	private static boolean protocolMovesAreNeoForges() {
+		AfterReceiver after = AFTER_RECEIVER.get();
+		return after != null && after.protocolMovesAreNeoForges;
+	}
+
+	/** What one connection has declared it listens on (minecraft:register less unregister), in the phase it was sent in. */
+	private static final class Declared {
+		String protocol;
+		final Set<String> channels = new LinkedHashSet<>();
+	}
+
+	private static final Map<Object, Declared> DECLARED = Collections.synchronizedMap(new WeakHashMap<>());
+
+	/**
+	 * Called at the head of {@code Connection.sendPacket(Packet, ChannelFutureListener, boolean)}: true when {@code packet} is a
+	 * channel declaration ({@code minecraft:register}) naming only channels this side already declared on {@code connection}
+	 * in the phase it is in, which no receiver learns anything from, so the send is left out. Every other packet, an
+	 * {@code unregister} included, goes out and keeps the record in step.
+	 *
+	 * <p>The channels are read as NeoForge's codec reads the declaration's bytes, whichever ecosystem's payload class it
+	 * is ({@link WirePayloads}); a declaration none of the three codecs can read goes out as it is.
+	 */
+	public static boolean declarationAlreadyMade(Object connection, Object packet) {
+		if (connection == null || packet == null) return false;
+		// A custom-payload packet (the client- or server-bound one), through the cached accessor; anything else at once.
+		if (!packet.getClass().getName().endsWith("CustomPayloadPacket")) return false;
+		Method accessor = payloadAccessor(packet.getClass());
+		if (accessor == null) return false;
+		Object payload;
+		try {
+			payload = accessor.invoke(packet);
+		} catch (ReflectiveOperationException | RuntimeException e) {
+			Caught.warn(e, "[Forbric/Net] could not read the payload of %s; it is sent as it is", packet.getClass().getName());
+			return false;
+		}
+		if (payload == null) return false;
+		String id = cachedPayloadId(payload);
+		if (!isDinnerboneChannelRegistration(id)) return false;
+		try {
+			Object listener = invokeNoArg(connection, "getPacketListener");
+			Object protocol = listener == null ? null : invokeNoArg(listener, "protocol");
+			Object flow = invokeNoArg(connection, "getSending");
+			if (protocol == null || flow == null) return false;
+			Object idValue = invokeNoArg(invokeNoArg(payload, "type"), "id");
+			Object neoCodec = neoCodec(idValue, protocol, flow);
+			Object neo = WirePayloads.decodedBy(neoCodec, payload, java.util.Arrays.asList(
+					typeAndCodecCodec(fabricTypeAndCodecOnly(idValue, protocol, flow)), forgeCodec(idValue, flow)));
+			Registration declared = registration(neo);
+			if (declared == null) return false;
+			Set<String> channels = new LinkedHashSet<>();
+			for (Object channel : declared.channels) channels.add(String.valueOf(channel));
+			if (!repeatsWhatWasDeclared(connection, String.valueOf(protocol), declared.register, channels)) return false;
+			probe(() -> "  left out a repeated " + id + " of " + channels.size() + " channel(s) already declared in " + protocol);
+			ForbricLog.debug("[Forbric/Net] left out a repeated channel declaration of %d channel(s) already declared on the connection in %s",
+					channels.size(), protocol);
+			return true;
+		} catch (RuntimeException unreadable) {
+			Caught.warn(unreadable, "[Forbric/Net] could not read a channel declaration on its way out; it is sent as it is");
+			return false;
+		}
+	}
+
+	/** A no-argument accessor of a class, by name, looked up once per class: this runs for every custom payload sent. */
+	private static ClassValue<Method> accessor(String name) {
+		return new ClassValue<>() {
+			@Override
+			protected Method computeValue(Class<?> type) {
+				Method found = findMethod(type, name);
+				if (found != null) found.setAccessible(true);
+				return found;
+			}
+		};
+	}
+
+	private static final ClassValue<Method> PAYLOAD_TYPE = accessor("type"), TYPE_ID = accessor("id");
+
+	/** {@link #payloadId}, through accessors looked up once per class. */
+	private static String cachedPayloadId(Object payload) {
+		try {
+			Method typeAccessor = PAYLOAD_TYPE.get(payload.getClass());
+			Object type = typeAccessor == null ? null : typeAccessor.invoke(payload);
+			Method idAccessor = type == null ? null : TYPE_ID.get(type.getClass());
+			return idAccessor == null ? null : String.valueOf(idAccessor.invoke(type));
+		} catch (ReflectiveOperationException | RuntimeException e) {
+			Caught.warn(e, "[Forbric/Net] could not read the id of payload %s", payload.getClass().getName());
 			return null;
 		}
-		probe(() -> "  " + (registration.register ? "register" : "unregister") + " " + registration.channels.size()
-				+ " channel(s): " + registration.channels);
+	}
 
-		// The order of the three halves below is a wire contract on BOTH ends, and each half pins one edge of it:
-		//
-		//  1. NeoForge's bookkeeping first (and Forge's, which rides on its head hook). On the server, Fabric's
-		//     receiveRegistration — the mirror in step 2 — runs startConfiguration() synchronously, and Fabric's
-		//     registry-sync task sends fabric:registry/sync from inside it; NeoForge's checkPacket vetoes any channel
-		//     the client has not declared, and it learns the client's channels from exactly this onMinecraftRegister.
-		//     Mirror first and the send throws "Payload fabric:registry/sync may not be sent to the client!" and
-		//     the handshake stalls for good.
-		//  2. Fabric's mirror. On the client this is what sends the client's own minecraft:register. Fabric's own
-		//     body would make exactly this receiveRegistration call and return true, so a payload that is already
-		//     Fabric's is mirrored here too rather than left to the body, which runs only after this method returns.
-		//  3. MinecraftForge's declaration last. It is one more minecraft:register, and a Fabric server treats the
-		//     FIRST register it receives as the client's complete declaration, running its registry-sync check on it
-		//     right there: a Forge-only list ahead of Fabric's, and the client is kicked with "This server requires
-		//     Fabric Loader and Fabric API installed on your client!". So the declaration is held back while
-		//     step 1 runs and sent only after Fabric's.
-		Object connection = fieldValue(addon, "connection");
-		if (connection != null) {
-			DECLARATION_DEFERRED.set(Boolean.TRUE);
-			try {
-				syncNeoChannels(connection, registration.register, registration.channels);
-			} finally {
-				DECLARATION_DEFERRED.set(Boolean.FALSE);
+	/**
+	 * Keeps {@code connection}'s record of what it declared in {@code phase} — a new phase starts it afresh, a register
+	 * adds, an unregister takes away — and answers whether this register names only channels already declared there.
+	 */
+	static boolean repeatsWhatWasDeclared(Object connection, String phase, boolean register, Set<String> channels) {
+		synchronized (DECLARED) {
+			Declared record = DECLARED.computeIfAbsent(connection, ignored -> new Declared());
+			if (!phase.equals(record.protocol)) {
+				record.protocol = phase;
+				record.channels.clear();
 			}
-		} else {
-			probe(() -> "  no connection field on the addon; NeoForge's and Forge's halves were NOT told");
+			if (!register) {
+				record.channels.removeAll(channels);
+				return false;
+			}
+			if (!channels.isEmpty() && record.channels.containsAll(channels)) return true;
+			record.channels.addAll(channels);
+			return false;
 		}
+	}
 
-		Object fabricPayload = payload != null && payload.getClass().getName().equals(FABRIC_REGISTRATION_PAYLOAD)
-				? payload
-				: createFabricRegistrationPayload(payload, registration.register, registration.channels);
-		if (fabricPayload == null) {
-			probe(() -> "  could NOT synthesize Fabric's payload; Fabric's half was skipped");
-		} else {
-			boolean mirrored = invokeReceiveRegistration(addon, registration.register, fabricPayload);
-			probe(() -> "  mirrored into Fabric receiveRegistration: " + mirrored
-					+ "; sendable=" + channelSet(addon, "getSendableChannels")
-					+ " receivable=" + channelSet(addon, "getReceivableChannels")
-					+ " pending=" + pendingChannels(connection));
-		}
+	/**
+	 * Called at the head of a Fabric receiver's {@code sendPacket(Packet, ChannelFutureListener)} — fabric-api's public
+	 * {@code PacketSender} method: true when the packet is that receiver's own answer to a common negotiation it is
+	 * handling, which NeoForge's handler sends instead once it is done (see {@link #fabricInbound}).
+	 */
+	public static boolean fabricSendStandsAside(Object sender, Object packet) {
+		if (!protocolMovesAreNeoForges() || packet == null) return false;
+		Object payload = invokeNoArg(packet, "payload");
+		String id = payload == null ? null : payloadId(payload);
+		if (!isCommonNegotiation(id)) return false;
+		probe(() -> "  Fabric's own " + id + " answer stands aside; NeoForge's handler answers once");
+		return true;
+	}
 
-		if (connection != null && registration.register) declareForgeChannels(connection);
-		return fabricPayload == null ? null : Boolean.TRUE;
+	/**
+	 * A peer's {@code c:register} for the PLAY phase, received on the server: the channels its Fabric mods declared for
+	 * play, which the channel census counts against the payload types registered (Fabric's own receiver records them on
+	 * the connection for its play addon).
+	 */
+	private static void declaredPlayChannels(Object connection, Object neoRegister) {
+		Object receiving = invokeNoArg(connection, "getReceiving");
+		if (!"SERVERBOUND".equals(enumName(receiving))) return;
+		Object declaredFor = invokeNoArg(neoRegister, "protocol");
+		Object channels = invokeNoArg(neoRegister, "channels");
+		if (!"PLAY".equals(enumName(declaredFor)) || !(channels instanceof Collection<?> ids) || ids.isEmpty()) return;
+		ForbricLog.info("[Forbric/Net] handed %d Fabric PLAY channel(s) the client declared during configuration to "
+				+ "Fabric's own c:register receiver, which records them on the connection for its play addon", ids.size());
+		NetworkChannelCensus.declared(net.forbric.api.Ecosystem.FABRIC, ids);
+		NetworkChannelCensus.report();
 	}
 
 	/**
@@ -293,41 +491,17 @@ public final class PayloadInterop {
 	}
 
 	/**
-	 * The connection's per-protocol PENDING channel sets, which is where Fabric's next-phase addon gets its
-	 * sendable channels from: {@code ServerPlayNetworkAddon}'s constructor drains
-	 * {@code ChannelInfoHolder.fabric_getPendingChannelsNames(PLAY)} and nothing else seeds it. A mod that syncs
-	 * during {@code placeNewPlayer} — Cardinal Components does, and DISCONNECTS the player when the channel is not
-	 * sendable — reads the result of exactly this list, so an empty one is invisible until the kick.
-	 */
-	private static String pendingChannels(Object connection) {
-		if (connection == null) return "?";
-		StringBuilder out = new StringBuilder();
-		try {
-			Class<?> protocol = Class.forName("net.minecraft.network.ConnectionProtocol", false,
-					connection.getClass().getClassLoader());
-			for (Object phase : protocol.getEnumConstants()) {
-				Object names = invoke(connection, "fabric_getPendingChannelsNames", phase);
-				int size = names instanceof Collection<?> c ? c.size() : -1;
-				if (size > 0) out.append(out.isEmpty() ? "" : ", ").append(phase).append('=').append(names);
-			}
-		} catch (Throwable t) {
-			Caught.expected(t);
-			return "unreadable(" + t.getClass().getSimpleName() + ")";
-		}
-		return out.isEmpty() ? "none" : out.toString();
-	}
-
-	private static String channelSet(Object addon, String getter) {
-		Object channels = invokeNoArg(addon, getter);
-		return channels == null ? "?" : String.valueOf(channels);
-	}
-
-	/**
 	 * Called from a mixin on {@code ServerConfigurationPacketListenerImpl.finishCurrentTask}. Fabric and NeoForge
 	 * both implement the same common-networking handshake on {@code c:version}/{@code c:register}, but expose
 	 * different {@code ConfigurationTask.Type}s. Treat those task ids as aliases on the merged base.
 	 */
 	public static boolean finishEquivalentCommonTask(Object listener, Object requestedType) {
+		if (protocolMovesAreNeoForges() && isCommonTask(taskId(requestedType))) {
+			// A Fabric receiver finishing its common-networking task while NeoForge's handler is yet to answer the same
+			// payload: NeoForge's finish is the one, and comes when the receiver is done (see fabricInbound).
+			probe(() -> "  Fabric's own finish of " + taskId(requestedType) + " stands aside; NeoForge's handler finishes once");
+			return true;
+		}
 		Object currentTask = fieldValue(listener, "currentTask");
 		Object currentType = invokeNoArg(currentTask, "type");
 		String current = taskId(currentType);
@@ -355,6 +529,37 @@ public final class PayloadInterop {
 
 	private record MirrorRegistration(Object id, Object type, Object codec, Object protocol, Object flow,
 			String source) {
+		String version() {
+			return mirrorVersion(source, enumName(protocol));
+		}
+	}
+
+	/**
+	 * The version a mirror announces in NeoForge's negotiation, which both peers compare channel by channel: where the
+	 * channel came from ({@code fabric}, {@code local}) and its phase — never its direction. It named the direction once,
+	 * and a channel registered for both directions took the name of whichever was mirrored second; Fabric's registries are
+	 * found in {@code Class.getMethods()} order, which is not the same in the client's JVM and the server's, so one peer
+	 * announced {@code PLAY/SERVERBOUND} and the other {@code PLAY/CLIENTBOUND} for the same channel and NeoForge refused
+	 * the client ("Incompatible client!").
+	 */
+	static String mirrorVersion(String source, String protocol) {
+		int cut = source.indexOf('/');
+		return FORBRIC_MIRROR_VERSION + ":" + (cut < 0 ? source : source.substring(0, cut)) + "/" + protocol;
+	}
+
+	/**
+	 * The version of one registration standing for two: the same when both say the same, else every part of both in one
+	 * order, so which of the two came first never shows.
+	 */
+	static String mergedMirrorVersion(String existing, String mirrored) {
+		if (existing == null || existing.equals(mirrored)) return mirrored;
+		String prefix = FORBRIC_MIRROR_VERSION + ":";
+		java.util.TreeSet<String> parts = new java.util.TreeSet<>();
+		for (String version : List.of(existing, mirrored)) {
+			String bare = version.startsWith(prefix) ? version.substring(prefix.length()) : version;
+			parts.addAll(java.util.Arrays.asList(bare.split("\\+")));
+		}
+		return prefix + String.join("+", parts);
 	}
 
 	private static void mirrorMergedPayloadRegistries(ClassLoader loader) {
@@ -421,30 +626,14 @@ public final class PayloadInterop {
 
 	private static List<MirrorRegistration> reflectFabricRegistrations(ClassLoader loader) {
 		List<MirrorRegistration> out = new ArrayList<>();
-		Class<?> registryClass = load(loader, FABRIC_REGISTRY);
-		if (registryClass == null) return out;
-		Field packetTypesField = findField(registryClass, "packetTypes");
-		if (packetTypesField == null) return out;
-		packetTypesField.setAccessible(true);
-
-		for (String fieldName : List.of("SERVERBOUND_CONFIGURATION", "CLIENTBOUND_CONFIGURATION", "SERVERBOUND_PLAY",
-				"CLIENTBOUND_PLAY")) {
-			Object registry = staticField(registryClass, fieldName);
-			if (registry == null) continue;
-			try {
-				Object packetTypes = packetTypesField.get(registry);
-				if (!(packetTypes instanceof Map<?, ?> map)) continue;
-				Object protocol = invokeNoArg(registry, "getProtocol");
-				Object flow = invokeNoArg(registry, "getFlow");
-				for (Map.Entry<?, ?> entry : map.entrySet()) {
-					Object typeAndCodec = entry.getValue();
-					Object type = typeAndCodecType(typeAndCodec);
-					Object codec = typeAndCodecCodec(typeAndCodec);
-					if (entry.getKey() == null || type == null || codec == null || protocol == null || flow == null) continue;
-					out.add(new MirrorRegistration(entry.getKey(), type, codec, protocol, flow, "fabric/" + fieldName));
-				}
-			} catch (ReflectiveOperationException | RuntimeException e) {
-				Caught.warn(e, "[Forbric] could not inspect Fabric payload registry %s", fieldName);
+		for (FabricPayloadRegistries.Registry registry : FabricPayloadRegistries.all(loader)) {
+			String source = "fabric/" + enumName(registry.protocol()) + "/" + enumName(registry.flow());
+			for (Map.Entry<?, ?> entry : new ArrayList<>(registry.types().entrySet())) {
+				Object typeAndCodec = entry.getValue();
+				Object type = typeAndCodecType(typeAndCodec);
+				Object codec = typeAndCodecCodec(typeAndCodec);
+				if (entry.getKey() == null || type == null || codec == null) continue;
+				out.add(new MirrorRegistration(entry.getKey(), type, codec, registry.protocol(), registry.flow(), source));
 			}
 		}
 		return out;
@@ -477,7 +666,7 @@ public final class PayloadInterop {
 					boolean.class);
 				Object payloadRegistration = ctor.newInstance(registration.type(), registration.codec(),
 						List.of(registration.protocol()), Optional.of(registration.flow()),
-						FORBRIC_MIRROR_VERSION + ":" + registration.source(), Boolean.TRUE);
+						registration.version(), Boolean.TRUE);
 				Object existing = protocolMap.get(registration.id());
 				if (existing != null) {
 					if (!mergeNeoPayloadFlowIfNeeded(protocolMap, registration, existing, ctor)) return false;
@@ -503,8 +692,9 @@ public final class PayloadInterop {
 		if (!(existingFlow instanceof Optional<?> optional) || optional.isEmpty()) return false;
 		if (optional.get() == registration.flow()) return false;
 
+		String existingVersion = invokeNoArg(existing, "version") instanceof String version ? version : null;
 		Object merged = ctor.newInstance(invokeNoArg(existing, "type"), invokeNoArg(existing, "codec"),
-				List.of(registration.protocol()), Optional.empty(), FORBRIC_MIRROR_VERSION + ":" + registration.source(),
+				List.of(registration.protocol()), Optional.empty(), mergedMirrorVersion(existingVersion, registration.version()),
 				Boolean.TRUE);
 		protocolMap.put(registration.id(), merged);
 		return true;
@@ -527,21 +717,16 @@ public final class PayloadInterop {
 	private static Object mirrorNeoPayloadIntoFabricRegistry(ClassLoader loader, Object id, Object protocol, Object packetFlow) {
 		Object registration = neoRegistration(loader, id, protocol, packetFlow);
 		if (registration == null) return null;
-		Class<?> registryClass = load(loader, FABRIC_REGISTRY);
-		if (registryClass == null) return null;
-
-		String field = fabricRegistryField(protocol, packetFlow);
-		if (field == null) return null;
-		Object registry = staticField(registryClass, field);
+		FabricPayloadRegistries.Registry registry = FabricPayloadRegistries.find(loader, protocol, packetFlow);
 		if (registry == null) return null;
-		Object existing = invoke(registry, "get", id);
+		Object existing = registry.types().get(id);
 		if (existing != null) return existing;
 
 		Object type = invokeNoArg(registration, "type");
 		Object codec = invokeNoArg(registration, "codec");
 		if (type == null || codec == null) return null;
-		Object mirrored = invoke(registry, "register", type, codec);
-		return mirrored != null ? mirrored : invoke(registry, "get", id);
+		Object mirrored = FabricPayloadRegistries.register(loader, registry, type, codec);
+		return mirrored != null ? mirrored : registry.types().get(id);
 	}
 
 	private static Object neoRegistration(ClassLoader loader, Object id, Object protocol, Object packetFlow) {
@@ -618,6 +803,25 @@ public final class PayloadInterop {
 		}
 	}
 
+	/**
+	 * Whose codec writes a payload of this class first: the carrier whose own package the class is in (NeoForge's or
+	 * MinecraftForge's platform payloads), or the family of the mod jar the class was defined from — a Fabric mod's payload,
+	 * fabric-api's own payloads included (fabric-api is a mod jar of the Fabric family, whatever its packages are called), is
+	 * Fabric's to write. {@code null} for anything else: a payload of the game, a library, or a mod of another family, whose
+	 * codec is chosen by the registry entries below.
+	 */
+	static LoaderProbePolicy.Family encoderFamily(String payloadClass, LoaderProbePolicy.Family definingFamily) {
+		if (payloadClass.startsWith("net.neoforged.")) return LoaderProbePolicy.Family.NEOFORGE;
+		if (definingFamily == LoaderProbePolicy.Family.FABRIC) return LoaderProbePolicy.Family.FABRIC;
+		if (payloadClass.startsWith("net.minecraftforge.")) return LoaderProbePolicy.Family.FORGE;
+		return null;
+	}
+
+	/** The loader family of the mod jar {@code type} was defined from; null for the game, a carrier, a library or the kernel. */
+	private static LoaderProbePolicy.Family definingFamily(Class<?> type) {
+		return type.getClassLoader() instanceof ForbricClassLoader forbric ? forbric.familyOfClass(type.getName()) : null;
+	}
+
 	private static final class CandidateSet {
 		private final Object id;
 		private final Object local;
@@ -641,11 +845,12 @@ public final class PayloadInterop {
 		private Object selectEncode(Object payload) {
 			if (payload != null) {
 				String payloadClass = payload.getClass().getName();
-				if (payloadClass.startsWith("net.neoforged.")) return firstNonNull(neo, local, fabric, guest, fallback);
-				if (payloadClass.startsWith("net.fabricmc.")) return firstNonNull(fabric, local, neo, guest, fallback);
+				LoaderProbePolicy.Family writer = encoderFamily(payloadClass, definingFamily(payload.getClass()));
+				if (writer == LoaderProbePolicy.Family.NEOFORGE) return firstNonNull(neo, local, fabric, guest, fallback);
+				if (writer == LoaderProbePolicy.Family.FABRIC) return firstNonNull(fabric, local, neo, guest, fallback);
 				// A ForgePayload is Forge's own envelope for every channel it owns, minecraft:register included
 				// (ChannelListManager speaks it) — only Forge's codec knows how to write one.
-				if (payloadClass.startsWith("net.minecraftforge.")) return firstNonNull(forge, guest, fallback);
+				if (writer == LoaderProbePolicy.Family.FORGE) return firstNonNull(forge, guest, fallback);
 				// An unknown guest payload may share an id with a known registry type. Its original chosen codec
 				// is retained rather than sending that Java object unconditionally into Fabric's encoder.
 				if (guest != null) return guest;
@@ -753,7 +958,41 @@ public final class PayloadInterop {
 		if (listener == null || packet == null) return false;
 		Object payload = invokeNoArg(packet, "payload");
 		if (payload == null || !FORGE_PAYLOAD.equals(payload.getClass().getName())) return false;
-		Object connection = fieldValue(listener, "connection");
+		return offerToForge(payload, fieldValue(listener, "connection"), listener.getClass().getSimpleName());
+	}
+
+	/**
+	 * The merged game's own call to {@code ForgeHooks.onCustomPayload(CustomPacketPayload, Connection)}, pointed here
+	 * by {@code CommonNetworkInteropInjector} wherever a common-phase listener carries one: the same two references
+	 * in, the same answer out, so the call's stack shape and whatever the method does with the answer are untouched.
+	 * Where it returns on the answer (the client listener's {@code if (answer) return;}) this call is the method's one
+	 * Forge dispatch; where the answer is discarded (the server listener's patch POPs it), the injector's prologue in
+	 * front has already returned on every ForgePayload, so this call only ever answers false there.
+	 *
+	 * <p>On MinecraftForge the hook never sees anything but a {@code ForgePayload} for a channel it owns: Forge's codec
+	 * provider decodes every id Forge has a target for into one. A merged base cannot keep that promise — the decode
+	 * puts Forge last, so {@code minecraft:register} and {@code minecraft:unregister}, which Forge's channel-registration
+	 * channel also claims, arrive as NeoForge's records — and Forge's {@code CustomPayloadEvent} takes the data only from
+	 * a {@code ForgePayload}, so the channel is handed null and throws "Received empty payload". Measured: a merged
+	 * base that keeps MinecraftForge's call in {@code ClientCommonPacketListenerImpl.handleCustomPayload} could not
+	 * finish configuring against any server without fabric-api, whose own head injection otherwise eats those two.
+	 *
+	 * <p>So a payload that is not a {@code ForgePayload} is not offered (false, and the method goes on to NeoForge's
+	 * body, as it would for a payload Forge did not take); a {@code ForgePayload} goes to Forge's dispatcher and the
+	 * answer is true whether or not a handler took it — the same verdict as {@link #dispatchForgePayload}, because
+	 * NeoForge's body would disconnect on a channel it never negotiated, which Forge never does.
+	 */
+	public static boolean offerToForge(Object payload, Object connection) {
+		if (payload == null) return false;
+		if (!FORGE_PAYLOAD.equals(payload.getClass().getName())) {
+			probe(() -> "not offering " + payloadId(payload) + " (" + payload.getClass().getName()
+					+ ") to MinecraftForge's dispatcher — only a ForgePayload carries the data its channels read");
+			return false;
+		}
+		return offerToForge(payload, connection, "the merged listener");
+	}
+
+	private static boolean offerToForge(Object payload, Object connection, String where) {
 		if (connection == null) return false;
 		ClassLoader loader = loaderFor(payload);
 		Class<?> hooks = load(loader, FORGE_HOOKS);
@@ -762,15 +1001,14 @@ public final class PayloadInterop {
 		if (hooks == null || payloadApi == null || connectionCls == null) return false;
 		try {
 			Object handled = hooks.getMethod("onCustomPayload", payloadApi, connectionCls).invoke(null, payload, connection);
-			probe(() -> "forge dispatch of " + payloadId(payload) + " on " + listener.getClass().getSimpleName() + " -> " + handled);
+			probe(() -> "forge dispatch of " + payloadId(payload) + " on " + where + " -> " + handled);
 			if (!Boolean.TRUE.equals(handled)) {
 				ForbricLog.warn("[Forbric] no MinecraftForge handler took " + payloadId(payload) + " on "
-						+ listener.getClass().getSimpleName() + "; dropped, as Forge itself would");
+						+ where + "; dropped, as Forge itself would");
 			}
 		} catch (Throwable t) {
 			// Loud: a Forge mod's packet that its own dispatcher rejects is a bug in this bridge or in the mod.
-			Caught.warn(t, "[Forbric] MinecraftForge's dispatcher threw on %s (%s)", payloadId(payload),
-					listener.getClass().getSimpleName());
+			Caught.warn(t, "[Forbric] MinecraftForge's dispatcher threw on %s (%s)", payloadId(payload), where);
 		}
 		// A ForgePayload is Forge's whether or not a handler took it. Falling through would hand it to NeoForge's
 		// body, whose answer to a channel it never negotiated is to kick the client — a verdict Forge never gives.
@@ -1160,131 +1398,15 @@ public final class PayloadInterop {
 		return null;
 	}
 
-	/**
-	 * Records the PLAY channels a {@code c:register} carries into the connection, which is the half of Fabric's own
-	 * {@code c:register} handler this class replaces.
-	 *
-	 * <p>Fabric declares a client's PLAY receivers during CONFIGURATION, through {@code c:register} — not through
-	 * {@code minecraft:register}, which carries only the current phase's. {@code CommonPacketsImpl} takes the
-	 * channels of a {@code c:register} whose phase is {@code play} and adds them to the connection's
-	 * {@code ChannelInfoHolder}; {@code ServerPlayNetworkAddon}'s constructor then drains exactly that list into
-	 * its sendable set, and nothing else ever seeds it.
-	 *
-	 * <p>This class intercepts {@code c:register} to serve NeoForge's negotiation as well, and returns TRUE — which
-	 * cancels Fabric's own body. It replayed the addon call and not the recording, so the list stayed empty and
-	 * every Fabric PLAY channel was unsendable for the whole session. That is invisible for a mod that checks
-	 * {@code canSend} and skips; Cardinal Components does not check-and-skip, it DISCONNECTS — joining a world
-	 * ended with "This server requires Apoli: Legacy and Cardinal Components API (unhandled packet:
-	 * cardinal-components:entity_sync)", which names two mods and nothing else.
-	 *
-	 * <p>Server side only, and only for the {@code play} phase, because that is the whole of what Fabric's handler
-	 * does with it. {@code -Dforbric.fabricPlayChannels=off} leaves the list empty again.
-	 */
-	static final String PLAY_CHANNELS_PROPERTY = "forbric.fabricPlayChannels";
-
-	static boolean playChannelRecordingEnabled() {
-		return !"off".equalsIgnoreCase(System.getProperty(PLAY_CHANNELS_PROPERTY, "on"));
-	}
-
-	private static void recordPlayPhaseChannels(Object addon, Object payload) {
-		if (addon == null || payload == null || !playChannelRecordingEnabled()) return;
-		if (!addon.getClass().getName().startsWith(FABRIC_SERVER_ADDON_PACKAGE)) return;
-		try {
-			// The record component is `protocol`, not `phase` — the first version asked for "phase", got null from
-			// the reflective miss, and compared it against "play" forever.
-			Object declaredFor = invokeNoArg(payload, "protocol");
-			Object channels = invokeNoArg(payload, "channels");
-			if (!(channels instanceof Collection<?> ids) || ids.isEmpty()) return;
-
-			ClassLoader loader = loaderFor(addon, payload);
-			Class<?> protocol = load(loader, "net.minecraft.network.ConnectionProtocol");
-			Object play = protocol == null ? null : Enum.valueOf(protocol.asSubclass(Enum.class), "PLAY");
-			Object playId = play == null ? null : invokeNoArg(play, "id");
-			if (playId == null || !String.valueOf(playId).equals(String.valueOf(declaredFor))) return;
-
-			Object connection = fieldValue(addon, "connection");
-			Object pending = connection == null ? null : invoke(connection, "fabric_getPendingChannelsNames", play);
-			if (!(pending instanceof Collection<?> sink)) return;
-			@SuppressWarnings("unchecked")
-			Collection<Object> target = (Collection<Object>) sink;
-			target.addAll(ids);
-			probe(() -> "  recorded " + ids.size() + " PLAY channel(s) for the connection: " + ids);
-			ForbricLog.info("[Forbric/Net] recorded %d Fabric PLAY channel(s) the client declared during "
-					+ "configuration — the kernel serves c:register itself to reach NeoForge's negotiation too, and "
-					+ "Fabric's own handler is the only thing that puts them on the connection for the play addon "
-					+ "to inherit", ids.size());
-			// The declared half, and the moment to say what the two halves add up to: configuration is over,
-			// so a payload type with no channel behind it will not acquire one later — it will disconnect
-			// whoever sends on it.
-			NetworkChannelCensus.declared(net.forbric.api.Ecosystem.FABRIC, ids);
-			NetworkChannelCensus.report();
-		} catch (Throwable t) {
-			Caught.warn(t, "[Forbric/Net] could not record the client's Fabric PLAY channels — a Fabric mod's "
-					+ "play packets will be unsendable, and Cardinal Components disconnects rather than skipping");
-		}
-	}
-
-	private static Boolean handleFabricCommonNegotiationAddon(Object addon, Object payload) {
-		if (payload == null) return null;
-		String id = payloadId(payload);
-		if (!isCommonNegotiation(id)) return null;
-		if (load(loaderFor(addon, payload), NEO_NETWORK_REGISTRY) == null) return null;
-
-		String payloadClass = payload.getClass().getName();
-		if ("c:version".equals(id)) {
-			int version = commonVersion(payload);
-			if (version > 0) invoke(addon, "onCommonVersionPacket", version);
-			Object listener = commonPacketListener(addon);
-			Object neoPayload = NEO_COMMON_VERSION_PAYLOAD.equals(payloadClass)
-					? payload
-					: createNeoCommonVersionPayload(payload);
-			if (listener != null && neoPayload != null) {
-				invokeNeoNetworkRegistry("checkCommonVersion", listener, neoPayload);
-			}
-			return Boolean.TRUE;
-		}
-
-		if ("c:register".equals(id)) {
-			Object fabricPayload = FABRIC_COMMON_REGISTER_PAYLOAD.equals(payloadClass)
-					? payload
-					: createFabricCommonRegisterPayload(payload);
-			if (fabricPayload != null) invoke(addon, "onCommonRegisterPacket", fabricPayload);
-			// …and the OTHER half of Fabric's own c:register handler, which this method replaces.
-			recordPlayPhaseChannels(addon, fabricPayload != null ? fabricPayload : payload);
-			Object listener = commonPacketListener(addon);
-			Object neoPayload = NEO_COMMON_REGISTER_PAYLOAD.equals(payloadClass)
-					? payload
-					: createNeoCommonRegisterPayload(addon, payload);
-			if (listener != null && neoPayload != null) {
-				invokeNeoNetworkRegistry("onCommonRegister", listener, neoPayload);
-			}
-			return Boolean.TRUE;
-		}
-
-		return null;
-	}
-
 	private static Object fabricTypeAndCodec(Object id, Object protocol, Object packetFlow) {
-		ClassLoader loader = loaderFor(id, protocol, packetFlow);
-		Class<?> registryClass = load(loader, FABRIC_REGISTRY);
-		if (registryClass == null) return null;
-
-		String field = fabricRegistryField(protocol, packetFlow);
-		if (field == null) return null;
-		Object registry = staticField(registryClass, field);
-		if (registry == null) return null;
-		Object entry = invoke(registry, "get", id);
-		return entry != null ? entry : mirrorNeoPayloadIntoFabricRegistry(loader, id, protocol, packetFlow);
+		Object entry = fabricTypeAndCodecOnly(id, protocol, packetFlow);
+		return entry != null ? entry : mirrorNeoPayloadIntoFabricRegistry(loaderFor(id, protocol, packetFlow), id, protocol, packetFlow);
 	}
 
-	private static String fabricRegistryField(Object protocol, Object packetFlow) {
-		String protocolName = enumName(protocol);
-		String flowName = enumName(packetFlow);
-		if ("CONFIGURATION".equals(protocolName) && "CLIENTBOUND".equals(flowName)) return "CLIENTBOUND_CONFIGURATION";
-		if ("CONFIGURATION".equals(protocolName) && "SERVERBOUND".equals(flowName)) return "SERVERBOUND_CONFIGURATION";
-		if ("PLAY".equals(protocolName) && "CLIENTBOUND".equals(flowName)) return "CLIENTBOUND_PLAY";
-		if ("PLAY".equals(protocolName) && "SERVERBOUND".equals(flowName)) return "SERVERBOUND_PLAY";
-		return null;
+	/** Fabric's own type and codec for {@code id} in this phase and direction, without mirroring anything into it. */
+	private static Object fabricTypeAndCodecOnly(Object id, Object protocol, Object packetFlow) {
+		FabricPayloadRegistries.Registry registry = FabricPayloadRegistries.find(loaderFor(id, protocol, packetFlow), protocol, packetFlow);
+		return registry == null || id == null ? null : registry.types().get(id);
 	}
 
 	private static Object neoCodec(Object id, Object protocol, Object packetFlow) {
@@ -1332,9 +1454,7 @@ public final class PayloadInterop {
 		if (!register && !unregister) return null;
 
 		Object channels;
-		if (FABRIC_REGISTRATION_PAYLOAD.equals(className)) {
-			channels = invokeNoArg(payload, "channels");
-		} else if (NEO_REGISTER_PAYLOAD.equals(className)) {
+		if (NEO_REGISTER_PAYLOAD.equals(className)) {
 			channels = invokeNoArg(payload, "newChannels");
 			register = true;
 		} else if (NEO_UNREGISTER_PAYLOAD.equals(className)) {
@@ -1345,139 +1465,6 @@ public final class PayloadInterop {
 		}
 		if (!(channels instanceof Collection<?> collection)) return null;
 		return new Registration(register, collection);
-	}
-
-	private static int commonVersion(Object payload) {
-		Object versions = invokeNoArg(payload, "versions");
-		if (versions instanceof int[] ints) {
-			for (int version : ints) if (version == 1) return 1;
-			return ints.length == 0 ? -1 : ints[0];
-		}
-		if (versions instanceof Collection<?> collection) {
-			for (Object version : collection) {
-				if (version instanceof Number number && number.intValue() == 1) return 1;
-			}
-			for (Object version : collection) {
-				if (version instanceof Number number) return number.intValue();
-			}
-		}
-		return -1;
-	}
-
-	private static Object createNeoCommonVersionPayload(Object payload) {
-		ClassLoader loader = loaderFor(payload);
-		Class<?> payloadClass = load(loader, NEO_COMMON_VERSION_PAYLOAD);
-		if (payloadClass == null) return null;
-		Object versions = invokeNoArg(payload, "versions");
-		List<Integer> list = new ArrayList<>();
-		if (versions instanceof int[] ints) {
-			for (int version : ints) list.add(version);
-		} else if (versions instanceof Collection<?> collection) {
-			for (Object version : collection) {
-				if (version instanceof Number number) list.add(number.intValue());
-			}
-		}
-		try {
-			for (java.lang.reflect.Constructor<?> ctor : payloadClass.getConstructors()) {
-				Class<?>[] params = ctor.getParameterTypes();
-				if (params.length == 1 && List.class.isAssignableFrom(params[0])) {
-					return ctor.newInstance(list);
-				}
-			}
-		} catch (ReflectiveOperationException | RuntimeException e) {
-			Caught.warn(e, "[Forbric] could not synthesize NeoForge common-version payload");
-		}
-		return null;
-	}
-
-	private static Object createFabricCommonRegisterPayload(Object payload) {
-		ClassLoader loader = loaderFor(payload);
-		Class<?> payloadClass = load(loader, FABRIC_COMMON_REGISTER_PAYLOAD);
-		if (payloadClass == null) return null;
-		Object channels = invokeNoArg(payload, "channels");
-		if (!(channels instanceof Set<?> set)) return null;
-		int version = intValue(invokeNoArg(payload, "version"), 1);
-		String protocol = protocolId(invokeNoArg(payload, "protocol"));
-		try {
-			for (java.lang.reflect.Constructor<?> ctor : payloadClass.getConstructors()) {
-				Class<?>[] params = ctor.getParameterTypes();
-				if (params.length == 3 && params[0] == int.class && params[1] == String.class
-						&& Set.class.isAssignableFrom(params[2])) {
-					return ctor.newInstance(version, protocol, set);
-				}
-			}
-		} catch (ReflectiveOperationException | RuntimeException e) {
-			Caught.warn(e, "[Forbric] could not synthesize Fabric common-register payload");
-		}
-		return null;
-	}
-
-	private static Object createNeoCommonRegisterPayload(Object addon, Object payload) {
-		ClassLoader loader = loaderFor(addon, payload);
-		Class<?> payloadClass = load(loader, NEO_COMMON_REGISTER_PAYLOAD);
-		if (payloadClass == null) return null;
-		Object channels = invokeNoArg(payload, "channels");
-		if (!(channels instanceof Set<?> set)) return null;
-		int version = intValue(invokeNoArg(payload, "version"), 1);
-		Object protocol = protocolById(loader, protocolId(invokeNoArg(payload, "protocol")));
-		if (protocol == null) return null;
-		try {
-			for (java.lang.reflect.Constructor<?> ctor : payloadClass.getConstructors()) {
-				Class<?>[] params = ctor.getParameterTypes();
-				if (params.length == 3 && params[0] == int.class && params[1].isInstance(protocol)
-						&& Set.class.isAssignableFrom(params[2])) {
-					return ctor.newInstance(version, protocol, set);
-				}
-			}
-		} catch (ReflectiveOperationException | RuntimeException e) {
-			Caught.warn(e, "[Forbric] could not synthesize NeoForge common-register payload");
-		}
-		return null;
-	}
-
-	private static Object createFabricRegistrationPayload(Object payload, boolean register, Collection<?> channels) {
-		ClassLoader loader = loaderFor(payload);
-		Class<?> payloadClass = load(loader, FABRIC_REGISTRATION_PAYLOAD);
-		if (payloadClass == null) return null;
-		try {
-			Object type = staticField(payloadClass, register ? "REGISTER" : "UNREGISTER");
-			for (java.lang.reflect.Constructor<?> ctor : payloadClass.getConstructors()) {
-				Class<?>[] params = ctor.getParameterTypes();
-				if (params.length != 2 || !List.class.isAssignableFrom(params[1])) continue;
-				return ctor.newInstance(type, new ArrayList<>(channels));
-			}
-		} catch (ReflectiveOperationException | RuntimeException e) {
-			Caught.warn(e, "[Forbric] could not synthesize Fabric channel-registration payload");
-		}
-		return null;
-	}
-
-	private static boolean invokeReceiveRegistration(Object addon, boolean register, Object fabricPayload) {
-		Method method = findMethod(addon.getClass(), "receiveRegistration", boolean.class, fabricPayload.getClass());
-		if (method == null) {
-			// Silent before. This is the single point where the client's whole Fabric channel declaration is
-			// produced — receiveRegistration is the only caller of sendInitialChannelRegistrationPacket — so a
-			// quiet miss here reads downstream as "the server thinks you have no Fabric API".
-			ForbricLog.warn("[Forbric] no receiveRegistration(boolean," + fabricPayload.getClass().getName()
-					+ ") on " + addon.getClass().getName() + "; Fabric's channel set was left untouched");
-			return false;
-		}
-		try {
-			method.setAccessible(true);
-			method.invoke(addon, register, fabricPayload);
-			return true;
-		} catch (ReflectiveOperationException | RuntimeException e) {
-			Caught.warn(e, "[Forbric] could not mirror channel-registration payload into Fabric networking");
-			// The loader's own log is not always wired on a dedicated server; under -Dforbric.debug say it here too.
-			probe(() -> "  receiveRegistration threw: " + stackTraceOf(unwrap(e)));
-			return false;
-		}
-	}
-
-	private static String stackTraceOf(Throwable t) {
-		java.io.StringWriter out = new java.io.StringWriter();
-		t.printStackTrace(new java.io.PrintWriter(out));
-		return out.toString();
 	}
 
 	private static void syncNeoChannels(Object connection, boolean register, Collection<?> channels) {
@@ -1500,11 +1487,6 @@ public final class PayloadInterop {
 		}
 	}
 
-	private static Object commonPacketListener(Object addon) {
-		Object listener = fieldValue(addon, "listener");
-		return listener != null ? listener : fieldValue(addon, "handler");
-	}
-
 	private static void invokeNeoNetworkRegistry(String name, Object listener, Object payload) {
 		Class<?> registry = load(loaderFor(listener, payload), NEO_NETWORK_REGISTRY);
 		if (registry == null) return;
@@ -1522,6 +1504,11 @@ public final class PayloadInterop {
 	private static boolean isCommonNegotiation(Object id) {
 		String s = String.valueOf(id);
 		return "c:version".equals(s) || "c:register".equals(s);
+	}
+
+	private static boolean isCommonTask(String id) {
+		return "c:version".equals(id) || "c:register".equals(id) || "neoforge:common_version".equals(id)
+				|| "neoforge:common_register".equals(id);
 	}
 
 	private static boolean equivalentCommonTask(String a, String b) {
@@ -1561,30 +1548,6 @@ public final class PayloadInterop {
 		return id == null ? null : String.valueOf(id);
 	}
 
-	private static int intValue(Object value, int fallback) {
-		return value instanceof Number number ? number.intValue() : fallback;
-	}
-
-	private static String protocolId(Object protocol) {
-		if (protocol == null) return "configuration";
-		Object id = invokeNoArg(protocol, "id");
-		if (id instanceof String s) return s;
-		return String.valueOf(protocol).toLowerCase(java.util.Locale.ROOT);
-	}
-
-	private static Object protocolById(ClassLoader loader, String id) {
-		Class<?> protocolClass = load(loader, "net.minecraft.network.ConnectionProtocol");
-		if (protocolClass == null) return null;
-		Object values = invokeStatic(protocolClass, "values");
-		if (values == INVOKE_FAILED || values == null || !values.getClass().isArray()) return null;
-		int length = java.lang.reflect.Array.getLength(values);
-		for (int i = 0; i < length; i++) {
-			Object value = java.lang.reflect.Array.get(values, i);
-			if (id.equals(protocolId(value))) return value;
-		}
-		return null;
-	}
-
 	private static String enumName(Object value) {
 		Object name = invokeNoArg(value, "name");
 		return name instanceof String ? (String) name : String.valueOf(value);
@@ -1616,6 +1579,33 @@ public final class PayloadInterop {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * The value of the one instance field, in {@code owner}'s class or a superclass, declared as the class named
+	 * {@code typeName} or a subtype of it — read by what the field holds, not by what it is called. Null when there is
+	 * none, or more than one.
+	 */
+	private static Object valueOfType(Object owner, String typeName) {
+		if (owner == null) return null;
+		Class<?> type = load(owner.getClass().getClassLoader(), typeName);
+		if (type == null) return null;
+		Field only = null;
+		for (Class<?> c = owner.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+			for (Field field : c.getDeclaredFields()) {
+				if (java.lang.reflect.Modifier.isStatic(field.getModifiers()) || !type.isAssignableFrom(field.getType())) continue;
+				if (only != null) return null;
+				only = field;
+			}
+		}
+		if (only == null) return null;
+		try {
+			only.setAccessible(true);
+			return only.get(owner);
+		} catch (ReflectiveOperationException | RuntimeException e) {
+			Caught.warn(e, "[Forbric] could not read %s.%s", only.getDeclaringClass().getName(), only.getName());
+			return null;
+		}
 	}
 
 	private static Field findField(Class<?> owner, String name) {

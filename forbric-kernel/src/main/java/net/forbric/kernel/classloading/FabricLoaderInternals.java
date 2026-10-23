@@ -54,7 +54,15 @@ public final class FabricLoaderInternals {
 			"net.fabricmc.loader.impl.entrypoint.EntrypointStorage$NewEntry",
 			"net.fabricmc.loader.impl.util.DefaultLanguageAdapter",
 			"net.fabricmc.loader.impl.util.StringUtil",
-			"net.fabricmc.loader.impl.util.version.StringVersion");
+			"net.fabricmc.loader.impl.util.version.StringVersion",
+			"net.fabricmc.loader.launch.common.FabricLauncher",
+			"net.fabricmc.loader.launch.common.FabricLauncherBase",
+			"net.fabricmc.loader.impl.metadata.LoaderModMetadata",
+			"net.fabricmc.loader.impl.metadata.EntrypointMetadata",
+			"net.fabricmc.loader.impl.metadata.ModMetadataParser",
+			"net.fabricmc.loader.impl.metadata.VersionOverrides",
+			"net.fabricmc.loader.impl.metadata.DependencyOverrides",
+			"net.fabricmc.loader.impl.discovery.ModCandidateImpl");
 
 	/** Shipped internals the game itself calls; pinned, never withheld. */
 	static final Set<String> ALWAYS = Set.of("net.fabricmc.loader.impl.game.minecraft.Hooks");

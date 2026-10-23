@@ -31,6 +31,11 @@ import net.forbric.kernel.util.Caught;
  * {@code ClientHooks.onKeyInput(event, action)}. A guest's {@code RETURN} ordinal counts the native returns, so it names
  * a return the current body may no longer have, or a different one.
  *
+ * <p>The joined exits arrive at the JOIN: the straight-line run that ends in the hook, entered only at its first
+ * instruction. Besides the hook's own operand loads it may hold other void calls fed by operand loads alone — another
+ * ecosystem's twin of the hook that a merge kept in front of it — so the join may begin before the hook itself; its
+ * first call ({@link #entry()}) is where "before the hook" now starts.
+ *
  * <p>Everything here is read off the two bodies; no ordinal is assumed. The int parameter the hook receives is the
  * discriminator. A forward analysis of each body records, for every instruction, which of the constants that
  * parameter is compared with — or none of them — it can still equal there.
@@ -68,6 +73,16 @@ final class JoinedReturnExits {
 		}
 	}
 
+	/**
+	 * A native early return the carrier sends into the join on a decision instead: natively the return is reached exactly when
+	 * the {@code occurrence}-th call of {@code member} (the call right before the one conditional jump that leads to it) answers
+	 * {@code nonZero} (true, or any non-zero int); in the current body that same call, on that same answer, jumps into the join
+	 * (Minecraft.handleGlobalKeyPress in keyPress: a global key it handled returns natively, and reaches NeoForge's hook
+	 * merged). The discriminator cannot tell such a path apart — it carries the very values that reach the final return.
+	 */
+	record DecisionExit(int ordinal, String member, int occurrence, boolean nonZero) {
+	}
+
 	private final int parameter;
 	private final int[] constants;
 	private final int nativeReturns;
@@ -75,9 +90,13 @@ final class JoinedReturnExits {
 	private final BitSet finalValues;
 	private final boolean finalBounded;
 	private final Map<Integer, BitSet> joined;
+	private final String entry;
+	private final int entryOrdinal;
+	private final List<DecisionExit> decisions;
 
 	private JoinedReturnExits(int parameter, int[] constants, int nativeReturns, int currentReturns, BitSet finalValues,
-			boolean finalBounded, Map<Integer, BitSet> joined) {
+			boolean finalBounded, Map<Integer, BitSet> joined, String entry, int entryOrdinal, List<DecisionExit> decisions) {
+		this.decisions = List.copyOf(decisions);
 		this.parameter = parameter;
 		this.constants = constants;
 		this.nativeReturns = nativeReturns;
@@ -85,6 +104,29 @@ final class JoinedReturnExits {
 		this.finalValues = finalValues;
 		this.finalBounded = finalBounded;
 		this.joined = joined;
+		this.entry = entry;
+		this.entryOrdinal = entryOrdinal;
+	}
+
+	/**
+	 * The member ({@code Lowner;name(desc)}) of the join's first call: the hook itself, or a call the merge kept in front
+	 * of it in the same join. A joined exit runs just before it.
+	 */
+	String entry() {
+		return entry;
+	}
+
+	/** Which occurrence of {@link #entry()} in the current body the join's first call is (an {@code INVOKE} ordinal). */
+	int entryOrdinal() {
+		return entryOrdinal;
+	}
+
+	/**
+	 * The native early returns the current body reaches the final return from on a decision (see {@link DecisionExit}): a
+	 * handler of the native final return must not run on a path that took one. Empty where none was proved.
+	 */
+	List<DecisionExit> decisionExits() {
+		return decisions;
 	}
 
 	/** How many returns the native body has: the count a guest's {@code RETURN} ordinal was written against. */
@@ -123,8 +165,10 @@ final class JoinedReturnExits {
 
 	/**
 	 * Reads both bodies of one method. Null unless the current body calls {@code hook} once, immediately before its final
-	 * return, with exactly one int argument loaded from a parameter neither body writes, and the native body does not
-	 * call {@code hook} (a guest compiled against the joined body counts its returns already).
+	 * return (or a goto to it, over the return blocks a split placed in front of it), with exactly one int argument loaded
+	 * from a parameter neither body writes, the join ending in it holds nothing but operand loads and void calls they
+	 * alone feed, and the native body does not call {@code hook} (a guest
+	 * compiled against the joined body counts its returns already).
 	 */
 	static JoinedReturnExits of(ClassNode originalOwner, MethodNode original, ClassNode currentOwner, MethodNode current,
 			String hook) {
@@ -136,7 +180,9 @@ final class JoinedReturnExits {
 		MethodInsnNode call = hooks.getFirst();
 		int returnOpcode = Type.getReturnType(current.desc).getOpcode(Opcodes.IRETURN);
 		List<AbstractInsnNode> originalReturns = returns(original, returnOpcode), currentReturns = returns(current, returnOpcode);
-		if (originalReturns.isEmpty() || currentReturns.isEmpty() || executable(call.getNext()) != currentReturns.getLast()) return null;
+		// The hook precedes the final return: next to it, or across the blocks a split placed in front of the tail
+		// (VanillaEarlyReturns gives a folded early return its own block there, which the hook's run jumps over).
+		if (originalReturns.isEmpty() || currentReturns.isEmpty() || reached(call.getNext()) != currentReturns.getLast()) return null;
 		try {
 			Frame<SourceValue>[] currentFrames = new Analyzer<>(new SourceInterpreter()).analyze(currentOwner.name, current);
 			Frame<SourceValue>[] originalFrames = new Analyzer<>(new SourceInterpreter()).analyze(originalOwner.name, original);
@@ -149,9 +195,12 @@ final class JoinedReturnExits {
 			int[] constants = universe.stream().mapToInt(Integer::intValue).toArray();
 			Flow before = new Flow(original, originalFrames, slot, constants), after = new Flow(current, currentFrames, slot, constants);
 
-			// The hook's own run: the pure operand loads in front of it, entered only at its first instruction.
+			// The join: the run in front of the hook, entered only at its first instruction, holding operand loads and
+			// void calls fed by them alone — nothing that computes a value or touches state before the hook but calls.
 			List<AbstractInsnNode> hookRun = run(current, call, false);
-			for (AbstractInsnNode operand : hookRun) if (!(operand instanceof VarInsnNode load && load.getOpcode() <= Opcodes.ALOAD)) return null;
+			MethodInsnNode first = joinEntry(hookRun, call);
+			if (first == null) return null;
+			int entryOrdinal = calls(current, CallOccurrenceAlignment.member(first)).indexOf(first);
 			AbstractInsnNode hookEntry = hookRun.isEmpty() ? call : hookRun.getFirst();
 			Set<AbstractInsnNode> inside = Collections.newSetFromMap(new IdentityHashMap<>());
 			inside.addAll(hookRun);
@@ -186,12 +235,79 @@ final class JoinedReturnExits {
 			}
 			BitSet finalValues = before.at(originalReturns.getLast()), currentFinal = (BitSet) after.at(currentReturns.getLast()).clone();
 			currentFinal.andNot(finalValues);
+			List<DecisionExit> decisions = new ArrayList<>();
+			for (int ordinal = 0; ordinal + 1 < originalReturns.size(); ordinal++) {
+				if (joined.containsKey(ordinal)) continue;
+				DecisionExit decision = decisionExit(original, current, originalReturns.get(ordinal), ordinal, hookEntry);
+				if (decision != null) decisions.add(decision);
+			}
 			return new JoinedReturnExits(parameter, constants, originalReturns.size(), currentReturns.size(), finalValues,
-					currentFinal.isEmpty(), joined);
+					currentFinal.isEmpty(), joined, CallOccurrenceAlignment.member(first), entryOrdinal, decisions);
 		} catch (AnalyzerException | RuntimeException unanalysable) {
 			Caught.expected(unanalysable);
 			return null;
 		}
+	}
+
+	/**
+	 * {@code exit} as a native return reached on one call's answer, which the current body sends into the join at
+	 * {@code hookEntry} instead; null otherwise. Natively: the return alone in its block, entered only by falling past (or
+	 * jumping from) one {@code IFEQ}/{@code IFNE} that directly tests a call's answer. Currently: the same occurrence of that
+	 * call (both bodies make it equally often), directly tested by one {@code IFEQ}/{@code IFNE} whose way for that answer is
+	 * the join's first instruction — and no backward jump in the current body, so the call is asked at most once a call.
+	 */
+	private static DecisionExit decisionExit(MethodNode original, MethodNode current, AbstractInsnNode exit, int ordinal, AbstractInsnNode hookEntry) {
+		for (AbstractInsnNode instruction : current.instructions)
+			if (instruction instanceof JumpInsnNode back && current.instructions.indexOf(back.label) <= current.instructions.indexOf(back)) return null;
+		List<JumpInsnNode> into = new ArrayList<>();
+		for (AbstractInsnNode instruction : original.instructions)
+			if (instruction instanceof JumpInsnNode jump && executable(jump.label) == exit) into.add(jump);
+		if (original.tryCatchBlocks != null) for (TryCatchBlockNode block : original.tryCatchBlocks) if (executable(block.handler) == exit) return null;
+		AbstractInsnNode before = exit.getPrevious();
+		while (before != null && before.getOpcode() < 0) before = before.getPrevious();
+		JumpInsnNode test;
+		boolean nonZero;
+		if (into.isEmpty() && before instanceof JumpInsnNode fallen && (fallen.getOpcode() == Opcodes.IFEQ || fallen.getOpcode() == Opcodes.IFNE)) {
+			test = fallen;
+			nonZero = fallen.getOpcode() == Opcodes.IFEQ;   // falling past IFEQ: the value was not zero
+		} else if (into.size() == 1 && (into.getFirst().getOpcode() == Opcodes.IFEQ || into.getFirst().getOpcode() == Opcodes.IFNE)
+				&& before != null && (Flow.transfers(before) && !(before instanceof JumpInsnNode conditional && conditional.getOpcode() != Opcodes.GOTO))) {
+			test = into.getFirst();
+			nonZero = test.getOpcode() == Opcodes.IFNE;
+		} else return null;
+		AbstractInsnNode producer = test.getPrevious();
+		while (producer != null && producer.getOpcode() < 0) producer = producer.getPrevious();
+		if (!(producer instanceof MethodInsnNode call) || Type.getReturnType(call.desc).getSort() == Type.VOID) return null;
+		String member = CallOccurrenceAlignment.member(call);
+		List<MethodInsnNode> nativeCalls = calls(original, member), currentCalls = calls(current, member);
+		int occurrence = nativeCalls.indexOf(call);
+		if (occurrence < 0 || nativeCalls.size() != currentCalls.size()) return null;
+		AbstractInsnNode next = executable(currentCalls.get(occurrence).getNext());
+		if (!(next instanceof JumpInsnNode decided) || decided.getOpcode() != Opcodes.IFEQ && decided.getOpcode() != Opcodes.IFNE) return null;
+		boolean jumps = (decided.getOpcode() == Opcodes.IFNE) == nonZero;
+		return reached(jumps ? decided.label : decided.getNext()) == hookEntry ? new DecisionExit(ordinal, member, occurrence, nonZero) : null;
+	}
+
+	/**
+	 * The first call of the join whose run in front of {@code hook} is {@code run}: {@code hook} itself when the run is its
+	 * operand loads alone; else the earliest of the void calls in it, each consuming exactly the loads in front of it.
+	 * Null when the run holds anything else.
+	 */
+	private static MethodInsnNode joinEntry(List<AbstractInsnNode> run, MethodInsnNode hook) {
+		MethodInsnNode first = null;
+		int pending = 0;
+		for (AbstractInsnNode instruction : run) {
+			if (instruction instanceof VarInsnNode load && load.getOpcode() <= Opcodes.ALOAD) {
+				pending++;
+			} else if (instruction instanceof MethodInsnNode call && Type.getReturnType(call.desc) == Type.VOID_TYPE
+					&& pending == Type.getArgumentTypes(call.desc).length + (call.getOpcode() == Opcodes.INVOKESTATIC ? 0 : 1)) {
+				if (first == null) first = call;
+				pending = 0;
+			} else {
+				return null;
+			}
+		}
+		return first == null ? hook : first;
 	}
 
 	/** The local slot of the hook's one int argument that is a parameter load, or -1. */
@@ -256,6 +372,13 @@ final class JoinedReturnExits {
 	static AbstractInsnNode executable(AbstractInsnNode node) {
 		while (node != null && node.getOpcode() < 0) node = node.getNext();
 		return node;
+	}
+
+	/** The instruction straight-line execution reaches from {@code node}: past labels and frames, and through gotos. */
+	static AbstractInsnNode reached(AbstractInsnNode node) {
+		AbstractInsnNode at = executable(node);
+		for (int guard = 0; at instanceof JumpInsnNode jump && jump.getOpcode() == Opcodes.GOTO && guard < 16; guard++) at = executable(jump.label);
+		return at;
 	}
 
 	/** The run that feeds an arrival at the hook: what precedes a goto, a fall-through's own run, nothing for a branch. */

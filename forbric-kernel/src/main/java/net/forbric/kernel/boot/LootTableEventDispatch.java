@@ -38,7 +38,6 @@ public final class LootTableEventDispatch {
 	static final String LOADED_IFACE = EVENTS + "$Loaded";
 	static final String BUILDER_API = "net.fabricmc.fabric.api.loot.v3.FabricLootTableBuilder";
 	static final String SOURCE = "net.fabricmc.fabric.api.loot.v3.LootTableSource";
-	static final String LOOT_UTIL = "net.fabricmc.fabric.impl.loot.LootUtil";
 	static final String LOOT_TABLE = "net.minecraft.world.level.storage.loot.LootTable";
 	static final String LOOT_TABLE_BUILDER = LOOT_TABLE + "$Builder";
 	static final String RESOURCE_KEY = "net.minecraft.resources.ResourceKey";
@@ -56,7 +55,9 @@ public final class LootTableEventDispatch {
 	 * @param build    {@code (builder) -> table}
 	 * @param dataPack {@code LootTableSource.DATA_PACK}
 	 * @param replaced {@code LootTableSource.REPLACED}
-	 * @param sources  {@code LootUtil.SOURCES}, a thread-local {@code Map<Identifier, LootTableSource>}
+	 * @param sources  a thread-local {@code Map<Identifier, LootTableSource>} of the sources recorded for this reload; the
+	 *                 public-API fallback has none to read (it is the original callback group's), so every table is
+	 *                 offered as {@code DATA_PACK} there
 	 */
 	record Handles(MethodHandle replace, MethodHandle modify, MethodHandle loaded, MethodHandle copyOf,
 			MethodHandle build, Object dataPack, Object replaced, ThreadLocal<?> sources, MethodHandle bindHolders) {
@@ -92,6 +93,19 @@ public final class LootTableEventDispatch {
 			state = State.UNRESOLVED;
 			handles = null;
 			sourceCallbacks=null;
+			OFFERED.set(0);
+			REPLACE_TOOK.set(0);
+			MODIFY_FIRED.set(0);
+		}
+	}
+
+	/** Test seam: a proved original callback group, as {@link LootSourceCallbacks#callbacks} links it in game. */
+	static void bindOriginalForTest(LootSourceCallbacks.Callbacks original) {
+		synchronized (LootTableEventDispatch.class) {
+			guestLoader = null;
+			handles = null;
+			sourceCallbacks = original;
+			state = original == null ? State.ABSENT : State.PRESENT;
 			OFFERED.set(0);
 			REPLACE_TOOK.set(0);
 			MODIFY_FIRED.set(0);
@@ -153,7 +167,15 @@ public final class LootTableEventDispatch {
 	public static void allLoaded(Object resourceManager, Object registry) {
 		if (!enabled() || !resolve()) return;
 		LootSourceCallbacks.Callbacks original=sourceCallbacks;
-		if(original!=null){try{original.allLoaded().invoke(resourceManager,registry);OFFERED.set(0);return;}catch(Throwable failure){throw propagate(failure);}}
+		if(original!=null){
+			try{original.allLoaded().invoke(resourceManager,registry);}catch(Throwable failure){throw propagate(failure);}
+			// The same summary the fallback below prints, naming the path that ran: a reload that offered nothing to
+			// a mod's loot listeners and one that offered every table look identical otherwise.
+			ForbricLog.info("[Forbric/LootBridge] offered %d loot table(s) to fabric-loot-api-v3's own callbacks, run "
+					+ "on NeoForge's LootTableLoadEvent seam: ALL_LOADED fired with %d entries", OFFERED.getAndSet(0),
+					sizeOf(registry));
+			return;
+		}
 		Handles h = handles;
 		try {
 			h.loaded().invoke(resourceManager, registry);
@@ -205,7 +227,6 @@ public final class LootTableEventDispatch {
 			Class<?> loadedIface = Class.forName(LOADED_IFACE, false, loader);
 			Class<?> builderApi = Class.forName(BUILDER_API, false, loader);
 			Class<?> source = Class.forName(SOURCE, false, loader);
-			Class<?> lootUtil = Class.forName(LOOT_UTIL, true, loader);
 			Class<?> lootTable = Class.forName(LOOT_TABLE, false, loader);
 			Class<?> builder = Class.forName(LOOT_TABLE_BUILDER, false, loader);
 			Class<?> resourceKey = Class.forName(RESOURCE_KEY, false, loader);
@@ -214,7 +235,6 @@ public final class LootTableEventDispatch {
 			Class<?> registry = Class.forName(REGISTRY, false, loader);
 			Class<?> holder = Class.forName("net.minecraft.core.Holder",false,loader);
 			Class<?> reference = Class.forName("net.minecraft.core.Holder$Reference",false,loader);
-			Class<?> fabricTable = Class.forName("net.fabricmc.fabric.impl.loot.FabricLootTable",false,loader);
 
 			MethodHandles.Lookup lookup = MethodHandles.publicLookup();
 			MethodHandle invoker = lookup.findVirtual(event, "invoker", MethodType.methodType(Object.class));
@@ -229,8 +249,9 @@ public final class LootTableEventDispatch {
 			MethodHandle build = lookup.findVirtual(builder, "build", MethodType.methodType(lootTable));
 			MethodHandle elements=lookup.findVirtual(registry,"listElements",MethodType.methodType(java.util.stream.Stream.class));
 			MethodHandle value=lookup.findVirtual(reference,"value",MethodType.methodType(Object.class));
-			MethodHandle set=lookup.findVirtual(fabricTable,"fabric$setHolder",MethodType.methodType(void.class,holder));
-			MethodHandle binding=MethodHandles.insertArguments(MethodHandles.lookup().findStatic(LootTableEventDispatch.class,"bindHolders",MethodType.methodType(void.class,MethodHandle.class,MethodHandle.class,MethodHandle.class,Object.class)),0,elements,value,set);
+			MethodHandle set=holderSetter(lootTable,holder,lookup);
+			MethodHandle binding=set==null?MethodHandles.dropArguments(MethodHandles.empty(MethodType.methodType(void.class)),0,Object.class)
+					:MethodHandles.insertArguments(MethodHandles.lookup().findStatic(LootTableEventDispatch.class,"bindHolders",MethodType.methodType(void.class,MethodHandle.class,MethodHandle.class,MethodHandle.class,Object.class)),0,elements,value,set);
 
 			Handles resolved = new Handles(
 					onCurrentInvoker(replace, invoker, events.getField("REPLACE").get(null), 4, Object.class),
@@ -240,7 +261,7 @@ public final class LootTableEventDispatch {
 					build.asType(MethodType.genericMethodType(1)),
 					source.getField("DATA_PACK").get(null),
 					source.getField("REPLACED").get(null),
-					(ThreadLocal<?>) lootUtil.getField("SOURCES").get(null),binding);
+					new ThreadLocal<>(),binding);
 			handles = resolved;
 			state = State.PRESENT;
 			return true;
@@ -254,6 +275,31 @@ public final class LootTableEventDispatch {
 					+ "NeoForge returns them");
 			state = State.ABSENT;
 			return false;
+		}
+	}
+
+	/**
+	 * The holder setter a mod's mixin gave {@code LootTable}: the one {@code void (Holder)} method of an interface the
+	 * class implements that the game itself does not declare — what fabric-loot-api's completion hands each table its
+	 * holder through, whatever its interface calls it. Null when there is none, or several.
+	 */
+	private static MethodHandle holderSetter(Class<?> lootTable, Class<?> holder, MethodHandles.Lookup lookup) {
+		java.lang.reflect.Method only = null;
+		for (Class<?> contract : lootTable.getInterfaces()) {
+			if (contract.getName().startsWith("net.minecraft.") || !java.lang.reflect.Modifier.isPublic(contract.getModifiers())) continue;
+			for (java.lang.reflect.Method method : contract.getDeclaredMethods()) {
+				if (java.lang.reflect.Modifier.isStatic(method.getModifiers()) || method.getReturnType() != void.class
+						|| method.getParameterCount() != 1 || method.getParameterTypes()[0] != holder) continue;
+				if (only != null) return null;
+				only = method;
+			}
+		}
+		if (only == null) return null;
+		try {
+			return lookup.findVirtual(only.getDeclaringClass(), only.getName(), MethodType.methodType(void.class, holder));
+		} catch (ReflectiveOperationException inaccessible) {
+			Caught.warn(inaccessible, "[Forbric/Loot] could not look up %s.%s; loot tables get no holder through it", only.getDeclaringClass().getName(), only.getName());
+			return null;
 		}
 	}
 

@@ -212,6 +212,57 @@ class ForbricMixinServiceTest {
 		assertTrue(ForbricMixinService.isRelaxedConfig("geckolib.mixins.json"));
 	}
 
+	/**
+	 * A config is a mixin config because a mod declared it, not because of how it is named: the boot's registration says
+	 * so whatever the file is called (a renamed Mod Menu's {@code modmenu_mixins.modmenu.json} was never read by the
+	 * guest-mixin adapter, so no pass knew which family wrote its mixins). An undeclared resource still needs the usual name.
+	 */
+	@Test
+	void aDeclaredConfigIsAMixinConfigWhateverItIsCalled() {
+		ForbricMixinService.setGuestConfigs(List.of("modmenu_mixins.modmenu.json"));
+		assertTrue(ForbricMixinService.isMixinConfigName("modmenu_mixins.modmenu.json"));
+		assertFalse(ForbricMixinService.isMixinConfigName("assets/modmenu/lang/en_us.json"));
+		assertTrue(ForbricMixinService.isMixinConfigName("other.mixins.json"), "a config registered later keeps the usual name");
+		ForbricMixinService.setGuestConfigs(List.of());
+		assertFalse(ForbricMixinService.isMixinConfigName("modmenu_mixins.modmenu.json"), "only while declared");
+	}
+
+	/**
+	 * A relaxed config's parent is relaxed too: Mixin reads it right after the child names it, and the child inherits
+	 * the options it leaves out — C2ME's module configs take their injectors' defaultRequire of 1 from
+	 * {@code c2me.mixins.json}, which no mod declares, and one injector that found nothing failed its whole target class.
+	 */
+	@Test
+	void aParentThatARelaxedConfigNamesIsRelaxedToo() {
+		ForbricMixinService.setGuestConfigs(List.of("c2me-base.mixins.json"));
+		assertFalse(ForbricMixinService.isRelaxedConfig("c2me.mixins.json"), "never declared by itself");
+		ForbricMixinService.noteParent("{ \"parent\" : \"c2me.mixins.json\", \"required\": true, \"package\": \"a.b\" }");
+		assertTrue(ForbricMixinService.isRelaxedConfig("c2me.mixins.json"));
+		ForbricMixinService.noteParent("{\"parent\":\"forbric-kernel.mixins.json\"}");
+		assertFalse(ForbricMixinService.isRelaxedConfig("forbric-kernel.mixins.json"), "the kernel's own stays strict");
+		ForbricMixinService.setGuestConfigs(List.of("c2me-base.mixins.json"));
+		assertFalse(ForbricMixinService.isRelaxedConfig("c2me.mixins.json"), "a new registration starts over");
+	}
+
+	/**
+	 * A config a mod registers after the boot ({@code Mixins.addConfiguration} from {@code preLaunch}) is a guest config:
+	 * Essential's loader registers fabric-networking's for the jar it injects, whose accessor met NeoForge's own
+	 * {@code getConnection} under the strict {@code @Overwrite} rule and failed the class.
+	 */
+	@Test
+	void aConfigAModRegistersAfterTheBootIsAGuestConfigToo() {
+		ForbricMixinService.setGuestConfigs(SAMPLE);
+		assertFalse(ForbricMixinService.isRelaxedConfig("fabric-networking-api-v1.mixins.json"));
+		ForbricMixinService.noteLateGuest("fabric-networking-api-v1.mixins.json");
+		assertTrue(ForbricMixinService.isRelaxedConfig("fabric-networking-api-v1.mixins.json"), "read through the service after the boot");
+		ForbricMixinService.noteLateGuest("forbric-kernel.mixins.json");
+		assertFalse(ForbricMixinService.isRelaxedConfig("forbric-kernel.mixins.json"), "the kernel's own stays strict");
+		ForbricMixinService.noteLateGuest("not-a-config.txt");
+		assertFalse(ForbricMixinService.isRelaxedConfig("not-a-config.txt"));
+		ForbricMixinService.setGuestConfigs(SAMPLE);
+		assertFalse(ForbricMixinService.isRelaxedConfig("fabric-networking-api-v1.mixins.json"), "a new registration starts over");
+	}
+
 	@Test
 	void theKernelsOwnConfigIsNeverRelaxed() {
 		// The kernel authors no mixins today, but a failure in one it did author must crash loudly rather than be

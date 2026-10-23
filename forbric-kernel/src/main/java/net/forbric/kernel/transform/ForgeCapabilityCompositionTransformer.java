@@ -34,6 +34,7 @@ import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.LabelNode;
+import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.LookupSwitchInsnNode;
 import org.objectweb.asm.tree.TableSwitchInsnNode;
 import org.objectweb.asm.tree.TryCatchBlockNode;
@@ -43,6 +44,7 @@ import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
 import net.forbric.kernel.util.ForbricLog;
+import net.forbric.kernel.util.Caught;
 
 /**
  * Composes MinecraftForge's capability provider into the three root types the merge put under NeoForge's
@@ -66,7 +68,10 @@ import net.forbric.kernel.util.ForbricLog;
  * {@code Entity.revive} → {@code reviveCaps}; the {@code "ForgeCaps"} save/load funnels before the single
  * RETURN of {@code BlockEntity.saveAdditional/loadAdditional} and {@code Entity.saveWithoutId/load}. Saves read
  * the field without creating it; loads create the provider and replay through Forge's own deserializer.
- * The verified native constructor gather is restored using the provider's actual eager mode.
+ * The verified native constructor gather is restored using the provider's actual eager mode. Every one of these
+ * stands down where the merged body already carries MinecraftForge's own code for it — the edit-splicing merge keeps
+ * the constructor gathers, the {@code ForgeCaps} statements, {@code capProvider} and the field initializers on its
+ * own — so no hook ever runs twice.
  *
  * <p>Registered BEFORE the merged-base compat transformer, so its bare-return {@code invalidateCaps/reviveCaps}
  * stubs stand down on their own and stay the fallback for a root this composition could not reach. Each root
@@ -136,8 +141,9 @@ public final class ForgeCapabilityCompositionTransformer implements ClassTransfo
 	 * and the loser's field initializers went with it — so {@code LivingEntity.handlers} was null from construction
 	 * until a revive that never comes, {@code invalidateCaps} NPE'd on every death once {@code Entity.remove} called
 	 * it again, and {@code getCapability(ITEM_HANDLER)} NPE'd on every ask. The census in the test scans the whole
-	 * merged base for this shape (a field assigned in {@code reviveCaps} but in no {@code <init>}) and pins this map
-	 * to exactly what it finds.
+	 * merged base for this shape (a field assigned in {@code reviveCaps} but in no {@code <init>}): every field it
+	 * finds must be named here, and every entry here must be either lost in that base or initialized by the base's
+	 * own constructor. The edit-splicing merge keeps all three initializers, so on its bases the replay stands down.
 	 */
 	static final Map<String, String> LOST_INITIALIZERS = Map.of(
 			LIVING_ENTITY, "handlers",
@@ -170,12 +176,42 @@ public final class ForgeCapabilityCompositionTransformer implements ClassTransfo
 
 	private static final Set<String> COMPOSED = Collections.synchronizedSet(new LinkedHashSet<>());
 	private static final List<String> REWIRED = Collections.synchronizedList(new ArrayList<>());
+	/** The repairs that found the merged base already carrying their code, each reported once. */
+	private static final Set<String> STOOD_BY = Collections.synchronizedSet(new java.util.HashSet<>());
+
+	/**
+	 * Says, once, that a dispatch-site repair found MinecraftForge's own code already in the class it was handed and
+	 * did nothing. Silent standing-down left a log in which "the base carries it" and "the class was never reached"
+	 * read the same, so a gate could only assert the repair's own line, which a base that keeps both sides' edits
+	 * never prints. In a boot each class passes once, so what it was handed is the merged base's own bytes.
+	 */
+	private static void standsBy(String repair, String message) {
+		if (STOOD_BY.add(repair)) ForbricLog.info("[Forbric/Capabilities] %s", message);
+	}
+
+	/** The repairs that stood by because the class already carried their code, by the label they rewire under. */
+	static Set<String> stoodBy() {
+		synchronized (STOOD_BY) {
+			return Set.copyOf(STOOD_BY);
+		}
+	}
+
+	/** Test seam: forget which repairs stood by, so one test's class does not answer for another's. */
+	static void forgetStandingBy() {
+		STOOD_BY.clear();
+	}
 
 	@Override
 	public String name() {
 		return "forbric-forge-capabilities";
 	}
 
+	/**
+	 * The roots are always edited (composed). Each dispatch-only target is REQUIRED when the merged base lacks what its
+	 * repair restores, and a HEDGE when the base's own bytes already carry it ({@link #carriesNatively}): the repair
+	 * then stands down by the same predicate, and a REQUIRED anchor would report a working class as "anchor gone" on
+	 * every boot. Without a resource reader (or when the class cannot be read) every target stays REQUIRED.
+	 */
 	@Override
 	public AnchorSet anchors() {
 		if (!dispatch) return AnchorSet.of(
@@ -189,16 +225,75 @@ public final class ForgeCapabilityCompositionTransformer implements ClassTransfo
 						"no Forge mod can attach or read a capability on a block entity; Forge-patched chests and furnaces link to nothing"),
 				new AnchorSet.Anchor(LEVEL.replace('/', '.'), AnchorSet.Severity.REQUIRED,
 						"Level.getCapability is abstract on every merged level — AbstractMethodError for any Forge mod asking"),
-				new AnchorSet.Anchor(SERVER_LEVEL.replace('/', '.'), AnchorSet.Severity.REQUIRED,
+				dispatchSite(SERVER_LEVEL,
 						"level capabilities are never gathered and forge:capabilities saved data is never created"),
-				new AnchorSet.Anchor(LEVEL_CHUNK.replace('/', '.'), AnchorSet.Severity.REQUIRED,
+				dispatchSite(LEVEL_CHUNK,
 						"every chunk getCapability/invalidateCaps/writeCapsToNBT NPEs on a null capProvider"),
-				new AnchorSet.Anchor(LIVING_ENTITY.replace('/', '.'), AnchorSet.Severity.REQUIRED,
+				dispatchSite(LIVING_ENTITY,
 						"LivingEntity.handlers stays null: every mob death NPEs in invalidateCaps and every ITEM_HANDLER ask on a living entity NPEs"),
-				new AnchorSet.Anchor(ABSTRACT_FURNACE.replace('/', '.'), AnchorSet.Severity.REQUIRED,
+				dispatchSite(ABSTRACT_FURNACE,
 						"furnace.handlers stays null: every Forge pipe or hopper asking a furnace for ITEM_HANDLER NPEs"),
-				new AnchorSet.Anchor(CHISELED_BOOKSHELF.replace('/', '.'), AnchorSet.Severity.REQUIRED,
+				dispatchSite(CHISELED_BOOKSHELF,
 						"bookshelf.itemHandler stays null: every Forge ITEM_HANDLER ask on a chiseled bookshelf NPEs"));
+	}
+
+	private AnchorSet.Anchor dispatchSite(String target, String cost) {
+		ClassNode base = null;
+		if (resources != null) {
+			try {
+				byte[] bytes = resources.apply(target + ".class");
+				if (bytes != null) {
+					base = new ClassNode();
+					new ClassReader(bytes).accept(base, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+				}
+			} catch (RuntimeException unreadable) {
+				Caught.warn(unreadable, "[Forbric/Capabilities] could not read %s; its anchor stays required", target);
+				base = null;
+			}
+		}
+		if (base == null || !carriesNatively(base)) return new AnchorSet.Anchor(target.replace('/', '.'), AnchorSet.Severity.REQUIRED, cost);
+		return new AnchorSet.Anchor(target.replace('/', '.'), AnchorSet.Severity.HEDGE, cost
+				+ " — on a base that loses MinecraftForge's own code here; this merged base carries it natively, so the repair stands by");
+	}
+
+	/**
+	 * Whether the merged base already carries, in its own bytes, the MinecraftForge dispatch code this target's repair
+	 * exists to restore: {@code ServerLevel}'s constructor calling {@code initCapabilities()}, {@code LevelChunk}
+	 * writing its {@code capProvider}, or a {@link #LOST_INITIALIZERS} field assigned in a constructor. The repairs
+	 * stand down on exactly these predicates; a merge that keeps both ecosystems' edits restores them on its own.
+	 * Always false for a root, which is composed whatever its body carries.
+	 */
+	static boolean carriesNatively(ClassNode node) {
+		if (SERVER_LEVEL.equals(node.name)) return constructorCallsInitCapabilities(node);
+		if (LEVEL_CHUNK.equals(node.name)) return writesCapProvider(node);
+		String lost = LOST_INITIALIZERS.get(node.name);
+		return lost != null && constructorAssigns(node, lost);
+	}
+
+	private static boolean constructorCallsInitCapabilities(ClassNode node) {
+		for (MethodNode method : node.methods) {
+			if (!"<init>".equals(method.name)) continue;
+			for (AbstractInsnNode insn = method.instructions.getFirst(); insn != null; insn = insn.getNext()) {
+				if (insn instanceof MethodInsnNode call && "initCapabilities".equals(call.name) && SERVER_LEVEL.equals(call.owner)) return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean writesCapProvider(ClassNode node) {
+		for (MethodNode method : node.methods) {
+			for (AbstractInsnNode insn = method.instructions.getFirst(); insn != null; insn = insn.getNext()) {
+				if (insn instanceof FieldInsnNode field && field.getOpcode() == Opcodes.PUTFIELD && "capProvider".equals(field.name)) return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean constructorAssigns(ClassNode node, String field) {
+		for (MethodNode ctor : node.methods) {
+			if ("<init>".equals(ctor.name) && assigns(ctor, node.name, field)) return true;
+		}
+		return false;
 	}
 
 	/** The switch: whether capability dispatch is on. It never decides whether the roots are composed. */
@@ -375,11 +470,10 @@ public final class ForgeCapabilityCompositionTransformer implements ClassTransfo
 
 	private static boolean initServerLevelCapabilities(ClassNode node) {
 		int inits = 0;
-		for (MethodNode method : node.methods) {
-			if (!"<init>".equals(method.name)) continue;
-			for (AbstractInsnNode insn = method.instructions.getFirst(); insn != null; insn = insn.getNext()) {
-				if (insn instanceof MethodInsnNode call && "initCapabilities".equals(call.name) && SERVER_LEVEL.equals(call.owner)) return false;
-			}
+		if (constructorCallsInitCapabilities(node)) {
+			standsBy("ServerLevel.<init> -> initCapabilities", "ServerLevel.<init> already gathers MinecraftForge level "
+					+ "capabilities in the merged base's own bytes — the repair stands by");
+			return false;
 		}
 		MethodInsnNode anchor = null;
 		MethodNode ctor = null;
@@ -411,10 +505,10 @@ public final class ForgeCapabilityCompositionTransformer implements ClassTransfo
 
 	private static boolean initLevelChunkProvider(ClassNode node) {
 		if (!hasField(node, "capProvider")) return false;
-		for (MethodNode method : node.methods) {
-			for (AbstractInsnNode insn = method.instructions.getFirst(); insn != null; insn = insn.getNext()) {
-				if (insn instanceof FieldInsnNode field && field.getOpcode() == Opcodes.PUTFIELD && "capProvider".equals(field.name)) return false;
-			}
+		if (writesCapProvider(node)) {
+			standsBy("LevelChunk.<init> -> capProvider", "LevelChunk.<init> already writes Forge's own capability provider "
+					+ "in the merged base's own bytes — the repair stands by");
+			return false;
 		}
 		String desc = "(Lnet/minecraft/world/level/Level;Lnet/minecraft/world/level/ChunkPos;Lnet/minecraft/world/level/chunk/UpgradeData;"
 				+ "Lnet/minecraft/world/ticks/LevelChunkTicks;Lnet/minecraft/world/ticks/LevelChunkTicks;J[Lnet/minecraft/world/level/chunk/LevelChunkSection;"
@@ -479,8 +573,11 @@ public final class ForgeCapabilityCompositionTransformer implements ClassTransfo
 	 * the second pass, or a base that has stopped losing it — either way nothing to do.
 	 */
 	static boolean replayLostInitializer(ClassNode node, String field) {
-		for (MethodNode ctor : node.methods) {
-			if ("<init>".equals(ctor.name) && assigns(ctor, node.name, field)) return false;
+		if (constructorAssigns(node, field)) {
+			String owner = node.name.replace('/', '.');
+			standsBy(owner + ".<init> assigns " + field, owner + ".<init> already assigns " + field
+					+ " in the merged base's own bytes — the repair stands by");
+			return false;
 		}
 		MethodNode revive = findMethod(node, "reviveCaps", "()V");
 		if (revive == null) {
@@ -612,9 +709,25 @@ public final class ForgeCapabilityCompositionTransformer implements ClassTransfo
 		return true;
 	}
 
+	/** The key MinecraftForge persists capabilities under, and the one the funnels' helpers write and read. */
+	static final String FORGE_CAPS_KEY = "ForgeCaps";
+
+	/**
+	 * Whether {@code method} already persists capabilities itself: it names the {@code "ForgeCaps"} key. A merge that
+	 * keeps MinecraftForge's own save/load statement in these bodies (the edit splice does, for both roots) leaves
+	 * nothing for a funnel to do, and a second one would serialize every save twice and replay every load into the
+	 * provider a second time.
+	 */
+	static boolean persistsForgeCaps(MethodNode method) {
+		for (AbstractInsnNode insn = method.instructions.getFirst(); insn != null; insn = insn.getNext()) {
+			if (insn instanceof LdcInsnNode ldc && FORGE_CAPS_KEY.equals(ldc.cst)) return true;
+		}
+		return false;
+	}
+
 	private static boolean saveFunnel(ClassNode node, String method, String desc, String helper, String label) {
 		MethodNode target = findMethod(node, method, desc);
-		if (target == null || callsRuntime(target)) return false;
+		if (target == null || callsRuntime(target) || persistsForgeCaps(target)) return false;
 		int returns = 0;
 		for (AbstractInsnNode insn = target.instructions.getFirst(); insn != null; insn = insn.getNext()) {
 			if (insn.getOpcode() != Opcodes.RETURN) continue;
@@ -635,7 +748,7 @@ public final class ForgeCapabilityCompositionTransformer implements ClassTransfo
 
 	private static boolean loadFunnel(ClassNode node, String method, String desc, String label) {
 		MethodNode target = findMethod(node, method, desc);
-		if (target == null || callsRuntime(target)) return false;
+		if (target == null || callsRuntime(target) || persistsForgeCaps(target)) return false;
 		int returns = 0;
 		for (AbstractInsnNode insn = target.instructions.getFirst(); insn != null; insn = insn.getNext()) {
 			if (insn.getOpcode() != Opcodes.RETURN) continue;

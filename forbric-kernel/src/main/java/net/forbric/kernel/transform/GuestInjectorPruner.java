@@ -47,18 +47,17 @@ public final class GuestInjectorPruner implements ClassTransformer {
 
 	private static final String SHARED_INDEX = "Lcom/llamalad7/mixinextras/sugar/ref/LocalIntRef;";
 
-	/** The source API each closed protocol's callback calls: the reader-deserializer pair's model deserializer, and the
-	 * component-tooltip helper's provider registry. */
+	/** The public API the reader-deserializer pair's callback calls: fabric-model-loading's model deserializer. */
 	private static final String MODEL_DESERIALIZER = "net/fabricmc/fabric/api/client/model/loading/v1/UnbakedModelDeserializer";
-	private static final String TOOLTIP_PROVIDERS = "net/fabricmc/fabric/impl/item/ItemComponentTooltipProviderRegistryImpl";
 
 	/**
-	 * Neither protocol matches without a method call owned by its source API, and a call's owner is a CONSTANT_Utf8
-	 * entry of the class's constant pool. A class naming neither provably carries no prunable group, so it is handed
-	 * back before it is parsed: the pruner runs for every class the game loads.
+	 * Neither protocol matches without a CONSTANT_Utf8 entry its shape needs: the reader pair calls its public model
+	 * deserializer, and the component-tooltip group shares its index through MixinExtras' LocalIntRef. A class naming
+	 * neither provably carries no prunable group, so it is handed back before it is parsed: the pruner runs for every
+	 * class the game loads.
 	 */
 	private static final byte[][] PROTOCOL_OWNERS = {
-			net.forbric.kernel.util.ByteScan.poolEntry(MODEL_DESERIALIZER), net.forbric.kernel.util.ByteScan.poolEntry(TOOLTIP_PROVIDERS)};
+			net.forbric.kernel.util.ByteScan.poolEntry(MODEL_DESERIALIZER), net.forbric.kernel.util.ByteScan.poolEntry(TooltipDispatchRoles.INDEX)};
 
 	private final java.util.concurrent.atomic.LongAdder parsedClasses = new java.util.concurrent.atomic.LongAdder();
 
@@ -151,17 +150,12 @@ public final class GuestInjectorPruner implements ClassTransformer {
         for(MethodNode method:node.methods) {
             AnnotationNode inject=net.forbric.kernel.mixin.MixinFit.injectorOf(method);if(inject==null)continue;
             if(allAnnotations(method).stream().anyMatch(annotation->annotation.desc.equals("Lorg/spongepowered/asm/mixin/injection/Group;")))continue;
-            List<org.objectweb.asm.tree.AbstractInsnNode> body=code(method);
             if(inject.desc.equals("Lorg/spongepowered/asm/mixin/injection/Redirect;") && method.desc.equals("(Ljava/io/Reader;)Lnet/minecraft/client/resources/model/cuboid/CuboidModel;")
-                    && body.size()==2&&body.get(0).getOpcode()==org.objectweb.asm.Opcodes.ACONST_NULL&&body.get(1).getOpcode()==org.objectweb.asm.Opcodes.ARETURN
-                    && point(inject,FROM_STREAM)) {
+                    && BodyFlow.returnsOnlyNull(node.name,method) && point(inject,FROM_STREAM)) {
                 if(redirect!=null)return null;redirect=method;
             }
             if(inject.desc.equals("Lorg/spongepowered/asm/mixin/injection/ModifyArg;")&&method.desc.equals("(Ljava/lang/Object;Ljava/io/Reader;)Ljava/lang/Object;")
-                    &&body.size()==3&&body.get(0) instanceof org.objectweb.asm.tree.VarInsnNode reader&&reader.getOpcode()==org.objectweb.asm.Opcodes.ALOAD&&reader.var==1
-                    &&body.get(1) instanceof org.objectweb.asm.tree.MethodInsnNode parse&&parse.getOpcode()==org.objectweb.asm.Opcodes.INVOKESTATIC
-                    &&parse.owner.equals(MODEL_DESERIALIZER)&&parse.name.equals("deserialize")
-                    &&parse.desc.equals("(Ljava/io/Reader;)Lnet/minecraft/client/resources/model/UnbakedModel;")&&body.get(2).getOpcode()==org.objectweb.asm.Opcodes.ARETURN
+                    &&BodyFlow.returnsOnlyCallOf(node.name,method,MODEL_DESERIALIZER,"deserialize","(Ljava/io/Reader;)Lnet/minecraft/client/resources/model/UnbakedModel;",1)
                     &&Integer.valueOf(1).equals(net.forbric.kernel.mixin.MixinFit.value(inject,"index"))
                     &&point(inject,PAIR_OF)) {
                 if(argument!=null)return null;argument=method;
@@ -173,6 +167,95 @@ public final class GuestInjectorPruner implements ClassTransformer {
                 ||!argument.invisibleParameterAnnotations[1].getFirst().desc.equals("Lcom/llamalad7/mixinextras/sugar/Local;"))return null;
         return new Group("reader-deserializer",List.of(redirect,argument));
     }
+    /**
+     * What a callback body does, read by its data flow rather than by its instruction count: so the same callback written
+     * another way (through a local, with a cast, split over branches) is the same callback, and one that also does anything
+     * else is not.
+     */
+    static final class BodyFlow {
+        private BodyFlow(){}
+        /** Every return yields the null constant, and the body calls nothing and writes no field or array. */
+        static boolean returnsOnlyNull(String owner,MethodNode method){
+            var frames=frames(owner,method);if(frames==null||!sideEffectFree(method,null))return false;
+            boolean returns=false;
+            for(int i=0;i<method.instructions.size();i++){
+                var instruction=method.instructions.get(i);
+                if(instruction.getOpcode()!=org.objectweb.asm.Opcodes.ARETURN)continue;returns=true;
+                var frame=frames[i];if(frame==null)continue;
+                for(var producer:origins(method,frames,frame.getStack(frame.getStackSize()-1)))
+                    if(producer.getOpcode()!=org.objectweb.asm.Opcodes.ACONST_NULL)return false;
+            }
+            return returns;
+        }
+        /**
+         * Every return yields the result of one static call of {@code owner.name desc} whose only argument is the method's
+         * parameter {@code parameter} untouched, and the body calls nothing else and writes no field or array.
+         */
+        static boolean returnsOnlyCallOf(String mixin,MethodNode method,String owner,String name,String desc,int parameter){
+            var frames=frames(mixin,method);
+            java.util.function.Predicate<org.objectweb.asm.tree.MethodInsnNode> allowed=call->call.getOpcode()==org.objectweb.asm.Opcodes.INVOKESTATIC
+                    &&call.owner.equals(owner)&&call.name.equals(name)&&call.desc.equals(desc);
+            if(frames==null||!sideEffectFree(method,allowed))return false;
+            boolean returns=false;
+            for(int i=0;i<method.instructions.size();i++){
+                var instruction=method.instructions.get(i);
+                if(instruction.getOpcode()!=org.objectweb.asm.Opcodes.ARETURN)continue;returns=true;
+                var frame=frames[i];if(frame==null)continue;
+                for(var producer:origins(method,frames,frame.getStack(frame.getStackSize()-1))){
+                    if(!(producer instanceof org.objectweb.asm.tree.MethodInsnNode call)||!allowed.test(call))return false;
+                    var at=frames[method.instructions.indexOf(call)];if(at==null)return false;
+                    for(var argument:origins(method,frames,at.getStack(at.getStackSize()-1)))
+                        if(!(argument instanceof Parameter p)||p.index!=parameter)return false;
+                }
+            }
+            return returns;
+        }
+        /** No call but the {@code allowed} ones (none when null), no field, array or monitor write, no throw. */
+        private static boolean sideEffectFree(MethodNode method,java.util.function.Predicate<org.objectweb.asm.tree.MethodInsnNode> allowed){
+            if(!method.tryCatchBlocks.isEmpty())return false;
+            for(var instruction:method.instructions){
+                int opcode=instruction.getOpcode();
+                if(instruction instanceof org.objectweb.asm.tree.MethodInsnNode call){if(allowed==null||!allowed.test(call))return false;}
+                else if(instruction instanceof org.objectweb.asm.tree.InvokeDynamicInsnNode)return false;
+                else if(opcode==org.objectweb.asm.Opcodes.PUTFIELD||opcode==org.objectweb.asm.Opcodes.PUTSTATIC||opcode>=org.objectweb.asm.Opcodes.IASTORE&&opcode<=org.objectweb.asm.Opcodes.SASTORE
+                        ||opcode==org.objectweb.asm.Opcodes.MONITORENTER||opcode==org.objectweb.asm.Opcodes.MONITOREXIT||opcode==org.objectweb.asm.Opcodes.ATHROW)return false;
+            }
+            return true;
+        }
+        /** The instructions that made a value, past local stores and loads, stack copies and casts; a parameter is a {@link Parameter}. */
+        private static java.util.Set<org.objectweb.asm.tree.AbstractInsnNode> origins(MethodNode method,
+                org.objectweb.asm.tree.analysis.Frame<org.objectweb.asm.tree.analysis.SourceValue>[] frames,org.objectweb.asm.tree.analysis.SourceValue value){
+            java.util.Set<org.objectweb.asm.tree.AbstractInsnNode> out=java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            java.util.Set<org.objectweb.asm.tree.AbstractInsnNode> seen=java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            java.util.ArrayDeque<org.objectweb.asm.tree.AbstractInsnNode> pending=new java.util.ArrayDeque<>(value.insns);
+            while(!pending.isEmpty()){
+                var producer=pending.pop();if(!seen.add(producer))continue;
+                int opcode=producer.getOpcode(),index=method.instructions.indexOf(producer);
+                var frame=index<0?null:frames[index];
+                if(producer instanceof Parameter){out.add(producer);continue;}
+                boolean copy=opcode>=org.objectweb.asm.Opcodes.ILOAD&&opcode<=org.objectweb.asm.Opcodes.ALOAD||opcode>=org.objectweb.asm.Opcodes.ISTORE&&opcode<=org.objectweb.asm.Opcodes.ASTORE
+                        ||opcode==org.objectweb.asm.Opcodes.DUP||opcode==org.objectweb.asm.Opcodes.CHECKCAST;
+                if(!copy||frame==null){out.add(producer);continue;}
+                if(producer instanceof org.objectweb.asm.tree.VarInsnNode load&&opcode<=org.objectweb.asm.Opcodes.ALOAD)pending.addAll(frame.getLocal(load.var).insns);
+                else pending.addAll(frame.getStack(frame.getStackSize()-1).insns);
+            }
+            return out;
+        }
+        /** A parameter's value, standing for itself in the data flow. */
+        private static final class Parameter extends org.objectweb.asm.tree.InsnNode {
+            final int index;Parameter(int index){super(org.objectweb.asm.Opcodes.NOP);this.index=index;}
+        }
+        private static org.objectweb.asm.tree.analysis.Frame<org.objectweb.asm.tree.analysis.SourceValue>[] frames(String owner,MethodNode method){
+            try{
+                return new org.objectweb.asm.tree.analysis.Analyzer<>(new org.objectweb.asm.tree.analysis.SourceInterpreter(org.objectweb.asm.Opcodes.ASM9){
+                    @Override public org.objectweb.asm.tree.analysis.SourceValue newParameterValue(boolean isInstance,int local,org.objectweb.asm.Type type){
+                        return new org.objectweb.asm.tree.analysis.SourceValue(type.getSize(),new Parameter(local));
+                    }
+                }).analyze(owner,method);
+            }catch(org.objectweb.asm.tree.analysis.AnalyzerException|RuntimeException unreadable){ Caught.expected(unreadable);return null;}
+        }
+    }
+
     /** The injector's one {@code @At}. */
     private static AnnotationNode onlyAt(MethodNode method){return net.forbric.kernel.mixin.MixinFit.atNodes(net.forbric.kernel.mixin.MixinFit.injectorOf(method)).getFirst();}
     /** One unshifted INVOKE point, without a slice, whose target can name {@code member} however it is spelled. */
@@ -193,24 +276,11 @@ public final class GuestInjectorPruner implements ClassTransformer {
      */
     private static Group tooltipGroup(ClassNode node,java.util.function.Function<String,ClassNode> classes) {
         if(node==null)return null;
-        String protocol=TOOLTIP_PROVIDERS;
-        MethodNode helper=null;
+        MethodNode helper=null;TooltipDispatchRoles.Dispatch dispatch=null;
         for(MethodNode method:node.methods) {
             if(net.forbric.kernel.mixin.MixinFit.injectorOf(method)!=null||!method.desc.endsWith(SHARED_INDEX+")V"))continue;
-            Set<String> dispatch=new java.util.HashSet<>();boolean closed=true;
-            for(var instruction:method.instructions) {
-                if(instruction instanceof org.objectweb.asm.tree.FieldInsnNode)closed=false;
-                if(instruction instanceof org.objectweb.asm.tree.MethodInsnNode call) {
-                    if(call.owner.equals(protocol)&&Set.of("hasModdedEntries","onFirst","onLast","onBefore","onAfter").contains(call.name))dispatch.add(call.name);
-                    else if(!(call.owner.equals("net/fabricmc/fabric/impl/item/VanillaTooltipProviderOrder")&&call.name.equals("getVanillaOrder")
-                            ||call.owner.equals("com/llamalad7/mixinextras/sugar/ref/LocalIntRef")&&Set.of("get","set").contains(call.name)
-                            ||call.owner.equals("java/util/List")&&Set.of("size","get").contains(call.name)
-                            ||call.owner.equals("java/util/HashSet")&&Set.of("<init>","add").contains(call.name)))closed=false;
-                }
-            }
-            if(closed&&dispatch.equals(Set.of("hasModdedEntries","onFirst","onLast","onBefore","onAfter"))) {
-                if(helper!=null)return null;helper=method;
-            }
+            TooltipDispatchRoles.Dispatch roles=TooltipDispatchRoles.of(node.name,method);
+            if(roles!=null){if(helper!=null)return null;helper=method;dispatch=roles;}
         }
         if(helper==null)return null;
         List<MethodNode> group=new ArrayList<>();String share=null;
@@ -238,7 +308,9 @@ public final class GuestInjectorPruner implements ClassTransformer {
             if(!sugar.desc.equals("Lcom/llamalad7/mixinextras/sugar/Share;")||!(sharedValue instanceof String id)||share!=null&&!share.equals(id))return null;
             share=id;group.add(method);
         }
-        return group.isEmpty()||!oneHost(node,group,classes)?null:new Group("component-tooltip",List.copyOf(group));
+        if(group.isEmpty()||!oneHost(node,group,classes))return null;
+        pendingDispatch=dispatch;
+        return new Group("component-tooltip",List.copyOf(group));
     }
     /** Whether every callback binds the one same method of the mixin's one target, each as Mixin binds it. */
     private static boolean oneHost(ClassNode node,List<MethodNode> callbacks,java.util.function.Function<String,ClassNode> classes) {
@@ -249,16 +321,24 @@ public final class GuestInjectorPruner implements ClassTransformer {
         return true;
     }
 
-    private static boolean providerDeclarations(ClassNode providers) {
-        String ends="(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/item/Item$TooltipContext;Lnet/minecraft/world/item/component/TooltipDisplay;Ljava/util/function/Consumer;Lnet/minecraft/world/item/TooltipFlag;)V";
-        String sides="(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/core/component/DataComponentType;Lnet/minecraft/world/item/Item$TooltipContext;Lnet/minecraft/world/item/component/TooltipDisplay;Ljava/util/function/Consumer;Lnet/minecraft/world/item/TooltipFlag;Ljava/util/Set;)V";
-        for(String name:List.of("hasModdedEntries","onFirst","onLast","onBefore","onAfter")) {
-            String desc=name.equals("hasModdedEntries")?"()Z":name.equals("onFirst")||name.equals("onLast")?ends:sides;
-            if(providers.methods.stream().noneMatch(method->method.name.equals(name)&&method.desc.equals(desc)
+    /** The registry declares each of the dispatch's five moments public and static, under the descriptor the helper calls. */
+    private static boolean providerDeclarations(ClassNode providers,TooltipDispatchRoles.Dispatch dispatch) {
+        for(TooltipDispatchRoles.Member member:List.of(dispatch.guard(),dispatch.first(),dispatch.last(),dispatch.before(),dispatch.after())) {
+            if(providers.methods.stream().noneMatch(method->method.name.equals(member.name())&&method.desc.equals(member.desc())
                     &&(method.access&(org.objectweb.asm.Opcodes.ACC_STATIC|org.objectweb.asm.Opcodes.ACC_PUBLIC))==(org.objectweb.asm.Opcodes.ACC_STATIC|org.objectweb.asm.Opcodes.ACC_PUBLIC)))return false;
         }
         return true;
     }
+
+	/** The dispatch of the group the last tooltipGroup call found, until transform decides on it. */
+	private static volatile TooltipDispatchRoles.Dispatch pendingDispatch;
+	/** The dispatch of the tooltip group pruned on this boot: what the kernel's bridge calls in its place. */
+	private static volatile TooltipDispatchRoles.Dispatch prunedDispatch;
+
+	/** What the pruned component-tooltip group dispatched to, read from its own helper; null when none was pruned. */
+	public static TooltipDispatchRoles.Dispatch tooltipDispatch() {
+		return prunedDispatch;
+	}
 
 	private static volatile boolean fabricTooltipsPruned;
 
@@ -317,16 +397,17 @@ public final class GuestInjectorPruner implements ClassTransformer {
         if(group!=null&&!readerWasConsumed(node,group,classes,natives))return classBytes;
         if(group==null && fabricTooltipBridgeOn())group=tooltipGroup(node,classes);
         if(group==null)return classBytes;
+        TooltipDispatchRoles.Dispatch dispatch=pendingDispatch;
         if(group.protocol().equals("component-tooltip")) {
             ClassNode current=classes.apply("net/neoforged/neoforge/common/tooltip/ItemTooltipHandler");
-            ClassNode providers=classes.apply(TOOLTIP_PROVIDERS);
-            if(current==null||providers==null||!providerDeclarations(providers)||!NeoTooltipAppendersInjector.aroundSpliced()) {
+            ClassNode providers=dispatch==null?null:classes.apply(dispatch.registry());
+            if(current==null||providers==null||!providerDeclarations(providers,dispatch)||!NeoTooltipAppendersInjector.aroundSpliced()) {
                 ForbricLog.warn("[Forbric/GuestInjectorPruner] retained %s's original tooltip callbacks: the actual carrier appender replacement has not been proved",node.name);
                 return classBytes;
             }
         }
         node.methods.removeAll(group.methods());pruned+=group.methods().size();
-        if(group.protocol().equals("component-tooltip"))fabricTooltipsPruned=true;
+        if(group.protocol().equals("component-tooltip")){fabricTooltipsPruned=true;prunedDispatch=dispatch;}
         String loss=group.protocol().equals("reader-deserializer")&&!ModelFormatFunnelInjector.enabled()
                 ?"the original fabric:type custom model deserializer callback was removed while the model-format funnel is disabled":null;
         String config=net.forbric.kernel.mixin.MixinStubRebind.configOf(node.name);

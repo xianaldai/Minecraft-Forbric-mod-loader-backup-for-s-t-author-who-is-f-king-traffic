@@ -62,7 +62,7 @@ class MixinStubRebindTest {
 				MixinFit.stringList(MixinFit.value(MixinFit.injectorOf(outer), "method")));
 		assertTrue(outer.desc.startsWith("(Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/core/BlockPos;"
 				+ "Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfoReturnable;"), outer.desc);
-		assertNull(MixinFit.injectorOf(mixin.methods.stream().filter(m -> m.name.equals("breakSpeed" + MixinHandlerShim.INNER_SUFFIX)).findFirst().orElseThrow()));
+		assertNull(MixinFit.injectorOf(mixin.methods.stream().filter(m -> m.name.equals(MixinHandlerShim.asideName(mixin.name, "breakSpeed", MixinHandlerShim.INNER_SUFFIX))).findFirst().orElseThrow()));
 		List<Integer> loads = Arrays.stream(outer.instructions.toArray()).filter(VarInsnNode.class::isInstance).map(i -> ((VarInsnNode) i).var).toList();
 		assertEquals(List.of(0, 1, 3), loads, "this, the state (the stub passes its only argument first), the callback");
 		new Analyzer<>(new BasicVerifier()).analyze(mixin.name, outer);
@@ -180,7 +180,7 @@ class MixinStubRebindTest {
 		MixinStubRebind.adapt(mixin, name -> manager);
 		MethodNode outer = mixin.methods.stream().filter(m -> m.name.equals("captureBlockItemSprites")).findFirst().orElseThrow();
 		assertEquals(List.of(LOAD_MODELS_BODY), MixinFit.stringList(MixinFit.value(MixinFit.injectorOf(outer), "method")));
-		assertNull(MixinFit.injectorOf(mixin.methods.stream().filter(m -> m.name.equals("captureBlockItemSprites" + MixinHandlerShim.INNER_SUFFIX))
+		assertNull(MixinFit.injectorOf(mixin.methods.stream().filter(m -> m.name.equals(MixinHandlerShim.asideName(mixin.name, "captureBlockItemSprites", MixinHandlerShim.INNER_SUFFIX)))
 				.findFirst().orElseThrow()));
 		List<Integer> loads = Arrays.stream(outer.instructions.toArray()).filter(VarInsnNode.class::isInstance).map(i -> ((VarInsnNode) i).var).toList();
 		assertEquals(List.of(0, 1, 2, 3, 4, 5, 6, 8), loads, "the stub's seven arguments, then the callback past the pending animations");
@@ -304,6 +304,71 @@ class MixinStubRebindTest {
 		static void anArgumentAndALocal(List a) { List y = List.of(); Thread.yield(); y.size(); }
 		void onlyItself() { Thread.yield(); }
 		void itselfAndACopy() { TypedLocals y = this; Thread.yield(); y.hashCode(); }
+	}
+
+	/**
+	 * How Mixin sizes each frame between a by-type {@code @Local}'s last access and the anchor decides whether it still
+	 * holds it there: an {@code APPEND} frame (a loop head adding its index) keeps every local above it, a {@code CHOP}
+	 * frame is sized as removing at least the method's arguments' worth. C2ME's watchdog report reads the dump's
+	 * {@code StringBuilder} by type at a call inside the thread loop: natively and on the merged body the builder was
+	 * stored before the loop and is held through its head, so the handler moves to the body with the rest of its mixin.
+	 */
+	@Test void aByTypeLocalHeldThroughALoopHeadIsDecidedAndOneAChopMayDropIsNot() throws Exception {
+		ClassNode shapes = new ClassNode();
+		try (java.io.InputStream in = LoopLocals.class.getResourceAsStream("MixinStubRebindTest$LoopLocals.class")) {
+			new ClassReader(in).accept(shapes, 0);
+		}
+		List<AnnotationNode> yield = List.of(at("INVOKE", "target", "Ljava/lang/Thread;yield()V"));
+		Type list = Type.getType(List.class);
+		java.util.Map<String, Boolean> decided = new java.util.TreeMap<>();
+		java.util.Map<String, java.util.Set<Integer>> frames = new java.util.TreeMap<>();
+		for (MethodNode shape : shapes.methods) {
+			if (shape.name.startsWith("<")) continue;
+			decided.put(shape.name, MixinStubRebind.theOnlyLocalOfItsType(shapes, shape, list, yield));
+			java.util.Set<Integer> types = new java.util.TreeSet<>();
+			for (var insn : shape.instructions) if (insn instanceof org.objectweb.asm.tree.FrameNode frame) types.add(frame.type);
+			frames.put(shape.name, types);
+		}
+		assertTrue(frames.get("insideALoop").contains(Opcodes.F_APPEND), "javac writes the loop head as an APPEND frame: " + frames);
+		assertTrue(frames.get("afterALoopWithArguments").contains(Opcodes.F_CHOP), "and the loop's exit as a CHOP frame: " + frames);
+		assertTrue(frames.get("insideAnArrayLoop").contains(Opcodes.F_FULL), "an array loop's head is a FULL frame listing the List: " + frames);
+		assertEquals(java.util.Map.of("insideALoop", true, "insideAnArrayLoop", true, "afterALoopWithArguments", false, "afterALoopReadAgain", true), decided);
+	}
+
+	/**
+	 * Architectury's ExplosionEvent.DETONATE hook injects at the entity list's iterator in vanilla's
+	 * {@code ServerExplosion.hurtEntities()}, taking that list by type. On the merged base vanilla's signature is a stub
+	 * forwarding to NeoForge's {@code hurtEntities(List)}, whose new argument (the affected blocks) is a List too, so the
+	 * implicit pick is two Lists there and the handler stayed on the stub nothing calls: the event never fired. A value
+	 * the carrier added as an argument is never one of vanilla's locals, so beside it the entity list is decided, and the
+	 * handler moves with its @Local pinned to that slot.
+	 */
+	@Test void aByTypeLocalDecidedOnlyBesideTheCarriersAddedArgumentIsPinned() throws Exception {
+		ClassNode explosion = merged("net/minecraft/world/level/ServerExplosion");
+		ClassNode mixin = fromJar(POPULAR.resolve("architectury-fabric-21.1.10.jar"), "dev/architectury/mixin/fabric/MixinServerExplosion");
+		MixinStubRebind.noteEcosystem(mixin.name, Ecosystem.FABRIC);
+		MethodNode body = explosion.methods.stream().filter(m -> m.name.equals("hurtEntities") && m.desc.equals("(Ljava/util/List;)V")).findFirst().orElseThrow();
+		Type list = Type.getType(List.class);
+		List<AnnotationNode> iterator = List.of(at("INVOKE", "target", "Ljava/util/List;iterator()Ljava/util/Iterator;", "ordinal", 0));
+		assertFalse(MixinStubRebind.theOnlyLocalOfItsType(explosion, body, list, iterator), "two Lists to MixinExtras' implicit pick");
+		assertTrue(MixinStubRebind.adapt(mixin, name -> explosion) >= 1);
+		assertEquals(List.of("hurtEntities(Ljava/util/List;)V"), selectors(mixin, "explodePost"));
+		MethodNode handler = mixin.methods.stream().filter(m -> m.name.equals("explodePost")).findFirst().orElseThrow();
+		Object index = null;
+		for (AnnotationNode local : handler.invisibleParameterAnnotations[1]) if (local.desc.endsWith("sugar/Local;")) index = MixinFit.value(local, "index");
+		assertInstanceOf(Integer.class, index, "the @Local is pinned");
+		int slot = (Integer) index;
+		assertNotEquals(1, slot, "never the affected-blocks argument");
+		assertTrue(body.localVariables.stream().anyMatch(l -> l.index == slot && l.desc.equals("Ljava/util/List;")), "a List the body declares in that slot");
+	}
+
+	/** javac's loop shapes around a {@code Thread.yield()} anchor, for a by-type {@code @Local List}. */
+	@SuppressWarnings({"rawtypes", "unused"})
+	private static final class LoopLocals {
+		static void insideALoop(int n) { List y = List.of(); for (int i = 0; i < n; i++) { Thread.yield(); } y.size(); }
+		static void insideAnArrayLoop(Object[] all) { List y = List.of(); for (Object o : all) { Thread.yield(); o.hashCode(); } y.size(); }
+		static void afterALoopWithArguments(Object a, Object b, Object c) { List y = List.of(); for (int i = 0; i < 3; i++) { a.hashCode(); } Thread.yield(); y.size(); }
+		static void afterALoopReadAgain(Object a, Object b, Object c) { List y = List.of(); for (int i = 0; i < 3; i++) { a.hashCode(); } y.size(); Thread.yield(); y.size(); }
 	}
 
 	/**
@@ -589,7 +654,7 @@ class MixinStubRebindTest {
 		assertEquals(List.of("loadFromJson(Ljava/io/InputStream;Ljava/util/function/BiConsumer;Ljava/util/function/BiConsumer;)V"),
 				MixinFit.stringList(MixinFit.value(MixinFit.injectorOf(handler), "method")));
 		assertEquals(desc, handler.desc, "a @ModifyArgs handler keeps its own signature");
-		assertTrue(mixin.methods.stream().noneMatch(m -> m.name.endsWith(MixinHandlerShim.INNER_SUFFIX)));
+		assertTrue(mixin.methods.stream().noneMatch(m -> m.name.contains(MixinHandlerShim.INNER_SUFFIX)));
 		assertEquals(0, MixinStubRebind.adapt(mixin, name -> language), "a second pass changes nothing");
 		MixinStubRebind.forget();
 		ClassNode neo = fromJar(jar, "fi/dy/masa/malilib/mixin/client/MixinLanguage");
@@ -892,7 +957,8 @@ class MixinStubRebindTest {
 
 	/**
 	 * An allow bounds a @ModifyVariable by what its name can match in the body — torrential's first store of `speed` is
-	 * one, every store of it eight — and an INVOKE_STRING point by every call of its member: they still move within it.
+	 * one, every store of it as many as the body makes (eight where the merged body posts one break-speed event, nine
+	 * where it keeps both ecosystems') — and an INVOKE_STRING point by every call of its member: they still move within it.
 	 */
 	@Test void anAllowIsCountedForLocalAndStringPointsToo() throws Exception {
 		ClassNode player = merged("net/minecraft/world/entity/player/Player");
@@ -901,13 +967,22 @@ class MixinStubRebindTest {
 		MixinStubRebind.noteEcosystem(first.name, Ecosystem.FABRIC);
 		assertEquals(1, MixinStubRebind.adapt(first, name -> player), "the first store of speed");
 
+		// Every store of speed, counted off the body the point is read in: one fewer than that is too few, that many is enough.
+		MethodNode host = player.methods.stream().filter(m -> m.name.equals("getDestroySpeed") && m.desc.equals("(" + STATE + POS + ")F"))
+				.findFirst().orElseThrow();
+		java.util.Set<Integer> named = new java.util.HashSet<>();
+		for (org.objectweb.asm.tree.LocalVariableNode local : host.localVariables) if (local.name.equals("speed")) named.add(local.index);
+		int stores = 0;
+		for (var instruction : host.instructions)
+			if (instruction instanceof org.objectweb.asm.tree.VarInsnNode store && store.getOpcode() == Opcodes.FSTORE && named.contains(store.var)) stores++;
+		assertTrue(stores > 1, "premise: speed is stored more than once");
 		ClassNode every = conduit("(F" + STATE + ")F", "speed", 0);
 		AnnotationNode variable = MixinFit.injectorOf(every.methods.getFirst());
 		variable.values.set(variable.values.indexOf("at") + 1, at("STORE"));
-		variable.values.addAll(List.of("allow", 1));
-		assertEquals(0, MixinStubRebind.adapt(every, name -> player), "every store of speed: eight");
-		variable.values.set(variable.values.indexOf("allow") + 1, 8);
-		assertEquals(1, MixinStubRebind.adapt(every, name -> player), "within eight");
+		variable.values.addAll(List.of("allow", stores - 1));
+		assertEquals(0, MixinStubRebind.adapt(every, name -> player), "every store of speed: " + stores);
+		variable.values.set(variable.values.indexOf("allow") + 1, stores);
+		assertEquals(1, MixinStubRebind.adapt(every, name -> player), "within " + stores);
 
 		ClassNode string = synthetic("com/example/PlayerStringMixin", "net/minecraft/world/entity/player/Player", "onAttribute",
 				"(" + CALLBACK_INFO_RETURNABLE + ")V", false, injector(INJECT, "getDestroySpeed", List.of(at("INVOKE_STRING", "target",

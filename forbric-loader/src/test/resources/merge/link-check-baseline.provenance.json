@@ -7,20 +7,23 @@
     "forge": "26.2-65.0.1",
     "neoforge": "26.2.0.88"
   },
-  "toolCommit": "ec86124409d0d03f30a17f2cbf3e5a37ad4b3c34",
+  "toolCommit": "bdfc679dade7d3d00e83b0b23bd331fd99079950",
   "toolSources": {
-    "MergedBaseBuilder.java": "2888ec9a1e702d334b13e697b546b709065dfaf904214bab4d4fa25c6fd13276",
-    "AdditiveMethodMerger.java": "f8c551788edc6abb86d18abdc95001a9bcadc893710ce69cedf4c725895f17d7",
-    "RuntimeInteropPatcher.java": "b503f0bdee257d4303dea4ca828b908b77e2efc6a0215cc6c317b2744a679b2e",
+    "MergedBaseBuilder.java": "9f554bf40ac5cc060a6bbd69e7af197fffa37c7453d5f9b85285dfeed72f6381",
+    "AdditiveMethodMerger.java": "02c966264ae6b29671c4c2f9c3b99a2fef7d49301d261e555e5b2d659e7fffbd",
+    "RuntimeInteropPatcher.java": "86d90b07beb65e38dfca640aa9d46dbb195d9819c5f57e84af3914993d15b520",
     "MergedLinkChecker.java": "187b3dfca3eca9d9d1ef23de8986050e7a692dad1d71f842084cc37126e4926c",
-    "ContractGraph.java": "7a3e86b7b4a59ee7f8ed8214f149c516f70975710147682b19ab754c2c8f536d",
+    "ContractGraph.java": "7080319d232f9f16bfcb8d00ddb883ddc910b53511e2c4b9d6c535811b5fdcdd",
     "EquivalentSuperclassBridge.java": "fcc15bc602ec5e65466497e3869a4a883a6c9dd4b70c758d0527246d282b1791",
     "MapContractRepair.java": "bc04bdf939e93edf656cf07368bda1ecef3fbcaea2ccc16ce90272b66c3cd8bb",
-    "FieldContractReconciler.java": "199a91325d1c50732adbf53a8ed413ef367b8cb0c536095cd08fb75c15cb2482",
+    "FieldContractReconciler.java": "2e330adb2b0630b3c3b8e358c1166749a5302ea5fd8208f164732a97b146395c",
     "MemoizedSupplierContract.java": "60a3ea5bf0346a47788df0fa56139714a7641f0393de7564b1725d281813186d",
     "NonNullReturnProof.java": "3c2a56c757e7cfb19518e3acbb98c078bceab7f742fcedb7547c5e4e44e31d8e",
     "TailHookComposition.java": "3cd70795953b6130da88799ab4cafe50439148dd4e4d252703642a11ba9adee4",
-    "EmptyArrayContractBridge.java": "dc2d518411451a76a11178fef7212e85ffdd586fab5561d58e8aa43d88cdd1a0"
+    "EmptyArrayContractBridge.java": "dc2d518411451a76a11178fef7212e85ffdd586fab5561d58e8aa43d88cdd1a0",
+    "PatchLineProvenance.java": "b152efc2759da76597ae28a01cf2de486f243561a3435ed8cf03cfe12f51e4a6",
+    "EditSplicer.java": "8a020659d026f43368e3e07871a1e9ccf93f358f8923eec25ec42dbd20d7e945",
+    "DelegateTwinRoutes.java": "c55afc23b624b29dec28fb20f5f0b0f865f8eeec2f0e3ac0022eb3c6f57bde56"
   },
   "mergeInputs": {
     "vanilla": {
@@ -42,37 +45,55 @@
     "neo-runtime": {
       "file": "neoforge-runtime.jar",
       "sha256": "d8b591acaa23e4ec3f2995900fa10584bc75a9977bfebd0ddb60aaf21437eaf0"
+    },
+    "forge-userdev": {
+      "file": "forge-userdev.jar",
+      "sha256": "661d1f18070aacbd58eff588f631b95659ce59740e97a25b417427cf2026ad20"
+    },
+    "neo-userdev": {
+      "file": "neoforge-userdev.jar",
+      "sha256": "9e4baada142094ae39670b76ddc225125ec079136105373fc702683e810b100f"
     }
   },
   "inputs": {
     "merged": {
-      "file": "merged-live-provider.jar",
-      "sha256": "f8dbc7aeaef10b46dba4c62bbb797263177eca6957539d7083309d6648fd3a6b"
+      "file": "patched-mc-merged-26.2.jar",
+      "sha256": "84aa6fe93c5240ae1824f038493c29dd46649b741b6a94903de8f203f4e718e3"
     },
     "neoRuntime": {
       "file": "neoforge-runtime.jar",
       "sha256": "d8b591acaa23e4ec3f2995900fa10584bc75a9977bfebd0ddb60aaf21437eaf0"
     },
     "forgeInterop": {
-      "file": "forge-runtime-live-provider-interop.jar",
-      "sha256": "8d2fb2ca90e24e0cc402613293d03cf73e944e391a5bcfb4faa638fd6e5ede8e"
+      "file": "forge-runtime-interop.jar",
+      "sha256": "395145d21521b4f3bcbef87b355acf4ed623aa32d76a736fd641f136c255f20c"
     }
   },
-  "result": "dangling references: 7 (known 7, new 0); 16 raw references require explicit final-definition native ancestor composition; 3 former raw defects repaired",
-  "reproduction": "Build all 12 recorded tool sources, then merge the five mergeInputs and run actual-contract interop against the merged jar and peer runtime. Rebuilt artifacts and merge/interop/link logs in /tmp/forbric-contract-review-merge-20261008-v3. ZIP timestamps differ across rebuilds; compare entry contents and CRCs. The source snapshot is dirty and records exact SHA-256 for each compiled source.",
-  "review": "The 7 retained raw exceptions are the anonymous direction switch field, Forge NBT builder, and GameTest cleanup references. Native capability methods have an explicit manifest obligation proved from the original ancestor ABI; the kernel must certify actual state/constructor effects before final definition, and legacy refuses an unsupported obligation. Both SDK return descriptors are retained; their mutable data-view composition is validated separately at runtime. No exception licenses a new reference or a silently discarded protocol.",
-  "toolWorkingTree": "uncommitted sources: toolSources records the actual compiled snapshot; toolCommit is its base commit",
+  "mergeReport": {
+    "file": "merge-conflicts.txt",
+    "sha256": "7ef2a1cb4ef993a5ac11e64fcc76a9d642c63f4a9d2167c76f87c5d5e37eb77e"
+  },
+  "result": "dangling references: 7 (known 7, new 0); 17 raw references require explicit final-definition native ancestor composition; baseline entries now fixed: 0",
+  "reproduction": "inputs.merged, inputs.forgeInterop and mergeReport are what forbric-loader/run/build-merged-base.sh wrote from the seven mergeInputs with the toolSources at toolCommit (committed, link check enforced); evidence.py merge-provenance recorded that build beside the merged base, and this record is folded from it. Re-running run/check-merged-links.sh on inputs.merged, inputs.neoRuntime and inputs.forgeInterop gives the result above. ZIP timestamps differ across rebuilds; compare entry contents and CRCs.",
+  "review": "The 7 retained raw exceptions are unchanged: the anonymous direction switch field, the Forge NBT builder and the GameTest cleanup references. The edit splice carries MinecraftForge's own runs into methods both ecosystems patched, among them capability calls (gatherCapabilities, getCapabilities, serializeCaps) in Entity, BlockEntity and ClientLevel, whose declaring ancestor the merged class does not extend: 17 references require explicit final-definition native ancestor composition. This build differs from the one before it (tools df0eb1f4) in one class: the delegate-twin pass (DelegateTwinRoutes) points Block.playerDestroy's call to MinecraftForge's dropResources(..., false) back at the merged dropResources, NeoForge's; every other entry of the merged jar and of the interop jar has the same contents, and the report gains the pass's section, which names that site and the MinecraftForge edit given up there. MinecraftForge's dropResources(..., boolean) stays in the jar and links; no reference was added or lost, so the dangling references and the composition obligations are the same. They are composition obligations the kernel must certify before final definition, not baseline exceptions; no exception licenses a new reference or a silently discarded protocol.",
+  "toolWorkingTree": "committed sources: toolSources are the files at toolCommit",
   "requiredCompositions": [
+    "net/minecraft/client/multiplayer/ClientLevel.gatherCapabilities()V requires net/minecraft/world/level/Level native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$Levels",
     "net/minecraft/server/level/ServerLevel.gatherCapabilities()V requires net/minecraft/world/level/Level native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$Levels",
     "net/minecraft/server/level/ServerLevel.getCapabilities()Lnet/minecraftforge/common/capabilities/CapabilityDispatcher; requires net/minecraft/world/level/Level native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$Levels",
+    "net/minecraft/world/entity/Entity.gatherCapabilities()V requires net/minecraft/world/entity/Entity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$Entities",
     "net/minecraft/world/entity/Entity.invalidateCaps()V requires net/minecraft/world/entity/Entity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$Entities",
     "net/minecraft/world/entity/Entity.reviveCaps()V requires net/minecraft/world/entity/Entity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$Entities",
+    "net/minecraft/world/entity/Entity.serializeCaps(Lnet/minecraft/core/HolderLookup$Provider;)Lnet/minecraft/nbt/CompoundTag; requires net/minecraft/world/entity/Entity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$Entities",
     "net/minecraft/world/entity/vehicle/boat/AbstractChestBoat.invalidateCaps()V requires net/minecraft/world/entity/Entity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$Entities",
     "net/minecraft/world/entity/vehicle/boat/AbstractChestBoat.reviveCaps()V requires net/minecraft/world/entity/Entity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$Entities",
     "net/minecraft/world/entity/vehicle/minecart/AbstractMinecart.invalidateCaps()V requires net/minecraft/world/entity/Entity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$Entities",
     "net/minecraft/world/entity/vehicle/minecart/AbstractMinecart.reviveCaps()V requires net/minecraft/world/entity/Entity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$Entities",
     "net/minecraft/world/level/block/entity/BlockEntity.deserializeCaps(Lnet/minecraft/core/HolderLookup$Provider;Lnet/minecraft/nbt/CompoundTag;)V requires net/minecraft/world/level/block/entity/BlockEntity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$BlockEntities",
+    "net/minecraft/world/level/block/entity/BlockEntity.gatherCapabilities()V requires net/minecraft/world/level/block/entity/BlockEntity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$BlockEntities",
+    "net/minecraft/world/level/block/entity/BlockEntity.getCapabilities()Lnet/minecraftforge/common/capabilities/CapabilityDispatcher; requires net/minecraft/world/level/block/entity/BlockEntity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$BlockEntities",
     "net/minecraft/world/level/block/entity/BlockEntity.invalidateCaps()V requires net/minecraft/world/level/block/entity/BlockEntity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$BlockEntities",
-    "net/minecraft/world/level/block/entity/BlockEntity.reviveCaps()V requires net/minecraft/world/level/block/entity/BlockEntity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$BlockEntities"
+    "net/minecraft/world/level/block/entity/BlockEntity.reviveCaps()V requires net/minecraft/world/level/block/entity/BlockEntity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$BlockEntities",
+    "net/minecraft/world/level/block/entity/BlockEntity.serializeCaps(Lnet/minecraft/world/level/storage/ValueOutput;)Lnet/minecraft/nbt/CompoundTag; requires net/minecraft/world/level/block/entity/BlockEntity native ancestor net/minecraftforge/common/capabilities/CapabilityProvider$BlockEntities"
   ]
 }

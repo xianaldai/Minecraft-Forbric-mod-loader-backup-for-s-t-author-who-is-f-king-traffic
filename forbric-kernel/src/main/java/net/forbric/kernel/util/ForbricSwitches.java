@@ -31,7 +31,6 @@ import java.util.function.UnaryOperator;
 public final class ForbricSwitches {
 	/** Old name → the switch that now controls the same mechanism. */
 	static final Map<String, String> RENAMED = Map.ofEntries(
-			Map.entry("forbric.balmEffectVeto", "forbric.effectClearVeto"),
 			Map.entry("forbric.barrelRollCamera", "forbric.cameraRollCallbacks"),
 			Map.entry("forbric.blockInfoCaches", "forbric.registryElementCallbacks"),
 			Map.entry("forbric.c2meBlockUpdates", "forbric.chunkStatusRetarget"),
@@ -39,10 +38,8 @@ public final class ForbricSwitches {
 			Map.entry("forbric.compatPluginPlatforms", "forbric.mixinPluginPlatforms"),
 			Map.entry("forbric.continuitySpriteSources", "forbric.spriteLoaderCallbacks"),
 			Map.entry("forbric.corpseNameTag", "forbric.zeroNameTagMigration"),
-			Map.entry("forbric.createBreathingMixin", "forbric.breathingCallbacks"),
 			Map.entry("forbric.createContextualBlocks", "forbric.blockQueryAdapters"),
 			Map.entry("forbric.createEntitySounds", "forbric.entitySoundCallbacks"),
-			Map.entry("forbric.createFluidMixins", "forbric.fluidInteractionCallbacks"),
 			Map.entry("forbric.createHudMixin", "forbric.hudContextCallbacks"),
 			Map.entry("forbric.createInjectionAdapters", "forbric.carrierCallbackAdapters"),
 			Map.entry("forbric.createInteractionMixins", "forbric.blockInteractionAdapters"),
@@ -56,9 +53,39 @@ public final class ForbricSwitches {
 			Map.entry("forbric.sodiumConfigUsers", "forbric.crossEcosystemDeclarations"));
 
 	/** Retired name → why setting it changes nothing. */
-	static final Map<String, String> RETIRED = Map.of(
-			"forbric.dragonParts", "the multipart entity hierarchy is now proved by the merged base when it is built, "
-					+ "so there is no runtime rewrite left to switch off");
+	static final Map<String, String> RETIRED = Map.ofEntries(
+			Map.entry("forbric.dragonParts", "the multipart entity hierarchy is now proved by the merged base when it is built, "
+					+ "so there is no runtime rewrite left to switch off"),
+			Map.entry("forbric.fluidInteractionCallbacks", "a fluid callback on vanilla's spread decision is no longer moved onto the carriers' "
+					+ "registry calls; the decision method is asked again where vanilla asks it (-Dforbric.nativeEntryRelay)"),
+			Map.entry("forbric.createFluidMixins", "a fluid callback on vanilla's spread decision is no longer moved onto the carriers' "
+					+ "registry calls; the decision method is asked again where vanilla asks it (-Dforbric.nativeEntryRelay)"),
+			Map.entry("forbric.hudBridge", "fabric-api's HUD elements are no longer redrawn from NeoForge's layers: fabric-rendering-v1's "
+					+ "own HudMixin dispatches every root, each wrap landing in the body the kernel gives the method reference"),
+			Map.entry("forbric.fabricPlayChannels", "the kernel no longer records a client's Fabric PLAY channels itself: Fabric's own "
+					+ "c:register receiver runs on the payload as Fabric reads it and records them (-Dforbric.commonNetworkInterop)"),
+			Map.entry("forbric.fabricFluidFlow", "a fluid callback on vanilla's spread decision is no longer moved onto the carriers' "
+					+ "registry calls; the decision method is asked again where vanilla asks it (-Dforbric.nativeEntryRelay)"),
+			Map.entry("forbric.breathingCallbacks", "a mod's wrap of vanilla's breathing checks is no longer served by a kernel callback scope: "
+					+ "the native checks are asked again ahead of the carrier's breathing hook (-Dforbric.nativeDecisionIsland)"),
+			Map.entry("forbric.createBreathingMixin", "a mod's wrap of vanilla's breathing checks is no longer served by a kernel callback scope: "
+					+ "the native checks are asked again ahead of the carrier's breathing hook (-Dforbric.nativeDecisionIsland)"),
+			Map.entry("forbric.balmEffectVeto", "a clear-all veto is no longer re-hosted on the carrier's per-effect question: the native clear is put back on a view of "
+					+ "what the carrier lets go and the mod's own wrap runs on it (-Dforbric.scopedClearRelay)"),
+			Map.entry("forbric.effectClearVeto", "a clear-all veto is no longer re-hosted on the carrier's per-effect question: the native clear is put back on a view of "
+					+ "what the carrier lets go and the mod's own wrap runs on it (-Dforbric.scopedClearRelay)"),
+			Map.entry("forbric.fabricElytraTickAnchor", "a mod's cancellable injector behind a guard the carrier added is moved ahead of that guard by structure, not by name "
+					+ "(-Dforbric.carrierGuardedPoints)"),
+			Map.entry("forbric.fabricSoundContracts", "fabric-api's sound stream redirect is no longer neutralised and replaced by a rewrite of NeoForge's "
+					+ "default: it moves onto the carrier's SoundInstance.getStream and runs that default with fabric-api's own handler wherever a "
+					+ "sound inherits it (-Dforbric.carrierDefaultChains)"),
+			Map.entry("forbric.fabricServerLanguage", "a mod's injector on a vanilla decision the carrier replaced is moved onto the carrier's decision by structure, not "
+					+ "by name (-Dforbric.carrierDecisions)"),
+			Map.entry("forbric.fabricBlockBreak", "fabric-api's AFTER break handler is no longer wrapped by name: an injector at a vanilla call the carrier makes "
+					+ "in a helper that answers whether it made it runs on that answer, by structure (-Dforbric.carrierHelperResults)"),
+			Map.entry("forbric.fabricEntityAnchors", "fabric-api's bed occupancy redirect is no longer replaced by a rewrite of its handler: it moves onto the state's "
+					+ "setBedOccupied and runs NeoForge's inherited default with fabric-api's own handler wherever a bed inherits it "
+					+ "(-Dforbric.carrierDefaultChains); a NeoForge bed that overrides the setter keeps its own and no longer asks Fabric's event"));
 
 	private static final ForbricSwitches SYSTEM =
 			new ForbricSwitches(RENAMED, RETIRED, System::getProperty, ForbricLog::warn);

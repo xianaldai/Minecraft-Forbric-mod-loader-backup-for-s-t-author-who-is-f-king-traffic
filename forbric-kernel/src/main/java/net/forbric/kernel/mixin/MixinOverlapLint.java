@@ -36,7 +36,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.electronwill.nightconfig.core.UnmodifiableConfig;
-import com.electronwill.nightconfig.json.JsonFormat;
 
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.AnnotationNode;
@@ -534,7 +533,7 @@ public final class MixinOverlapLint {
 
 	private static UnmodifiableConfig parse(String name, byte[] json) {
 		try (Reader reader = new InputStreamReader(new ByteArrayInputStream(json), StandardCharsets.UTF_8)) {
-			return JsonFormat.fancyInstance().createParser().parse(reader);
+			return MixinConfigJson.parse(reader);
 		} catch (RuntimeException | IOException notAConfig) {
 			Caught.warn(notAConfig, "[Forbric/MixinOverlap] could not parse %s; taken as absent", name);
 			return null;

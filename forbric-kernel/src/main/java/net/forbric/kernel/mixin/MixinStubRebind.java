@@ -105,8 +105,14 @@ import net.forbric.kernel.util.ForbricLog;
  *       local of that name and the delegate's table has it in one slot of the handler's type, accessed while live more
  *       times than the {@code @At}'s ordinal. torrential's Conduit Power mining bonus names {@code speed} in
  *       {@code Player.getDestroySpeed}; the merged stub has no {@code speed}, the body is the overload the game calls,
- *       and the bonus silently never applied. {@code -Dforbric.mixinStubRebind.modifyVariable=off} leaves these where
- *       they are.</li>
+ *       and the bonus silently never applied. One discriminated by {@code ordinal} alone moves only with the slot it
+ *       reads pinned as its {@code index}: the native method's ordinal-picked local and exactly one non-added local of
+ *       the delegate holding the same values ({@link #ordinalLocalPinned}) — puzzleslib's explosion hook spares entities
+ *       in vanilla's {@code hurtEntities()}, where on NeoForge's overload the same ordinal would pick the blocks. An
+ *       {@code argsOnly} one at {@code HEAD}, by its ordinal among the arguments of its type, moves when the stub hands
+ *       that argument to the delegate unchanged as the one the same ordinal picks there ({@link #headArgumentMoved}):
+ *       architectury's tooltip position modifiers on vanilla's {@code tooltip}.
+ *       {@code -Dforbric.mixinStubRebind.modifyVariable=off} leaves these where they are.</li>
  * </ul>
  * {@code -Dforbric.mixinStubRebind=off} leaves every selector as compiled.
  */
@@ -134,12 +140,25 @@ public final class MixinStubRebind {
 	public static final String SHARED_PROPERTY = "forbric.mixinStubRebind.shared";
 	/** {@code -Dforbric.mixinStubRebind.allow=off}: an injector moves whatever its {@code allow} says, as before (A/B only). */
 	public static final String ALLOW_PROPERTY = "forbric.mixinStubRebind.allow";
+	/** {@code -Dforbric.mixinStubRebind.cancellable=off}: a handler with a {@code @Cancellable} callback stays on the stub. */
+	public static final String CANCELLABLE_PROPERTY = "forbric.mixinStubRebind.cancellable";
+	/** {@code -Dforbric.mixinStubRebind.slice=off}: a {@code @ModifyVariable} with a slice stays on the stub. */
+	public static final String SLICE_PROPERTY = "forbric.mixinStubRebind.slice";
+
+	private static boolean cancellableEnabled() {
+		return !"off".equalsIgnoreCase(System.getProperty(CANCELLABLE_PROPERTY, "on"));
+	}
+
+	private static boolean sliceEnabled() {
+		return !"off".equalsIgnoreCase(System.getProperty(SLICE_PROPERTY, "on"));
+	}
 
 	private static final String INJECT = "Lorg/spongepowered/asm/mixin/injection/Inject;";
 	private static final String CALLBACK_INFO = "Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;";
 	private static final String CALLBACK_INFO_RETURNABLE = "Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfoReturnable;";
 	private static final String LOCAL = "Lcom/llamalad7/mixinextras/sugar/Local;";
 	private static final String SHARE = "Lcom/llamalad7/mixinextras/sugar/Share;";
+	private static final String CANCELLABLE = "Lcom/llamalad7/mixinextras/sugar/Cancellable;";
 	private static final String REDIRECT = "Lorg/spongepowered/asm/mixin/injection/Redirect;";
 	private static final String GROUP = "Lorg/spongepowered/asm/mixin/injection/Group;";
 	private static final String DEFINITION = "Lcom/llamalad7/mixinextras/expression/Definition;";
@@ -174,6 +193,16 @@ public final class MixinStubRebind {
 	private static final Map<String, Ecosystem> ECOSYSTEMS = new ConcurrentHashMap<>();
 	/** Mixin class (internal name) → the config that declares it, so a finding can name the mod. */
 	private static final Map<String, String> CONFIGS = new ConcurrentHashMap<>();
+	/**
+	 * A config's mixin package (internal name) → the ecosystem of the mod that owns the config, and → the config. Mixin
+	 * takes every mixin of a config from its package, the ones a config plugin adds from {@code getMixins()} too, and those
+	 * are in no list the kernel reads; the package is how they are known to be the config's.
+	 */
+	private static final Map<String, Ecosystem> PACKAGE_ECOSYSTEMS = new ConcurrentHashMap<>();
+	private static final Map<String, String> PACKAGE_CONFIGS = new ConcurrentHashMap<>();
+	/** Packages two configs of different ecosystems (or, for {@link #PACKAGE_CONFIGS}, any two configs) declare. */
+	private static final java.util.Set<String> SHARED_PACKAGES = ConcurrentHashMap.newKeySet();
+	private static final java.util.Set<String> SHARED_CONFIG_PACKAGES = ConcurrentHashMap.newKeySet();
 
 	private MixinStubRebind() {
 	}
@@ -202,16 +231,68 @@ public final class MixinStubRebind {
 		return !"off".equalsIgnoreCase(System.getProperty(SHARED_PROPERTY, "on"));
 	}
 
-    public static String configOf(String internalName){return CONFIGS.get(internalName);}
+    /** The config that declares {@code internalName}, or, for a mixin its config's plugin added, the one config of its package. */
+    public static String configOf(String internalName){
+        if(internalName==null)return null;
+        String direct=CONFIGS.get(internalName);
+        if(direct!=null)return direct;
+        for(String p=parent(internalName);p!=null;p=parent(p)){
+            if(SHARED_CONFIG_PACKAGES.contains(p))return null;
+            String config=PACKAGE_CONFIGS.get(p);
+            if(config!=null)return config;
+        }
+        return null;
+    }
 
 	/** Records which family's mod declared {@code mixinInternalName}; null when the config's owner is ambiguous. */
 	public static void noteEcosystem(String mixinInternalName, Ecosystem ecosystem) {
 		if (mixinInternalName != null && ecosystem != null) ECOSYSTEMS.put(mixinInternalName, ecosystem);
 	}
 
-	/** Which family's mod declared {@code mixinInternalName}; null when not recorded or the config's owner is ambiguous. */
+	/**
+	 * Records the package a config takes its mixins from, with the ecosystem of the mod that owns it: a mixin the config's
+	 * plugin adds is found in no list, only in that package.
+	 */
+	public static void notePackage(String packageInternalName, Ecosystem ecosystem, String configName) {
+		if (packageInternalName == null || packageInternalName.isEmpty()) return;
+		if (ecosystem != null) {
+			Ecosystem other = PACKAGE_ECOSYSTEMS.putIfAbsent(packageInternalName, ecosystem);
+			if (other != null && other != ecosystem) SHARED_PACKAGES.add(packageInternalName);
+		} else {
+			// A config whose owner is ambiguous takes its mixins from here too: whatever this package holds may be its, so
+			// the package answers no family — the walk up stops here instead of reaching an outer config's.
+			SHARED_PACKAGES.add(packageInternalName);
+		}
+		if (configName != null) {
+			String other = PACKAGE_CONFIGS.putIfAbsent(packageInternalName, configName);
+			if (other != null && !other.equals(configName)) SHARED_CONFIG_PACKAGES.add(packageInternalName);
+		}
+	}
+
+	/**
+	 * Which family's mod declared {@code mixinInternalName}: as its config listed it, else as the config whose package
+	 * holds it (the innermost one) — which is where Mixin took a plugin-added mixin from. Null when not recorded or the
+	 * owner is ambiguous: a listed mixin of an ambiguous config, or a package (or the package a walk passes) that an
+	 * ambiguous config or two families' configs take mixins from.
+	 */
 	static Ecosystem ecosystemOf(String mixinInternalName) {
-		return mixinInternalName == null ? null : ECOSYSTEMS.get(mixinInternalName);
+		if (mixinInternalName == null) return null;
+		Ecosystem direct = ECOSYSTEMS.get(mixinInternalName);
+		if (direct != null) return direct;
+		// Listed by a config, but no family recorded: that config's owner is ambiguous, and ambiguity is answered with
+		// silence. Only a mixin no config lists — one a plugin added — is placed by its package.
+		if (CONFIGS.containsKey(mixinInternalName)) return null;
+		for (String p = parent(mixinInternalName); p != null; p = parent(p)) {
+			if (SHARED_PACKAGES.contains(p)) return null;
+			Ecosystem ecosystem = PACKAGE_ECOSYSTEMS.get(p);
+			if (ecosystem != null) return ecosystem;
+		}
+		return null;
+	}
+
+	private static String parent(String internalName) {
+		int slash = internalName.lastIndexOf('/');
+		return slash <= 0 ? null : internalName.substring(0, slash);
 	}
 
 	/** {@link #noteEcosystem}, and the config that declared it, which is how a finding about it names the mod. */
@@ -224,6 +305,10 @@ public final class MixinStubRebind {
 	static void forget() {
 		ECOSYSTEMS.clear();
 		CONFIGS.clear();
+		PACKAGE_ECOSYSTEMS.clear();
+		PACKAGE_CONFIGS.clear();
+		SHARED_PACKAGES.clear();
+		SHARED_CONFIG_PACKAGES.clear();
 	}
 
 	/** Moves every eligible injector of {@code mixin}; returns how many. {@code targets} must return nodes WITH code. */
@@ -241,7 +326,10 @@ public final class MixinStubRebind {
 			if (planned.getValue() == null) continue;
 			MethodNode handler = planned.getKey();
 			MethodNode outer = move(mixin, handler, target, ecosystem, planned.getValue());
-			if (outer != handler) mixin.methods.add(outer);
+			// The outer takes the handler's place: Mixin applies a class's injectors in declaration order, and at one point
+			// (two HEADs) that order is the order they run in. Appended, a moved HEAD callback ran after the argument
+			// modifiers declared below it, which natively read what it had just recorded.
+			if (outer != handler) mixin.methods.add(Math.max(0, mixin.methods.indexOf(handler)), outer);
 			moved++;
 		}
 		return moved;
@@ -273,9 +361,11 @@ public final class MixinStubRebind {
 	private static Map<MethodNode, Plan> plans(ClassNode mixin, ClassNode target, Ecosystem ecosystem,
 			CapturesLost capturesLost) {
 		Map<MethodNode, Plan> plans = new java.util.LinkedHashMap<>();
+		// The level Mixin weaves this mixin at, which decides where it looks for a @ModifyVariable's points.
+		int level = KernelMixinBootstrap.wovenLevel(configOf(mixin.name));
 		for (MethodNode handler : new ArrayList<>(mixin.methods)) {
-			if (handler.name.endsWith(MixinHandlerShim.INNER_SUFFIX)) continue;
-			plans.put(handler, plan(handler, target, ecosystem, capturesLost == null ? null
+			if (handler.name.contains(MixinHandlerShim.INNER_SUFFIX)) continue;
+			plans.put(handler, plan(handler, target, ecosystem, level, capturesLost == null ? null
 					: (stub, delegate) -> capturesLost.accept(handler, stub, delegate)));
 		}
 		for (boolean dropped = true; dropped; ) {   // dropping one sharer can leave another group incomplete
@@ -372,8 +462,21 @@ public final class MixinStubRebind {
 	 * What one move needs: the injector, the stub it is bound to, where that forwards, whether it captures the stub's
 	 * arguments, and the {@code @Share} keys it holds in its mixin's namespace.
 	 */
-	private record Plan(AnnotationNode injector, MethodNode stub, Delegation delegation, boolean captures, List<String> shares) {
+	/**
+	 * @param pins for a handler parameter whose by-type {@code @Local} the delegate decides only beside the arguments the
+	 *             carrier added: the slot it reads there, written into the annotation as its {@code index}
+	 */
+	/**
+	 * @param variableIndex for a {@code @ModifyVariable} discriminated by ordinal alone, the delegate slot that holds the
+	 *                      native local it picks (written as its {@code index}, the ordinal dropped), {@link #ORDINAL_KEPT}
+	 *                      when it moves with its ordinal; -1 otherwise
+	 */
+	private record Plan(AnnotationNode injector, MethodNode stub, Delegation delegation, boolean captures, List<String> shares,
+			Map<Integer, Integer> pins, int variableIndex, int level) {
 	}
+
+	/** {@link #ordinalLocalPinned}'s answer for a {@code @ModifyVariable} that moves keeping its ordinal, unpinned. */
+	static final int ORDINAL_KEPT = -2;
 
 	/** Told which handler its captures keep on which stub, and the body it would have moved to. */
 	@FunctionalInterface
@@ -397,6 +500,34 @@ public final class MixinStubRebind {
 		for (int i = 0; i + 1 < injector.values.size(); i += 2) {
 			if ("method".equals(injector.values.get(i))) injector.values.set(i + 1, new ArrayList<>(List.of(selector)));
 		}
+		for (Map.Entry<Integer, Integer> pin : plan.pins().entrySet()) {
+			AnnotationNode local = local(handler, pin.getKey());
+			if (local == null) continue;
+			if (local.values == null) local.values = new ArrayList<>();
+			local.values.add("index");
+			local.values.add(pin.getValue());
+			ForbricLog.info("[Forbric/Mixin] %s: %s's @Local %s on %s.%s%s reads slot %d — the one of its type there that is not an "
+					+ "argument the carrier added", mixin.name.replace('/', '.'), handler.name,
+					Type.getArgumentTypes(handler.desc)[pin.getKey()].getClassName(), target.name.replace('/', '.'), delegate.name,
+					delegate.desc, pin.getValue());
+		}
+		if (plan.variableIndex() == ORDINAL_KEPT) {
+			ForbricLog.info("[Forbric/Mixin] %s: %s keeps its ordinal on %s.%s%s — woven at %d, below 0.10.0, where Mixin finds its "
+					+ "points in the whole method and picks the local with its 0.9.2 walk; no argument the carrier added has its "
+					+ "type and the delegate's locals of that type hold the native method's, so Mixin picks there as it does natively",
+					mixin.name.replace('/', '.'), handler.name, target.name.replace('/', '.'), delegate.name, delegate.desc,
+					plan.level());
+		}
+		if (plan.variableIndex() >= 0) {
+			for (int i = 0; i + 1 < injector.values.size(); i += 2)
+				if ("ordinal".equals(injector.values.get(i))) { injector.values.remove(i + 1); injector.values.remove(i); break; }
+			injector.values.add("index");
+			injector.values.add(plan.variableIndex());
+			ForbricLog.info("[Forbric/Mixin] %s: %s's @ModifyVariable on %s.%s%s takes slot %d — the local its ordinal picks in the method "
+					+ "it was written for, holding the same value there; counted by type on the body, the carrier's added argument "
+					+ "would come first", mixin.name.replace('/', '.'), handler.name, target.name.replace('/', '.'), delegate.name, delegate.desc,
+					plan.variableIndex());
+		}
 		ForbricLog.info("[Forbric/Mixin] %s: %s now targets %s.%s%s — Mixin bound its selector to the merge-added stub %s, "
 				+ "which only forwards to it%s%s", mixin.name.replace('/', '.'), handler.name, target.name.replace('/', '.'),
 				delegate.name, delegate.desc, stub.desc, captures ? "; the handler still receives the stub's arguments" : "",
@@ -409,7 +540,7 @@ public final class MixinStubRebind {
 	 * @param capturesLost told {@code (stub, delegate)} when the handler would have moved but for its trailing captures
 	 *                     of the stub's arguments; {@code null} when the caller only wants the answer
 	 */
-	private static Plan plan(MethodNode handler, ClassNode target, Ecosystem ecosystem,
+	private static Plan plan(MethodNode handler, ClassNode target, Ecosystem ecosystem, int level,
 			BiConsumer<MethodNode, MethodNode> capturesLost) {
 		List<AnnotationNode> annotations = new ArrayList<>();
 		if (handler.visibleAnnotations != null) annotations.addAll(handler.visibleAnnotations);
@@ -421,7 +552,9 @@ public final class MixinStubRebind {
 		boolean variable = MODIFY_VARIABLE.equals(injector.desc);
 		if (variable && !modifyVariableEnabled()) return null;
 		if (!inject && !variable && !MixinRetarget.AT_DRIVEN.contains(injector.desc)) return null;
-		if (MixinFit.value(injector, "locals") != null || MixinFit.value(injector, "slice") != null) return null;
+		if (MixinFit.value(injector, "locals") != null) return null;
+		// A slice only on a @ModifyVariable whose local is pinned by value (ordinalLocalPinned proves the slice too).
+		if (MixinFit.value(injector, "slice") != null && !variable) return null;
 		// One selector, of the two forms a row is about: a name alone (bound to the first declared overload) or with its
 		// descriptor. Which it is, and the method it binds, are read as Mixin reads them, however it is spelled.
 		List<String> selectors = MixinFit.stringList(MixinFit.value(injector, "method"));
@@ -441,8 +574,12 @@ public final class MixinStubRebind {
 
 		List<AnnotationNode> points = MixinFit.atNodes(injector);
 		if (points.isEmpty()) return null;
+		int variableIndex = -1;
 		if (variable) {
-			if (!namedLocalMoved(injector, handler, stub, delegate)) return null;
+			if (!namedLocalMoved(injector, handler, stub, delegate) && !headArgumentMoved(injector, handler, stub, delegation)) {
+				variableIndex = ordinalLocalPinned(injector, handler, target, stub, delegation, ecosystem, level);
+				if (variableIndex < 0 && variableIndex != ORDINAL_KEPT) return null;
+			}
 		} else {
 			for (AnnotationNode at : points) {
 				String value = MixinFit.asString(MixinFit.value(at, "value"));
@@ -479,6 +616,7 @@ public final class MixinStubRebind {
 		}
 		for (int i = 0; i < plain; i++) if (trailingSugar(handler, i)) return null;
 		List<String> shares = new ArrayList<>();
+		Map<Integer, Integer> pins = new java.util.HashMap<>();
 		for (int i = plain; i < params.length; i++) {
 			AnnotationNode share = sugar(handler, i, SHARE);
 			if (share != null) {
@@ -486,14 +624,21 @@ public final class MixinStubRebind {
 				// this cannot see. Whether every sharer moves too is decided over the whole mixin (plans).
 				String key = MixinFit.asString(MixinFit.value(share, "value"));
 				if (!sharedEnabled() || key == null || MixinFit.value(share, "namespace") != null) return null;
-				// Not a @Redirect's: one that shares state with its siblings replaces the call as part of a takeover set up
-				// elsewhere in the method, and on the merged body that call can be a carrier's own pipeline.
-				// fabric-renderer-api's SectionCompilerMixin hands every block of a chunk section to the FRAPI renderer
-				// that way, and on NeoForge's compile overload the call it replaces is NeoForge's per-block renderer.
-				// FabricSectionCompilerMixinAdapter handles that reviewed pair atomically, together with the
-				// native-model context bridge. This generic pass must not move arbitrary renderer takeovers.
-				if (REDIRECT.equals(injector.desc)) return null;
+				// A @Redirect that shares state with its siblings replaces the call as part of a takeover set up elsewhere
+				// in the method; on the merged body that call could be a carrier's own pipeline. It moves only where the
+				// delegate makes each call it replaces exactly as often as the mod's own platform made it at that
+				// signature (replacesOnlyNativeCalls): the takeover then meets the calls it met natively, and none a
+				// carrier added. fabric-renderer-api's SectionCompilerMixin hands every block of a chunk section to the
+				// FRAPI renderer that way: vanilla's compile tessellates once, and so does NeoForge's overload, whose extra
+				// geometry is drawn by calls of its own the redirect does not name.
+				if (REDIRECT.equals(injector.desc) && !replacesOnlyNativeCalls(points, target, stub, delegate, ecosystem)) return null;
 				shares.add(key);
+				continue;
+			}
+			if (sugar(handler, i, CANCELLABLE) != null) {
+				// MixinExtras' @Cancellable: a callback for the target method. On the delegate, cancelling returns from it and
+				// the pure stub returns at once with what it returned, as cancelling the stub would have.
+				if (!cancellableEnabled()) return null;
 				continue;
 			}
 			AnnotationNode local = local(handler, i);
@@ -505,7 +650,14 @@ public final class MixinStubRebind {
 				continue;
 			}
 			if (names.isEmpty() && byTypeOnly(local)) {
-				if (!typedLocalEnabled() || !theOnlyLocalOfItsType(target, delegate, params[i], points)) return null;
+				if (!typedLocalEnabled()) return null;
+				if (theOnlyLocalOfItsType(target, delegate, params[i], points)) continue;
+				// A value the stub hands the delegate from constants alone is never one of vanilla's locals. Decided beside
+				// those, the one slot left is pinned (architectury's explosion hook takes the entity list by type in
+				// hurtEntities, where NeoForge's body also takes the affected blocks, handed List.of() by the stub).
+				int slot = onlyLocalOfItsType(target, delegate, params[i], points, addedArgumentSlots(stub, delegation));
+				if (slot < 0) return null;
+				pins.put(i, slot);
 				continue;
 			}
 			if (names.size() != 1 || MixinFit.value(local, "argsOnly") != null || !hasLocal(delegate, names.getFirst(), params[i])) return null;
@@ -520,7 +672,28 @@ public final class MixinStubRebind {
 		if (captures) {
 			for (int i = 0; i < stubParams.length; i++) if (delegation.positions()[i] < 0) return null;
 		}
-		return new Plan(injector, stub, delegation, captures, List.copyOf(shares));
+		return new Plan(injector, stub, delegation, captures, List.copyOf(shares), Map.copyOf(pins), variableIndex, level);
+	}
+
+	/**
+	 * Whether a {@code @Redirect}'s points name calls the delegate makes exactly as often as the method its selector bound
+	 * on the mod's own platform did — that platform's body at the stub's signature, read in its native reference — and at
+	 * least once, with no ordinal picking among them. A carrier that added a call of that member (its own pipeline) or
+	 * split one makes the counts differ, and the redirect stays where Mixin bound it. No reference, nothing moves.
+	 */
+	static boolean replacesOnlyNativeCalls(List<AnnotationNode> points, ClassNode target, MethodNode stub, MethodNode delegate,
+			Ecosystem ecosystem) {
+		ClassNode reference = ecosystem == null ? null : NativeGameReferences.reference(ecosystem, target.name);
+		MethodNode was = reference == null ? null : reference.methods.stream()
+				.filter(m -> m.name.equals(stub.name) && m.desc.equals(stub.desc)).findFirst().orElse(null);
+		if (was == null || points.isEmpty()) return false;
+		for (AnnotationNode at : points) {
+			if (MixinFit.value(at, "ordinal") != null) return false;
+			String value = MixinFit.asString(MixinFit.value(at, "value")), member = MixinFit.asString(MixinFit.value(at, "target"));
+			List<AbstractInsnNode> natively = anchors(was, value, member), merged = anchors(delegate, value, member);
+			if (natively == null || merged == null || natively.isEmpty() || natively.size() != merged.size()) return false;
+		}
+		return true;
 	}
 
 	/**
@@ -678,12 +851,15 @@ public final class MixinStubRebind {
 		for (int i = delegateParams.length; i < outerParams.size(); i++) {
 			outer.instructions.add(new VarInsnNode(outerParams.get(i).getOpcode(Opcodes.ILOAD), slots[i]));
 		}
-		outer.instructions.add(MixinHandlerShim.callOwn(mixin, handlerStatic, handler.name + MixinHandlerShim.INNER_SUFFIX,
+		// The body aside under a name of this mixin's own: two mixins on one target whose handlers share a name (Balm's and
+		// Architectury's ServerPlayer openMenu) would otherwise add one method twice, and Mixin fails the second mixin.
+		String inner = MixinHandlerShim.asideName(mixin.name, handler.name, MixinHandlerShim.INNER_SUFFIX);
+		outer.instructions.add(MixinHandlerShim.callOwn(mixin, handlerStatic, inner,
 				handler.desc));
 		outer.instructions.add(new InsnNode(Type.getReturnType(handler.desc).getOpcode(Opcodes.IRETURN)));
 		outer.maxLocals = slot;
 		outer.maxStack = slot + 2;
-		handler.name = handler.name + MixinHandlerShim.INNER_SUFFIX;
+		handler.name = inner;
 		handler.visibleAnnotations = without(handler.visibleAnnotations, injector.desc);
 		handler.invisibleAnnotations = without(handler.invisibleAnnotations, injector.desc);
 		handler.visibleParameterAnnotations = null;
@@ -785,6 +961,254 @@ public final class MixinStubRebind {
 	}
 
 	/**
+	 * The delegate slot that holds the local a {@code @ModifyVariable} discriminated by {@code ordinal} alone picks in the
+	 * method the mod was compiled against, or -1.
+	 *
+	 * <p>Mixin counts that ordinal over every slot of the handler's type in the local variable table at the point, method
+	 * arguments included. On the delegate the carrier's added arguments come first, so the same ordinal picks another
+	 * value: NeoForge's {@code ServerExplosion.hurtEntities(List)} takes the exploded blocks ahead of the entity list a
+	 * mod's {@code @ModifyVariable(ordinal = 0)} on vanilla's {@code hurtEntities()} modifies. The local is pinned by
+	 * what it holds instead: one {@code LOAD}/{@code STORE} point, no shift or target; in the native method the
+	 * ordinal picks the same slot at every point; the delegate, its added arguments ({@link #addedArgumentSlots}) aside,
+	 * has exactly one slot of that type whose stored values are the native slot's, each the same expression over the
+	 * method's own values ({@link NativeCallInlining.Conditions}), stored and accessed as often. A value joined on two
+	 * paths ({@code cond ? 1 : 0}, a flag set on either branch) compares as each path's value under the conditions that
+	 * reach it ({@code storedDecided}).
+	 *
+	 * <p>A slice is kept, and judged in both methods: each of its {@code from}/{@code to} points an {@code INVOKE} or
+	 * {@code FIELD} of one member, found exactly once in the native method and once in the delegate (and not in the stub),
+	 * so it cuts both at the same statement; the slot is picked, and its stores and accesses compared, inside that cut.
+	 * puzzleslib's effect-tooltip hook forces vanilla's "show the tooltip" flag in {@code EffectsInInventory.extractText}
+	 * from {@code clipText} on; NeoForge's overload holds the same flag, one slot further on, behind the added argument.
+	 * {@code -Dforbric.mixinStubRebind.slice=off} leaves a sliced one on the stub.
+	 *
+	 * <p>All of the above is how Mixin finds and picks from 0.10.0 on. Woven at {@code level} below 0.10.0 (Fabric Loader
+	 * gives that to a mod with no {@code fabricloader} floor), Mixin finds a {@code LOAD}/{@code STORE} point in the whole
+	 * method, slice or not, and picks the ordinal with its 0.9.2 local walk at each point, so the native ordinal can pick
+	 * different locals at different points. Where that is the native pick by construction, the injector keeps its
+	 * ordinal ({@link #ORDINAL_KEPT}): no argument the carrier added has the handler's type, and the delegate's other locals
+	 * of that type are the native method's, slot for slot in order, each stored the same values and accessed as often across
+	 * the whole method; Mixin then discriminates it on the delegate at that level as it does natively. Otherwise (an added
+	 * argument of that type, as in {@code hurtEntities}) it is pinned as above over the whole method, the slice set aside
+	 * as Mixin sets it aside, and the single native slot is still read with the newer walk's model. That model is not
+	 * proved to be the 0.9.2 walk at every point (that walk reads Mixin's class metadata and frames, which this judgement
+	 * does not have); MixinStubRebindOrdinalWeaveTest shows the two agreeing on that shape at 0.9.2.
+	 */
+	static int ordinalLocalPinned(AnnotationNode injector, MethodNode handler, ClassNode target, MethodNode stub, Delegation delegation,
+			Ecosystem ecosystem, int level) {
+		if (MixinFit.value(injector, "name") != null || MixinFit.value(injector, "index") != null
+				|| Boolean.TRUE.equals(MixinFit.value(injector, "argsOnly"))) return -1;
+		if (!(MixinFit.value(injector, "ordinal") instanceof Integer ordinal) || ordinal < 0) return -1;
+		Type[] params = Type.getArgumentTypes(handler.desc);
+		if (params.length == 0 || !params[0].equals(Type.getReturnType(handler.desc))) return -1;
+		Type type = params[0];
+		List<AnnotationNode> points = MixinFit.atNodes(injector);
+		if (points.size() != 1) return -1;
+		AnnotationNode at = points.getFirst();
+		String value = MixinFit.asString(MixinFit.value(at, "value"));
+		if (!LOCAL_POINTS.contains(value) || MixinFit.value(at, "slice") != null || MixinFit.value(at, "shift") != null
+				|| MixinFit.value(at, "target") != null || MixinFit.value(at, "ordinal") != null) return -1;
+		ClassNode reference = ecosystem == null ? null : NativeGameReferences.reference(ecosystem, target.name);
+		MethodNode was = reference == null ? null : reference.methods.stream()
+				.filter(m -> m.name.equals(stub.name) && m.desc.equals(stub.desc)).findFirst().orElse(null);
+		MethodNode delegate = delegation.delegate();
+		if (was == null || was.localVariables == null || delegate.localVariables == null) return -1;
+		Object slice = MixinFit.value(injector, "slice");
+		if (slice != null && !sliceEnabled()) return -1;
+		if (level < org.spongepowered.asm.mixin.FabricUtil.COMPATIBILITY_0_10_0) {
+			if (sameLocalsOfType(reference, was, target, delegate, stub, delegation, type)) return ORDINAL_KEPT;
+			slice = null;   // Mixin looks in the whole method at this level, natively and on the delegate alike
+		}
+		Cut nativeCut = Cut.of(slice, was), mergedCut = Cut.of(slice, delegate);
+		if (nativeCut == null || mergedCut == null || slice != null && Cut.of(slice, stub) != Cut.ABSENT) return -1;
+		int opcode = type.getOpcode("STORE".equals(value) ? Opcodes.ISTORE : Opcodes.ILOAD);
+		// The native slot: the ordinal-th of that type among the table's live entries at each access of it, `this` aside.
+		int nativeSlot = -1;
+		for (AbstractInsnNode insn : was.instructions) {
+			if (!nativeCut.contains(was, insn)) continue;
+			if (!(insn instanceof VarInsnNode access) || access.getOpcode() != opcode) continue;
+			List<Integer> live = liveSlots(was, insn, type, "STORE".equals(value));
+			if (!live.contains(access.var)) continue;
+			int picked = ordinal < live.size() ? live.get(ordinal) : -1;
+			if (picked != access.var) continue;
+			if (nativeSlot >= 0 && nativeSlot != picked) return -1;
+			nativeSlot = picked;
+		}
+		if (nativeSlot < 0) return -1;
+		NativeCallInlining.Conditions nativeValues = NativeCallInlining.Conditions.of(reference.name, was, Integer.MAX_VALUE);
+		NativeCallInlining.Conditions mergedValues = NativeCallInlining.Conditions.of(target.name, delegate, Integer.MAX_VALUE);
+		if (nativeValues == null || mergedValues == null) return -1;
+		List<String> wanted = stored(was, nativeSlot, type, nativeValues, nativeCut);
+		int wantedAccesses = accesses(was, nativeSlot, opcode, nativeCut);
+		if (wanted == null || wanted.isEmpty()) return -1;
+		java.util.BitSet added = addedArgumentSlots(stub, delegation);
+		int base = (delegate.access & Opcodes.ACC_STATIC) != 0 ? 0 : 1, found = -1;
+		java.util.Set<Integer> slots = new java.util.TreeSet<>();
+		for (LocalVariableNode local : delegate.localVariables) if (local.desc.equals(type.getDescriptor()) && local.index >= base && !added.get(local.index)) slots.add(local.index);
+		for (int slot : slots) {
+			if (!wanted.equals(stored(delegate, slot, type, mergedValues, mergedCut)) || accesses(delegate, slot, opcode, mergedCut) != wantedAccesses) continue;
+			if (found >= 0) return -1;
+			found = slot;
+		}
+		return found;
+	}
+
+	/**
+	 * Where a {@code @Slice} cuts a method: from its {@code from} point to its {@code to} point, both inclusive, as Mixin
+	 * cuts it; the whole method without one. Only points this can find again in another method are read — an
+	 * {@code INVOKE} or {@code FIELD} of one member, without ordinal or shift, found exactly once.
+	 */
+	record Cut(AbstractInsnNode from, AbstractInsnNode to) {
+		/** A slice whose points are not in the method at all (the stub, for a body the slice is about). */
+		static final Cut ABSENT = new Cut(null, null);
+		private static final Cut WHOLE = new Cut(null, null);
+
+		/** The cut {@code slice} makes in {@code method}: {@link #WHOLE} without one, {@link #ABSENT}, or null when unreadable. */
+		static Cut of(Object slice, MethodNode method) {
+			if (slice == null) return WHOLE;
+			if (!(slice instanceof AnnotationNode node) || MixinFit.value(node, "id") != null) return null;
+			Object from = MixinFit.value(node, "from"), to = MixinFit.value(node, "to");
+			if (from == null && to == null) return WHOLE;
+			AbstractInsnNode start = null, end = null;
+			int absent = 0;
+			for (Object point : java.util.Arrays.asList(from, to)) {
+				if (point == null) continue;
+				if (!(point instanceof AnnotationNode at)) return null;
+				String kind = MixinFit.asString(MixinFit.value(at, "value"));
+				String member = MixinFit.asString(MixinFit.value(at, "target"));
+				if (member == null || !("INVOKE".equals(kind) || "FIELD".equals(kind)) || MixinFit.value(at, "ordinal") != null
+						|| MixinFit.value(at, "shift") != null || MixinFit.value(at, "by") != null) return null;
+				List<AbstractInsnNode> hits = anchors(method, kind, member);
+				if (hits == null || hits.size() > 1) return null;
+				if (hits.isEmpty()) { absent++; continue; }
+				if (point == from) start = hits.getFirst();
+				else end = hits.getFirst();
+			}
+			if (absent > 0) return absent == (from == null ? 0 : 1) + (to == null ? 0 : 1) ? ABSENT : null;
+			return new Cut(start, end);
+		}
+
+		boolean contains(MethodNode method, AbstractInsnNode insn) {
+			if (this == WHOLE) return true;
+			if (this == ABSENT) return false;
+			int at = method.instructions.indexOf(insn);
+			return (from == null || method.instructions.indexOf(from) <= at) && (to == null || at <= method.instructions.indexOf(to));
+		}
+	}
+
+	/**
+	 * Whether {@code delegate}'s locals of {@code type} are {@code was}'s, so that an ordinal counted over them picks the same
+	 * value in both at any point and by any of Mixin's walks: no argument the carrier added is of that type, and the other
+	 * slots of that type, `this` aside, pair up in slot order, each pair stored the same expressions, loaded and stored as
+	 * often, and named by as many table entries, across the whole method.
+	 */
+	private static boolean sameLocalsOfType(ClassNode reference, MethodNode was, ClassNode target, MethodNode delegate, MethodNode stub,
+			Delegation delegation, Type type) {
+		Type[] params = Type.getArgumentTypes(delegate.desc);
+		if (delegation.sources() == null || delegation.sources().length != params.length) return false;
+		for (int i = 0; i < params.length; i++) if (delegation.sources()[i] == CONSTANT && params[i].equals(type)) return false;
+		java.util.BitSet added = addedArgumentSlots(stub, delegation);
+		List<Integer> natives = slotsOfType(was, type, new java.util.BitSet()), merged = slotsOfType(delegate, type, added);
+		if (natives.isEmpty() || natives.size() != merged.size()) return false;
+		NativeCallInlining.Conditions nativeValues = NativeCallInlining.Conditions.of(reference.name, was, Integer.MAX_VALUE);
+		NativeCallInlining.Conditions mergedValues = NativeCallInlining.Conditions.of(target.name, delegate, Integer.MAX_VALUE);
+		if (nativeValues == null || mergedValues == null) return false;
+		int load = type.getOpcode(Opcodes.ILOAD), store = type.getOpcode(Opcodes.ISTORE);
+		for (int i = 0; i < natives.size(); i++) {
+			int n = natives.get(i), m = merged.get(i);
+			List<String> stores = stored(was, n, type, nativeValues, Cut.WHOLE);
+			if (stores == null || !stores.equals(stored(delegate, m, type, mergedValues, Cut.WHOLE))) return false;
+			if (accesses(was, n, load, Cut.WHOLE) != accesses(delegate, m, load, Cut.WHOLE)
+					|| accesses(was, n, store, Cut.WHOLE) != accesses(delegate, m, store, Cut.WHOLE)
+					|| entries(was, n, type) != entries(delegate, m, type)) return false;
+		}
+		return true;
+	}
+
+	/** The slots the table gives {@code type}, `this` and {@code excluded} aside, in order. */
+	private static List<Integer> slotsOfType(MethodNode method, Type type, java.util.BitSet excluded) {
+		java.util.Set<Integer> out = new java.util.TreeSet<>();
+		int base = (method.access & Opcodes.ACC_STATIC) != 0 ? 0 : 1;
+		for (LocalVariableNode local : method.localVariables)
+			if (local.index >= base && local.desc.equals(type.getDescriptor()) && !excluded.get(local.index)) out.add(local.index);
+		return new ArrayList<>(out);
+	}
+
+	private static int entries(MethodNode method, int slot, Type type) {
+		int n = 0;
+		for (LocalVariableNode local : method.localVariables) if (local.index == slot && local.desc.equals(type.getDescriptor())) n++;
+		return n;
+	}
+
+	/** The slots of {@code type} the table names live at {@code insn} (just after it, for a store), `this` aside, in order. */
+	private static List<Integer> liveSlots(MethodNode method, AbstractInsnNode insn, Type type, boolean store) {
+		AbstractInsnNode live = insn;
+		if (store) {
+			live = insn.getNext();
+			while (live != null && live.getOpcode() < 0) live = live.getNext();
+		}
+		java.util.Set<Integer> out = new java.util.TreeSet<>();
+		if (live == null) return List.of();
+		int where = method.instructions.indexOf(live), base = (method.access & Opcodes.ACC_STATIC) != 0 ? 0 : 1;
+		for (LocalVariableNode local : method.localVariables)
+			if (local.index >= base && local.desc.equals(type.getDescriptor()) && method.instructions.indexOf(local.start) <= where
+					&& where < method.instructions.indexOf(local.end)) out.add(local.index);
+		return new ArrayList<>(out);
+	}
+
+	/** The expressions stored into {@code slot} inside {@code cut}, in order; null when one cannot be read. */
+	private static List<String> stored(MethodNode method, int slot, Type type, NativeCallInlining.Conditions values, Cut cut) {
+		List<String> out = new ArrayList<>();
+		int opcode = type.getOpcode(Opcodes.ISTORE);
+		for (AbstractInsnNode insn : method.instructions) {
+			if (!(insn instanceof VarInsnNode store) || store.getOpcode() != opcode || store.var != slot || !cut.contains(method, insn)) continue;
+			String expression = values.storedDecided(store);
+			if (expression == null || expression.contains("?") || UNRESOLVED_JOIN.matcher(expression).find()) return null;
+			out.add(expression);
+		}
+		return out;
+	}
+
+	/** A join {@code storedDecided} could not write out: one inside an operand rather than a stored value or a local's. */
+	private static final java.util.regex.Pattern UNRESOLVED_JOIN = java.util.regex.Pattern.compile("\\bjoin(?!\\[)");
+
+	private static int accesses(MethodNode method, int slot, int opcode, Cut cut) {
+		int n = 0;
+		for (AbstractInsnNode insn : method.instructions)
+			if (insn instanceof VarInsnNode access && access.getOpcode() == opcode && access.var == slot && cut.contains(method, insn)) n++;
+		return n;
+	}
+
+	/**
+	 * Whether a {@code @ModifyVariable} that changes one of the target's arguments where the method begins picks the same
+	 * argument on the delegate: {@code argsOnly}, one {@code @At("HEAD")} (no slice, shift or target), discriminated by its
+	 * {@code ordinal} among the arguments of the handler's type, or by being the only one — no {@code name} or
+	 * {@code index}, which read local tables and slots the carrier renumbered — and the stub argument that picks is handed
+	 * to the delegate unchanged, as the argument the same rule picks there ({@link #argumentSurvives}).
+	 *
+	 * <p>On the stub the modifier runs before the forwarding call and changes what the delegate receives, so a caller of the
+	 * stub sees it on the delegate as well; but a caller of the delegate itself — the merged game's own — never reaches it.
+	 * architectury's tooltip position event changes vanilla's {@code tooltip(Font, List, int, int, ClientTooltipPositioner,
+	 * Identifier)} x and y that way at its head, beside the HEAD callback that fires the event and fills the position the
+	 * modifiers read; that callback moved to the body, the modifiers stayed on the stub, and the deferred tooltip — drawn
+	 * through the body directly — never moved. Moved too, the three run in the one head in their native order.
+	 */
+	static boolean headArgumentMoved(AnnotationNode injector, MethodNode handler, MethodNode stub, Delegation delegation) {
+		if (!Boolean.TRUE.equals(MixinFit.value(injector, "argsOnly")) || MixinFit.value(injector, "index") != null
+				|| !MixinFit.stringList(MixinFit.value(injector, "name")).isEmpty() || MixinFit.value(injector, "slice") != null) return false;
+		Type[] params = Type.getArgumentTypes(handler.desc);
+		if (params.length == 0 || !params[0].equals(Type.getReturnType(handler.desc))) return false;
+		List<AnnotationNode> points = MixinFit.atNodes(injector);
+		if (points.size() != 1) return false;
+		AnnotationNode at = points.getFirst();
+		if (!"HEAD".equals(MixinFit.asString(MixinFit.value(at, "value"))) || MixinFit.value(at, "slice") != null
+				|| MixinFit.value(at, "shift") != null || MixinFit.value(at, "target") != null) return false;
+		Object ordinal = MixinFit.value(injector, "ordinal");
+		if (ordinal != null && !(ordinal instanceof Integer n && n >= 0)) return false;
+		return argumentSurvives(params[0], ordinal, stub, delegation);
+	}
+
+	/**
 	 * Whether a {@code @ModifyVariable}'s one named local is in the delegate and not the stub, provably, and reached by
 	 * its {@code @At}: one name and no {@code ordinal}/{@code index}/{@code argsOnly} discriminator; the stub declares
 	 * no local of that name; every entry of that name in the delegate's table is one slot of the handler's type; and
@@ -793,7 +1217,7 @@ public final class MixinStubRebind {
 	private static boolean namedLocalMoved(AnnotationNode injector, MethodNode handler, MethodNode stub, MethodNode delegate) {
 		List<String> names = MixinFit.stringList(MixinFit.value(injector, "name"));
 		if (names.size() != 1 || MixinFit.value(injector, "index") != null || MixinFit.value(injector, "ordinal") != null
-				|| Boolean.TRUE.equals(MixinFit.value(injector, "argsOnly"))) return false;
+				|| Boolean.TRUE.equals(MixinFit.value(injector, "argsOnly")) || MixinFit.value(injector, "slice") != null) return false;
 		Type[] params = Type.getArgumentTypes(handler.desc);
 		if (params.length == 0 || !params[0].equals(Type.getReturnType(handler.desc))) return false;
 		String name = names.getFirst();
@@ -961,8 +1385,23 @@ public final class MixinStubRebind {
 	 * never stood for — NeoForge's registry snapshot calls {@code MappedRegistry.register(int, …)} directly, where
 	 * fabric-registry-sync's add-entry callback on {@code register(ResourceKey, …)} has no business firing.
 	 */
-	record Delegation(MethodNode delegate, int[] positions, boolean computed) {
+	/**
+	 * @param sources for each argument of the delegate, what the stub hands it: the stub's argument of that index, or
+	 *                {@link #CONSTANT} — a value built from constants alone (a literal, {@code null}, a static field, a
+	 *                zero-argument static factory such as {@code List.of()}, a lambda capturing nothing, a construction from
+	 *                such values) — or {@link #COMPUTED}, anything worked out from the stub's arguments or fields; null when
+	 *                not recorded
+	 */
+	record Delegation(MethodNode delegate, int[] positions, boolean computed, int[] sources) {
+		Delegation(MethodNode delegate, int[] positions, boolean computed) {
+			this(delegate, positions, computed, null);
+		}
 	}
+
+	/** {@link Delegation#sources}: a value of constants alone. */
+	static final int CONSTANT = -3;
+	/** {@link Delegation#sources}: a value worked out from the stub's arguments, its receiver or its fields. */
+	static final int COMPUTED = -1;
 
 	/**
 	 * The one same-name overload {@code stub} forwards to, with the argument mapping, when {@code stub} is nothing else:
@@ -983,7 +1422,7 @@ public final class MixinStubRebind {
 		boolean computed = false;
 		MethodInsnNode call = null;
 		MethodNode found = null;
-		int[] mapping = null;
+		int[] mapping = null, sources = null;
 		AbstractInsnNode after = null;
 		for (AbstractInsnNode insn = stub.instructions.getFirst(); insn != null; insn = insn.getNext()) {
 			int op = insn.getOpcode();
@@ -993,11 +1432,11 @@ public final class MixinStubRebind {
 				stack.add(load.var < 256 ? paramBySlot[load.var] : -1);
 				if (!isStatic && load.var == 0) stack.set(stack.size() - 1, -2);
 			} else if (insn instanceof LdcInsnNode || (op >= Opcodes.ACONST_NULL && op <= Opcodes.DCONST_1) || op == Opcodes.BIPUSH || op == Opcodes.SIPUSH) {
-				stack.add(-1);
+				stack.add(CONSTANT);
 			} else if (insn instanceof FieldInsnNode get && op == Opcodes.GETSTATIC) {
-				stack.add(-1);
+				stack.add(CONSTANT);
 			} else if (insn instanceof TypeInsnNode type && op == Opcodes.NEW) {
-				stack.add(-1);
+				stack.add(CONSTANT);   // stays one only if its constructor is handed constants alone
 			} else if (insn instanceof InvokeDynamicInsnNode indy
 					&& "java/lang/invoke/LambdaMetafactory".equals(indy.bsm.getOwner())
 					&& ("metafactory".equals(indy.bsm.getName()) || "altMetafactory".equals(indy.bsm.getName()))) {
@@ -1006,7 +1445,7 @@ public final class MixinStubRebind {
 				int captured = Type.getArgumentTypes(indy.desc).length;
 				if (stack.size() < captured) return null;
 				for (int k = 0; k < captured; k++) stack.removeLast();
-				stack.add(-1);
+				stack.add(captured > 0 ? COMPUTED : CONSTANT);
 				computed |= captured > 0;
 			} else if (insn instanceof FieldInsnNode get && op == Opcodes.GETFIELD) {
 				if (stack.isEmpty()) return null;
@@ -1022,7 +1461,10 @@ public final class MixinStubRebind {
 				Type[] args = Type.getArgumentTypes(m.desc);
 				if (m.name.equals("<init>") && op == Opcodes.INVOKESPECIAL) {
 					if (stack.size() < args.length + 1) return null;
-					for (int k = 0; k <= args.length; k++) stack.removeLast();   // the args and the dup'd instance
+					boolean constants = true;
+					for (int k = 0; k <= args.length; k++) constants &= stack.removeLast() == CONSTANT;   // the args and the dup'd instance
+					// The NEW's own entry is still below: a construction from anything but constants is computed.
+					if (!constants && !stack.isEmpty() && stack.getLast() == CONSTANT) stack.set(stack.size() - 1, COMPUTED);
 					continue;
 				}
 				boolean delegationCall = m.owner.equals(owner.name) && m.name.equals(stub.name) && !m.desc.equals(stub.desc)
@@ -1037,7 +1479,7 @@ public final class MixinStubRebind {
 					int consumed = args.length + (op == Opcodes.INVOKESTATIC ? 0 : 1);
 					if (stack.size() < consumed) return null;
 					for (int k = 0; k < consumed; k++) stack.removeLast();
-					stack.add(-1);
+					stack.add(consumed > 0 ? COMPUTED : CONSTANT);
 					computed |= consumed > 0;   // a zero-argument static factory is a constant
 					continue;
 				}
@@ -1046,8 +1488,10 @@ public final class MixinStubRebind {
 				if (!isStatic && stack.getFirst() != -2) return null;
 				int[] positions = new int[stubParams.length];
 				Arrays.fill(positions, -1);
+				sources = new int[args.length];
 				for (int j = 0; j < args.length; j++) {
 					int source = stack.get(receiver + j);
+					sources[j] = source >= 0 || source == CONSTANT ? source : COMPUTED;
 					if (source >= 0) {
 						if (positions[source] >= 0) return null;   // one stub argument passed twice: ambiguous
 						positions[source] = j;
@@ -1069,7 +1513,7 @@ public final class MixinStubRebind {
 		}
 		if (call == null || after == null || after.getOpcode() < Opcodes.IRETURN || after.getOpcode() > Opcodes.RETURN) return null;
 		for (AbstractInsnNode insn = after.getNext(); insn != null; insn = insn.getNext()) if (insn.getOpcode() >= 0) return null;
-		return new Delegation(found, mapping, computed);
+		return new Delegation(found, mapping, computed, sources);
 	}
 
 	/** A {@code @Local} that names nothing — no ordinal or index, not limited to the arguments: MixinExtras' implicit mode. */
@@ -1086,17 +1530,47 @@ public final class MixinStubRebind {
 	 * ({@link #loadedOrStoredSinceAFrame}).
 	 */
 	static boolean theOnlyLocalOfItsType(ClassNode owner, MethodNode delegate, Type type, List<AnnotationNode> points) {
-		if (delegate.localVariables == null || delegate.instructions == null) return false;
-		if (type.getSort() != Type.OBJECT && type.getSort() != Type.ARRAY) return false;
+		return onlyLocalOfItsType(owner, delegate, type, points, new java.util.BitSet()) >= 0;
+	}
+
+	/**
+	 * The delegate's parameter slots that hold a value vanilla's body cannot have held in a local: the stub hands them a
+	 * value of constants alone ({@link #CONSTANT} — architectury's case, NeoForge's {@code hurtEntities()} passing
+	 * {@code List.of()} as the affected blocks). A value the stub works out from its own arguments or fields
+	 * ({@link #COMPUTED}) is not set aside: that is what vanilla's body computed inline, often into a local the carrier
+	 * hoisted into the stub (the stub-purity rule allows exactly that), and a by-type {@code @Local} may have read that
+	 * very local natively — setting it aside would pin the other one.
+	 */
+	static java.util.BitSet addedArgumentSlots(MethodNode stub, Delegation delegation) {
+		MethodNode delegate = delegation.delegate();
+		Type[] params = Type.getArgumentTypes(delegate.desc);
+		java.util.BitSet slots = new java.util.BitSet();
+		if (delegation.sources() == null || delegation.sources().length != params.length) return slots;
+		int slot = (delegate.access & Opcodes.ACC_STATIC) != 0 ? 0 : 1;
+		for (int i = 0; i < params.length; i++) {
+			if (delegation.sources()[i] == CONSTANT) slots.set(slot);
+			slot += params[i].getSize();
+		}
+		return slots;
+	}
+
+	/**
+	 * The one slot a by-type {@code @Local} of {@code type} reads on {@code delegate} at every anchor of {@code points}, the
+	 * slots in {@code excluded} aside — as {@link #theOnlyLocalOfItsType} decides it — or -1. With nothing excluded it
+	 * is MixinExtras' own implicit pick; with a slot excluded it is the pick an explicit {@code index} has to make.
+	 */
+	static int onlyLocalOfItsType(ClassNode owner, MethodNode delegate, Type type, List<AnnotationNode> points, java.util.BitSet excluded) {
+		if (delegate.localVariables == null || delegate.instructions == null) return -1;
+		if (type.getSort() != Type.OBJECT && type.getSort() != Type.ARRAY) return -1;
 		List<AbstractInsnNode> anchors = new ArrayList<>();
 		for (AnnotationNode at : points) {
 			String value = MixinFit.asString(MixinFit.value(at, "value"));
 			String member = MixinFit.asString(MixinFit.value(at, "target"));
-			if (!"INVOKE".equals(value) && !"FIELD".equals(value) || member == null) return false;
+			if (!"INVOKE".equals(value) && !"FIELD".equals(value) || member == null) return -1;
 			// BEFORE and AFTER one call or field access leave the locals as they are; BY walks past other instructions.
-			if (MixinFit.value(at, "shift") instanceof String[] shift && !"BEFORE".equals(shift[1]) && !"AFTER".equals(shift[1])) return false;
+			if (MixinFit.value(at, "shift") instanceof String[] shift && !"BEFORE".equals(shift[1]) && !"AFTER".equals(shift[1])) return -1;
 			List<AbstractInsnNode> found = anchors(delegate, value, member);
-			if (found == null || found.isEmpty()) return false;
+			if (found == null || found.isEmpty()) return -1;
 			anchors.addAll(found);
 		}
 		org.objectweb.asm.tree.analysis.Frame<org.objectweb.asm.tree.analysis.BasicValue>[] frames;
@@ -1104,33 +1578,42 @@ public final class MixinStubRebind {
 			frames = new org.objectweb.asm.tree.analysis.Analyzer<>(new TypedValues(type)).analyze(owner.name, delegate);
 		} catch (org.objectweb.asm.tree.analysis.AnalyzerException | RuntimeException unanalysable) {
 			Caught.expected(unanalysable);
-			return false;
+			return -1;
 		}
 		int base = (delegate.access & Opcodes.ACC_STATIC) != 0 ? 0 : 1;   // Mixin's baseArgIndex: never `this`
+		int decided = -1;
 		for (AbstractInsnNode anchor : anchors) {
 			int at = delegate.instructions.indexOf(anchor);
-			if (frames[at] == null) return false;   // unreachable: nothing to prove it by
+			if (frames[at] == null) return -1;   // unreachable: nothing to prove it by
 			java.util.BitSet candidates = typedAbove(delegate, frames, type, at);
 			candidates.clear(0, base);
-			if (candidates.cardinality() != 1) return false;   // none, or two: MixinExtras would refuse the injection
+			candidates.andNot(excluded);
+			if (candidates.cardinality() != 1) return -1;   // none, or two: MixinExtras would refuse the injection
 			int slot = candidates.nextSetBit(0);
+			// An explicit index is one slot at every anchor; MixinExtras' implicit pick may differ from anchor to anchor.
+			if (!excluded.isEmpty() && decided >= 0 && slot != decided) return -1;
+			decided = slot;
 			boolean named = false;
 			for (LocalVariableNode local : delegate.localVariables) {
 				if (local.index == slot && local.desc.equals(type.getDescriptor()) && delegate.instructions.indexOf(local.start) <= at
 						&& at < delegate.instructions.indexOf(local.end)) named = true;
 			}
-			if (!named || !loadedOrStoredSinceAFrame(delegate, slot, anchor)) return false;
+			if (!named || !loadedOrStoredSinceAFrame(delegate, slot, anchor)) return -1;
 		}
-		return true;
+		return decided;
 	}
 
 	/**
-	 * Whether {@code slot} is loaded or stored between the last frame before {@code anchor} and it. Mixin's walk can
-	 * lose a slot at a frame: it sizes a {@code CHOP} or {@code APPEND} frame as at least the method's arguments, so
-	 * the {@code CHOP} a loop's exit leaves drops every local past them (Player.doSweepAttack's {@code serverLevel}
-	 * right after its entity loop), and MixinExtras then finds none. Only an access after it is sure to bring the slot
-	 * back. A frame stands wherever one must — a jump, switch or handler target — so this reads the same with frames
-	 * skipped (MixinFit's read) as with them. An argument's slot is never lost: no frame is sized below them.
+	 * Whether Mixin's walk down the method still holds {@code slot} at {@code anchor}: some access to it comes before the
+	 * anchor, and no frame in between can drop it. Mixin sizes each frame by the type the class file gives it (its
+	 * {@code ClassInfo.FrameData}): a {@code SAME} frame keeps the locals, an {@code APPEND} one adds to them, a
+	 * {@code FULL} one lists them — but a {@code CHOP} is sized as removing at least the method's arguments' worth, so
+	 * the {@code CHOP} a loop's exit leaves can drop every local past them (Player.doSweepAttack's {@code serverLevel}
+	 * right after its entity loop), and MixinExtras then finds none; only an access after it is sure to bring the slot
+	 * back. A frame stands wherever one must — a jump, switch or handler target — so a target whose frame was not read
+	 * (MixinFit's read skips frames) is a frame of unknown type, which may drop it. An argument's slot is never lost: no
+	 * frame is sized below them. C2ME's watchdog report takes the dump's {@code StringBuilder} that way inside the thread
+	 * loop, whose head is an {@code APPEND} frame: Mixin keeps the builder there, natively and on the merged body.
 	 */
 	private static boolean loadedOrStoredSinceAFrame(MethodNode method, int slot, AbstractInsnNode anchor) {
 		if (slot < (Type.getArgumentsAndReturnSizes(method.desc) >> 2) - ((method.access & Opcodes.ACC_STATIC) != 0 ? 1 : 0)) return true;
@@ -1143,9 +1626,34 @@ public final class MixinStubRebind {
 		if (method.tryCatchBlocks != null) for (var block : method.tryCatchBlocks) targets.add(block.handler);
 		for (AbstractInsnNode insn = anchor.getPrevious(); insn != null; insn = insn.getPrevious()) {
 			if (insn instanceof VarInsnNode access && access.var == slot) return true;
-			if (insn instanceof org.objectweb.asm.tree.FrameNode || targets.contains(insn)) return false;
+			if (insn instanceof org.objectweb.asm.tree.FrameNode frame) {
+				if (!keeps(frame, slot)) return false;
+			} else if (insn instanceof org.objectweb.asm.tree.LabelNode label && targets.contains(label)) {
+				// Its frame follows it, and was judged on the way here; a target without one is a frame of unknown type.
+				AbstractInsnNode next = label.getNext();
+				while (next instanceof org.objectweb.asm.tree.LabelNode || next instanceof org.objectweb.asm.tree.LineNumberNode) next = next.getNext();
+				if (!(next instanceof org.objectweb.asm.tree.FrameNode)) return false;
+			}
 		}
 		return false;
+	}
+
+	/** Whether a frame of this type, as Mixin sizes it, keeps a reference local in {@code slot} that was held before it. */
+	private static boolean keeps(org.objectweb.asm.tree.FrameNode frame, int slot) {
+		switch (frame.type) {
+			case Opcodes.F_SAME, Opcodes.F_SAME1, Opcodes.F_APPEND:
+				return true;
+			case Opcodes.F_FULL, Opcodes.F_NEW: {
+				int at = 0;
+				for (Object type : frame.local == null ? List.<Object>of() : frame.local) {
+					if (at == slot) return type instanceof String;
+					at += type == Opcodes.LONG || type == Opcodes.DOUBLE ? 2 : 1;
+				}
+				return false;
+			}
+			default:
+				return false;
+		}
 	}
 
 	/**

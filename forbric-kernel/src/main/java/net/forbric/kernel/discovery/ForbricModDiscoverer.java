@@ -214,8 +214,54 @@ public final class ForbricModDiscoverer {
 					+ "is a MinecraftForge convention; NeoForge declares mixins in [[mixins]]", attr, ecosystem, source);
 		}
 
+		// Read only when a declared config is missing: most jars carry every config they declare.
+		java.util.Set<String>[] nested = new java.util.Set[1];
 		return ForgeMetadataMapper.toDiscoveredMods(toml, jarVersion, source, accessTransformers,
-				manifestMixins, config -> jar.getEntry(config) != null, ecosystem);
+				manifestMixins, config -> jar.getEntry(config) != null,
+				config -> (nested[0] == null ? nested[0] = nestedDeclaredConfigs(jar) : nested[0]).contains(config), ecosystem);
+	}
+
+	/**
+	 * The mixin configs the jars a jar nests in {@code META-INF/jarjar/} declare themselves AND carry, read without
+	 * extracting them: a config of a nested jar's own {@code neoforge.mods.toml} / {@code mods.toml} {@code [[mixins]]},
+	 * its manifest {@code MixinConfigs} or its {@code fabric.mod.json} {@code mixins}, present in that jar. A nested jar
+	 * that only carries a file of that name — a plain library — registers nothing, so it accounts for nothing: a
+	 * wrapper's config it holds is still warned about as dropped.
+	 */
+	static java.util.Set<String> nestedDeclaredConfigs(JarFile jar) {
+		java.util.Set<String> configs = new java.util.HashSet<>();
+		for (var entries = jar.entries(); entries.hasMoreElements(); ) {
+			ZipEntry entry = entries.nextElement();
+			if (!entry.getName().startsWith("META-INF/jarjar/") || !entry.getName().endsWith(".jar")) continue;
+			java.util.Set<String> names = new java.util.HashSet<>();
+			java.util.Set<String> declared = new java.util.LinkedHashSet<>();
+			try (java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream(jar.getInputStream(entry))) {
+				for (ZipEntry inner; (inner = in.getNextEntry()) != null; ) {
+					String name = inner.getName();
+					names.add(name);
+					try {
+						if (name.equals(NEOFORGE_MANIFEST) || name.equals(FORGE_MANIFEST)) {
+							declared.addAll(ModsTomlParser.parse(new java.io.ByteArrayInputStream(in.readAllBytes())).getMixinConfigs());
+						} else if (name.equals(FABRIC_MANIFEST)) {
+							declared.addAll(FabricModJsonReader.read(new java.io.ByteArrayInputStream(in.readAllBytes()), entry.getName())
+									.getMixinConfigs());
+						} else if (name.equals("META-INF/MANIFEST.MF")) {
+							String attr = new Manifest(new java.io.ByteArrayInputStream(in.readAllBytes())).getMainAttributes().getValue("MixinConfigs");
+							if (attr != null) for (String config : attr.split(",")) if (!config.isBlank()) declared.add(config.strip());
+						}
+					} catch (IOException | RuntimeException unreadableManifest) {
+						Caught.warn(unreadableManifest, "[Forbric/Discovery] could not read %s in nested jar %s; it declares no mixin configs", name, entry.getName());
+						// A manifest that cannot be read declares nothing.
+					}
+				}
+			} catch (IOException unreadable) {
+				Caught.warn(unreadable, "[Forbric/Discovery] could not read nested jar %s; it accounts for no mixin configs", entry.getName());
+				// A nested jar that cannot be read accounts for nothing; its configs are warned about as before.
+				continue;
+			}
+			for (String config : declared) if (names.contains(config)) configs.add(config);
+		}
+		return configs;
 	}
 
 	private static String manifestVersion(Manifest manifest) {

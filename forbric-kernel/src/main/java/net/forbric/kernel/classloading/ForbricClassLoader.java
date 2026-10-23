@@ -120,7 +120,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 	@Override
 	public void close() throws IOException {
 		try { super.close(); }
-		finally { net.forbric.api.ProtocolExtensions.release(this); net.forbric.api.VirtualProperties.release(this); net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.release(this); net.forbric.kernel.mixin.MixinOperationSeamTransport.release(this); }
+		finally { net.forbric.api.ProtocolExtensions.release(this); net.forbric.api.VirtualProperties.release(this); net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.release(this); net.forbric.kernel.mixin.MixinOperationSeamTransport.release(this); net.forbric.kernel.mixin.NativeCallInlining.release(this); net.forbric.kernel.mixin.NativeLocalMaterialization.release(this); net.forbric.kernel.mixin.NativeEntryRelay.release(this); net.forbric.kernel.mixin.NativeDecisionIsland.release(this); net.forbric.kernel.mixin.CarrierMethodReferences.release(this); }
 	}
 
 	/** Records the selected metadata, not package prefixes, as the source of transform provenance. */
@@ -378,6 +378,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 
 			byte[] transformed = transformer.apply(name, raw);
 			byte[] result = transformed == null ? raw : transformed;
+			result = net.forbric.kernel.mixin.CarrierMethodReferences.transform(this, name, net.forbric.kernel.mixin.NativeDecisionIsland.transform(this, name, net.forbric.kernel.mixin.NativeEntryRelay.transform(this, name, net.forbric.kernel.mixin.NativeLocalMaterialization.transform(this, name, net.forbric.kernel.mixin.NativeCallInlining.transform(this, name, result)))));
 			return net.forbric.kernel.mixin.MixinOperationSeamTransport.transform(this, name, net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.transform(this, name, result));
 		}
 
@@ -521,6 +522,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 			}
 		}
 
+		bytes = net.forbric.kernel.mixin.CarrierMethodReferences.transform(this, name, net.forbric.kernel.mixin.NativeDecisionIsland.transform(this, name, net.forbric.kernel.mixin.NativeEntryRelay.transform(this, name, net.forbric.kernel.mixin.NativeLocalMaterialization.transform(this, name, net.forbric.kernel.mixin.NativeCallInlining.transform(this, name, bytes)))));
 		bytes = net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.transform(this, name, bytes);
 		bytes = net.forbric.kernel.mixin.MixinOperationSeamTransport.transform(this, name, bytes);
 		java.util.ArrayDeque<OpenWeave> open = weaving.get();
@@ -653,7 +655,6 @@ public final class ForbricClassLoader extends URLClassLoader {
 			net.forbric.kernel.mixin.MixinOperationSeamTransport.observeDefinition(this, name, bytes);
 			net.forbric.kernel.mixin.FinalMixinApplications.onClassDefined(name, bytes);
 			net.forbric.kernel.mixin.SupersededMixins.observeDefinition(this, name, bytes);
-			net.forbric.kernel.boot.KernelHudBridge.observeDefinition(name, bytes);
 			return defined;
 		} catch (LinkageError duplicate) {
 			Class<?> already = findLoadedClass(name);
@@ -770,7 +771,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 					Caught.expected(absent);
 					return null;
 				}
-			}));
+			}, internal -> familyOfResource(internal.replace('/', '.'))));
 		}
 		return java.util.Collections.enumeration(served);
 	}

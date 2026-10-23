@@ -17,8 +17,10 @@
 package net.forbric.kernel.boot;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -53,12 +55,13 @@ class DeadEventAuditTest {
 	private static final String KEYS = "net/minecraftforge/client/event/RegisterKeyMappingsEvent";
 	private static final String TABS = "net/minecraftforge/event/BuildCreativeModeTabContentsEvent";
 	/**
-	 * A CLIENT event with no bridge.
+	 * A CLIENT event with no bridge that the merged game still never posts.
 	 *
 	 * <p>It used to be {@code AddGuiOverlayLayersEvent}; that one is bridged now, and a bridged event is reported
-	 * through the pending path instead, so a test written on it would silently be testing the other half.
+	 * through the pending path instead, so a test written on it would silently be testing the other half. Then it was
+	 * {@code AddFramePassEvent}, until the merge kept both families' edits in Minecraft's constructor and posted it again.
 	 */
-	private static final String OVERLAYS = "net/minecraftforge/client/event/AddFramePassEvent";
+	private static final String SKULLS = "net/minecraftforge/client/event/EntityRenderersEvent$CreateSkullModels";
 	private static final String CREATE_FLUID_SOURCE = "net/minecraftforge/event/level/BlockEvent$CreateFluidSourceEvent";
 	private static final String FLUID_PLACE_BLOCK = "net/minecraftforge/event/level/BlockEvent$FluidPlaceBlockEvent";
 	private static final String NEO_TOOLTIP = "net/neoforged/neoforge/event/entity/player/ItemTooltipEvent";
@@ -201,15 +204,108 @@ class DeadEventAuditTest {
 				"a late pass has not run when the audit does; reporting it would name every client mod on every boot");
 	}
 
-	/** The five client events no bridge carries yet: a mod waiting on one is named, with what it loses. */
+	/** A client event no bridge carries and the merged game never posts: a mod waiting on one is named, with its cost. */
 	@Test
 	void aStillDeadClientEventNamesTheMod() {
 		List<DeadEventAudit.Finding> findings = DeadEventAudit.audit(
-				Map.of("hudmod", Set.of(OVERLAYS)), EnumSet.noneOf(GameEventBridge.class));
+				Map.of("skullmod", Set.of(SKULLS)), EnumSet.noneOf(GameEventBridge.class));
 
 		assertEquals(1, findings.size());
-		assertEquals("hudmod", findings.get(0).modId());
-		assertTrue(findings.get(0).cost().contains("never run"), findings.get(0).cost());
+		assertEquals("skullmod", findings.get(0).modId());
+		assertTrue(findings.get(0).cost().contains("never render"), findings.get(0).cost());
+	}
+
+	/**
+	 * What the stand-down looks for: the MinecraftForge events a bridge on one of NeoForge's buses re-posts. A row landed
+	 * by a class transformer forwards from no NeoForge event, so it is not in it; entity tracking and the level tick are,
+	 * now that their bridges are rows, and so are the two forwards on the client mod bus.
+	 */
+	@Test
+	void theForwardedSetIsTheGameBusBridgesMinecraftForgeEvents() {
+		Set<String> forwarded = DeadEventAudit.forwardedForgeEvents();
+		assertTrue(forwarded.contains(DEATH));
+		assertTrue(forwarded.contains("net/minecraftforge/event/entity/player/PlayerEvent$StartTracking"));
+		assertTrue(forwarded.contains("net/minecraftforge/event/entity/player/PlayerEvent$StopTracking"));
+		assertTrue(forwarded.contains("net/minecraftforge/event/TickEvent$LevelTickEvent$Pre"));
+		assertFalse(forwarded.contains(KEYS), "client-init rows are landed by a transformer, not forwarded from NeoForge");
+		assertFalse(forwarded.contains(TABS), "registration rows likewise");
+		for (String event : forwarded) {
+			GameEventBridge bridge = DeadEventAudit.BRIDGED.containsKey(event) ? DeadEventAudit.BRIDGED.get(event) : DeadEventAudit.STAND_DOWN.get(event);
+			assertTrue(DeadEventAudit.forgeEventsOf(bridge).contains(event), event + " must be guarded on " + bridge);
+		}
+		assertEquals(Set.of("net/minecraftforge/event/TickEvent$ServerTickEvent$Pre"), DeadEventAudit.forgeEventsOf(GameEventBridge.SERVER_TICK_PRE),
+				"the server tick's bridge stands down for exactly its own event");
+		assertEquals(Set.of("net/minecraftforge/client/event/TextureStitchEvent$Post"), DeadEventAudit.forgeEventsOf(GameEventBridge.TEXTURE_STITCHED),
+				"a forward on the mod bus stands down for exactly its own event too");
+		assertEquals(Set.of("net/minecraftforge/client/event/ModelEvent$BakingCompleted"), DeadEventAudit.forgeEventsOf(GameEventBridge.MODELS_BAKED));
+		assertEquals(Set.of(), DeadEventAudit.forgeEventsOf(GameEventBridge.CLIENT_RELOAD_LISTENERS),
+				"the reload-listener bridge hands MinecraftForge's own registrations to NeoForge's graph and posts nothing");
+	}
+
+	/**
+	 * Every bridge on NeoForge's game bus can stand down. A bridge whose events are in neither table is handed NeoForge's
+	 * bus unguarded and its events are never looked for, so wherever a merged method calls its MinecraftForge hook natively
+	 * beside NeoForge's, a mod receives the event twice — measured on an edit-spliced base for the server, player, client
+	 * and render ticks and a dozen more, all bridges no row named; and on the client mod bus, each atlas stitched and the
+	 * models baked. The portal is the one exception on the game bus, composed by {@code PortalSpawnInjector} instead;
+	 * the reload-listener bridge is the one on the mod bus, and posts no event of its own.
+	 */
+	@Test
+	void everyBridgeOnTheGameBusHasEventsItCanStandDownFor() {
+		List<GameEventBridge> unguarded = new ArrayList<>();
+		for (GameEventBridge bridge : GameEventBridge.values()) {
+			boolean onABus = bridge.pass() == GameEventBridge.Pass.GAME_BUS || bridge.pass() == GameEventBridge.Pass.CLIENT_GAME_BUS
+					|| bridge.pass() == GameEventBridge.Pass.CLIENT_MOD_BUS;
+			if (onABus && bridge != GameEventBridge.PORTAL_SPAWN && bridge != GameEventBridge.CLIENT_RELOAD_LISTENERS
+					&& DeadEventAudit.forgeEventsOf(bridge).isEmpty()) unguarded.add(bridge);
+		}
+		assertEquals(List.of(), unguarded, "bridges that can never stand down for the game's own delivery of their event");
+		assertEquals(Set.of(), DeadEventAudit.forgeEventsOf(GameEventBridge.PORTAL_SPAWN), "the portal's composition is its injector's");
+	}
+
+	/**
+	 * The stand-down rows are not the dead-event judgement's: a listener for one of their events is never a finding on
+	 * their account, not even while its bridge is missing (a client bridge always is on a dedicated server) — only the
+	 * dead and partly-posted tables speak for an event there — and no event is in both bridge tables.
+	 */
+	@Test
+	void standDownRowsAreNeverAFinding() {
+		Set<String> both = new java.util.TreeSet<>(DeadEventAudit.STAND_DOWN.keySet());
+		both.retainAll(DeadEventAudit.BRIDGED.keySet());
+		assertEquals(Set.of(), both, "an event in both tables");
+		Map<String, Set<String>> subscribed = Map.of("somemod", DeadEventAudit.STAND_DOWN.keySet());
+		for (DeadEventAudit.Finding finding : DeadEventAudit.audit(subscribed, Set.of())) {
+			assertTrue(DeadEventAudit.DEAD.containsKey(finding.event()) || DeadEventAudit.PARTIAL.containsKey(finding.event()),
+					"no bridge installed, and a finding no dead or partly-posted row speaks for: " + finding);
+		}
+	}
+
+	/**
+	 * The sound events: never posted natively on the merged base, so each is a bridged row with a bridge of its own. A
+	 * listener is a finding exactly while its own bridge is missing, and is guarded by its own bridge only: one bridge
+	 * for the pair would let a native entity sound stand down a position sound's forward.
+	 */
+	@Test
+	void eachSoundEventIsBridgedOnItsOwnAndNamedOnlyWhileItsBridgeIsMissing() {
+		String atEntity = "net/minecraftforge/event/PlayLevelSoundEvent$AtEntity";
+		String atPosition = "net/minecraftforge/event/PlayLevelSoundEvent$AtPosition";
+		assertFalse(DeadEventAudit.DEAD.containsKey(atEntity), "a bridged event is not also claimed dead");
+		assertFalse(DeadEventAudit.DEAD.containsKey(atPosition));
+		assertEquals(GameEventBridge.PLAY_SOUND_AT_ENTITY, DeadEventAudit.BRIDGED.get(atEntity));
+		assertEquals(GameEventBridge.PLAY_SOUND_AT_POSITION, DeadEventAudit.BRIDGED.get(atPosition));
+		assertEquals(Set.of(atEntity), DeadEventAudit.forgeEventsOf(GameEventBridge.PLAY_SOUND_AT_ENTITY));
+		assertEquals(Set.of(atPosition), DeadEventAudit.forgeEventsOf(GameEventBridge.PLAY_SOUND_AT_POSITION));
+		assertTrue(DeadEventAudit.forwardedForgeEvents().containsAll(Set.of(atEntity, atPosition)),
+				"the stand-down looks for both on a NeoForge delivery's path");
+
+		Map<String, Set<String>> subscribed = Map.of("soundmod", Set.of(atEntity, atPosition));
+		assertTrue(DeadEventAudit.audit(subscribed,
+						EnumSet.of(GameEventBridge.PLAY_SOUND_AT_ENTITY, GameEventBridge.PLAY_SOUND_AT_POSITION)).isEmpty(),
+				"both bridges in: the mod is asked about every sound");
+		List<DeadEventAudit.Finding> half = DeadEventAudit.audit(subscribed, EnumSet.of(GameEventBridge.PLAY_SOUND_AT_ENTITY));
+		assertEquals(1, half.size(), "only the event whose bridge did not install is waiting: " + half);
+		assertEquals(atPosition, half.get(0).event());
+		assertEquals(GameEventBridge.PLAY_SOUND_AT_POSITION.cost(), half.get(0).cost());
 	}
 
 	/** The two fluid events the fluid-rendering repair deliberately does not bridge: a listener is told, per event. */

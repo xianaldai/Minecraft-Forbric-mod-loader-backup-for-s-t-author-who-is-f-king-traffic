@@ -185,9 +185,9 @@ public final class KernelRegistryAliases {
 	}
 
 	/**
-	 * fabric-api's mixin-added {@code aliases} map on this registry, or {@code null} when this build has none.
+	 * The alias map a mixin added to this registry's class (fabric-api's), or {@code null} when this build has none.
 	 *
-	 * <p>The field is added by {@code fabric-registry-sync-v0}'s mixin, so it exists only when fabric-api is
+	 * <p>The field is added by a mod's mixin ({@code fabric-registry-sync-v0}'s), so it exists only when that mod is
 	 * installed — and the kernel has to run without it. The result of that one lookup is cached, including the
 	 * negative, because this runs in front of every wrapped registry lookup.
 	 */
@@ -196,7 +196,7 @@ public final class KernelRegistryAliases {
 		Optional<Field> field = ALIASES.get(registry.getClass());
 		if (field.isEmpty()) {
 			if (REPORTED.compareAndSet(false, true)) {
-				ForbricLog.debug("[Forbric/Aliases] no fabric-api alias map on %s — registry aliases are whatever "
+				ForbricLog.debug("[Forbric/Aliases] no mixin-added alias map on %s — registry aliases are whatever "
 						+ "the Forge wrapper does natively", registry.getClass().getName());
 			}
 			return null;
@@ -211,19 +211,101 @@ public final class KernelRegistryAliases {
 		}
 	}
 
+	/**
+	 * The registry's alias map: the instance field nearest {@code type} declared {@code Map<Identifier, Identifier>} — an
+	 * id to the id it stands for — whatever it is called. On the merged base that is the map fabric-registry-sync's mixin
+	 * merges into {@code MappedRegistry} (its alias registration writes it, and it overrides NeoForge's), found before
+	 * NeoForge's own on {@code BaseMappedRegistry}; without such a mixin, NeoForge's. Where one class level declares
+	 * several such maps, the one a mixin merged is taken if it is the only one; otherwise none is guessed at.
+	 */
 	private static Field findAliases(Class<?> type) {
 		for (Class<?> c = type; c != null; c = c.getSuperclass()) {
+			java.util.List<Field> maps = new java.util.ArrayList<>();
+			for (Field f : c.getDeclaredFields()) {
+				if (java.lang.reflect.Modifier.isStatic(f.getModifiers()) || !Map.class.isAssignableFrom(f.getType())) continue;
+				if (declaredIdToId(f)) maps.add(f);
+			}
+			if (maps.isEmpty()) continue;
+			if (maps.size() > 1) maps.removeIf(f -> !Merged.by(f));
+			if (maps.size() != 1) return null;
 			try {
-				Field f = c.getDeclaredField("aliases");
-				if (Map.class.isAssignableFrom(f.getType())) {
-					f.setAccessible(true);
-					return f;
-				}
-			} catch (NoSuchFieldException keepLooking) {
-				// fabric-api adds it to MappedRegistry, so it is usually a superclass of the wrapper
-				Caught.expected(keepLooking);
+				maps.getFirst().setAccessible(true);
+				return maps.getFirst();
+			} catch (RuntimeException inaccessible) {
+				Caught.warn(inaccessible, "[Forbric/Aliases] could not open the alias map %s.%s; its aliases are not followed",
+						c.getName(), maps.getFirst().getName());
+				return null;
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Whether {@code field} is declared {@code Map<Identifier, Identifier>}. Mixin merges a mixin's field without its generic
+	 * signature, so a merged field that reads as a raw {@code Map} is judged by the signature it has in the mixin that
+	 * merged it ({@code @MixinMerged(mixin = …)}), read from that mixin's class file.
+	 */
+	private static boolean declaredIdToId(Field field) {
+		java.lang.reflect.Type type;
+		try {
+			type = field.getGenericType();
+		} catch (RuntimeException | LinkageError unresolvable) {
+			Caught.expected(unresolvable);
+			return false;
+		}
+		if (idToId(type)) return true;
+		if (!(type instanceof Class<?>)) return false;
+		String mixin = Merged.mixinOf(field);
+		ClassLoader loader = field.getDeclaringClass().getClassLoader();
+		if (mixin == null || loader == null) return false;
+		String wanted = "L" + MAP_TYPE + "<L" + IDENTIFIER_INTERNAL + ";L" + IDENTIFIER_INTERNAL + ";>;";
+		try (java.io.InputStream in = loader.getResourceAsStream(mixin.replace('.', '/') + ".class")) {
+			if (in == null) return false;
+			String[] signature = new String[1];
+			new org.objectweb.asm.ClassReader(in.readAllBytes()).accept(new org.objectweb.asm.ClassVisitor(org.objectweb.asm.Opcodes.ASM9) {
+				@Override
+				public org.objectweb.asm.FieldVisitor visitField(int access, String name, String descriptor, String fieldSignature, Object value) {
+					if (name.equals(field.getName()) && descriptor.equals(org.objectweb.asm.Type.getDescriptor(field.getType()))) signature[0] = fieldSignature;
+					return null;
+				}
+			}, org.objectweb.asm.ClassReader.SKIP_CODE | org.objectweb.asm.ClassReader.SKIP_DEBUG | org.objectweb.asm.ClassReader.SKIP_FRAMES);
+			return wanted.equals(signature[0]);
+		} catch (java.io.IOException | RuntimeException unreadable) {
+			Caught.warn(unreadable, "[Forbric/Aliases] could not read mixin %s for the signature of %s; it is not taken as an alias map", mixin, field.getName());
+			return false;
+		}
+	}
+
+	private static final String MAP_TYPE = "java/util/Map";
+	private static final String IDENTIFIER_INTERNAL = "net/minecraft/resources/Identifier";
+
+	/** {@code Map<Identifier, Identifier>}, by the declared type arguments. */
+	private static boolean idToId(java.lang.reflect.Type type) {
+		if (!(type instanceof java.lang.reflect.ParameterizedType generic) || generic.getActualTypeArguments().length != 2) return false;
+		for (java.lang.reflect.Type argument : generic.getActualTypeArguments()) {
+			if (!(argument instanceof Class<?> c) || !IDENTIFIER.equals(c.getName())) return false;
+		}
+		return true;
+	}
+
+	private static final String IDENTIFIER = "net.minecraft.resources.Identifier";
+
+	/** Mixin's annotation, in a class of its own: a loader without Mixin fails here, inside the caller's lookup. */
+	private static final class Merged {
+		static boolean by(Field field) {
+			return mixinOf(field) != null;
+		}
+
+		/** The mixin that merged {@code field}, dotted, or null when no mixin did. */
+		static String mixinOf(Field field) {
+			try {
+				org.spongepowered.asm.mixin.transformer.meta.MixinMerged merged =
+						field.getAnnotation(org.spongepowered.asm.mixin.transformer.meta.MixinMerged.class);
+				return merged == null ? null : merged.mixin();
+			} catch (LinkageError noMixin) {
+				Caught.expected(noMixin);
+				return null;
+			}
+		}
 	}
 }

@@ -47,7 +47,11 @@ import net.forbric.api.ModCatalog;
 class KernelMixinErrorHandlerTest {
 	@org.junit.jupiter.api.BeforeEach
 	@org.junit.jupiter.api.AfterEach
-	void clearCompatibilityEvidence() { net.forbric.api.CompatibilityFindings.reset(); SupersededMixins.reset(); }
+	void clearCompatibilityEvidence() {
+		net.forbric.api.CompatibilityFindings.reset(); SupersededMixins.reset();
+		// What config discovery notes for fabric-resource-conditions' mixin, whose shape the claim reads (SupersededMixinsTest).
+		SupersededMixins.claimForTests("net.fabricmc.fabric.mixin.resource.conditions.SimpleJsonResourceReloadListenerMixin", "resource-conditions");
+	}
 
 	private List<ModCatalog.Entry> previous;
 
@@ -168,42 +172,82 @@ class KernelMixinErrorHandlerTest {
 	 * gate-m9's superseded-mixin block, run against what the handler and the proof actually log.
 	 *
 	 * <p>The gate once asserted the wording of the name-only resolution after the handler had stopped printing it,
-	 * so a run in which the repair WAS seen went red, and nothing printed when the proof resolved the failure. The
-	 * block is executed here, not copied: green once the repair is seen in the defined ConditionalOps, in either
-	 * order, and red while it is not, or when either switch turns the repair off.
+	 * so a run in which the repair WAS seen went red, and nothing printed when the proof resolved the failure. Then
+	 * the mixin stopped failing at all (MixinDecodeScopeAdapter keeps its source decode guard, so it applies whole),
+	 * and the block's "resolved as superseded" went red on every healthy run. The block is executed here, not copied:
+	 * green when the mixin never failed, even beside another mod's failure, and red the moment it fails -- whether
+	 * the proof then resolves it as superseded, in either order, or leaves it marked.
 	 */
 	@Test
-	void gateM9PassesOnlyWhenTheRepairIsSeenInTheDefinedClass(@org.junit.jupiter.api.io.TempDir Path temporary)
+	void gateM9PassesOnlyWhenTheConditionsMixinNeverFailed(@org.junit.jupiter.api.io.TempDir Path temporary)
 			throws Exception {
 		String superseded = "net.fabricmc.fabric.mixin.resource.conditions.SimpleJsonResourceReloadListenerMixin";
-		MixinConfigOwners.publish(List.of(new MixinConfigOwners.Owned("s.mixins.json", "xmod", Ecosystem.FABRIC)));
+		MixinConfigOwners.publish(List.of(new MixinConfigOwners.Owned("s.mixins.json", "xmod", Ecosystem.FABRIC),
+				new MixinConfigOwners.Owned("o.mixins.json", "omod", Ecosystem.FABRIC)));
 		Runnable fail = () -> new KernelMixinErrorHandler().onApplyError(
 				"net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener",
 				new RuntimeException("InvalidInjectionException"), info("s.mixins.json", superseded),
 				IMixinErrorHandler.ErrorAction.WARN);
+		Runnable other = () -> new KernelMixinErrorHandler().onApplyError("net.minecraft.Foo",
+				new RuntimeException("InvalidInjectionException"), info("o.mixins.json", "org.example.other.FooMixin"),
+				IMixinErrorHandler.ErrorAction.WARN);
 		Runnable wrapped = () -> SupersededMixins.observeDefinition(CONDITIONAL_OPS, conditionalOps(true));
 		Runnable unwrapped = () -> SupersededMixins.observeDefinition(CONDITIONAL_OPS, conditionalOps(false));
 
-		GateRun seen = gateM9(temporary, null, fail, wrapped);
-		assertEquals(0, seen.exit(), seen.output());
-		GateRun seenFirst = gateM9(temporary, null, wrapped, fail);
-		assertEquals(0, seenFirst.exit(), seenFirst.output());
+		GateRun applied = gateM9(temporary, null, other, wrapped);
+		assertEquals(0, applied.exit(), applied.output());
+		assertTrue(applied.log().contains("is marked"), "premise: the log is real, with another mod's failure in it: " + applied.output());
+
+		// Every red run below has the mixin fail, so "FAIL it applied" alone cannot tell them apart: each also asserts
+		// the state its own premise produces, which a run without that premise does not reach. The two lines each
+		// premise turns on are the proof's ("is superseded") and the handler's ordinary loss ("... is marked").
+		GateRun supersededAfter = gateM9(temporary, null, fail, wrapped);
+		assertRed(supersededAfter, true, false);
+		assertTrue(supersededAfter.log().contains("is superseded"), "premise: the proof resolved it: " + supersededAfter.output());
+		GateRun supersededFirst = gateM9(temporary, null, wrapped, fail);
+		assertRed(supersededFirst, true, false);
+		assertTrue(supersededFirst.log().contains("is superseded"), "premise: proved before the failure, it is resolved at once: " + supersededFirst.output());
+
 		GateRun notSeen = gateM9(temporary, null, fail, unwrapped);
-		assertTrue(notSeen.exit() != 0 && notSeen.output().contains("FAIL"), notSeen.output());
+		assertRed(notSeen, true, false);
+		assertTrue(!notSeen.log().contains("is superseded") && notSeen.log().contains("was defined without the repair that supersedes"),
+				"premise: the definition was seen, without the repair: " + notSeen.output());
 		GateRun neverDefined = gateM9(temporary, null, fail);
-		assertTrue(neverDefined.exit() != 0, neverDefined.output());
+		assertRed(neverDefined, true, false);
+		assertTrue(!neverDefined.log().contains("is superseded") && !neverDefined.log().contains("was defined without")
+				&& neverDefined.log().contains("stays marked until that repair is seen"),
+				"premise: nothing was defined, so the failure is still waiting on its proof: " + neverDefined.output());
+
+		// Either switch turns the entry back into an ordinary loss: the mod is marked, and the repair's bytes being
+		// there (the wrapped definition is observed in both runs) resolves nothing.
 		GateRun tableOff = gateM9(temporary, SupersededMixins.PROPERTY, fail, wrapped);
-		assertTrue(tableOff.exit() != 0, tableOff.output());
+		assertRed(tableOff, true, true);
+		assertTrue(!tableOff.log().contains("is superseded"), "premise: with the table off nothing supersedes it: " + tableOff.output());
 		GateRun repairOff = gateM9(temporary, "forbric.fabricConditions", fail, wrapped);
-		assertTrue(repairOff.exit() != 0, repairOff.output());
+		assertRed(repairOff, true, true);
+		assertTrue(!repairOff.log().contains("is superseded"), "premise: a switched-off repair supersedes nothing: " + repairOff.output());
 	}
 
-	private record GateRun(int exit, String output) { }
+	/** Red, with exactly the gate's two checks failing or passing as given. */
+	private static void assertRed(GateRun run, boolean failedOrSuperseded, boolean marked) {
+		assertTrue(run.exit() != 0, run.output());
+		assertEquals(failedOrSuperseded, run.gate().contains("FAIL it applied: it never failed, and no repair had to supersede it"), run.output());
+		assertEquals(!failedOrSuperseded, run.gate().contains("PASS it applied: it never failed, and no repair had to supersede it"), run.output());
+		assertEquals(marked, run.gate().contains("FAIL and its mod is not marked"), run.output());
+		assertEquals(!marked, run.gate().contains("PASS and its mod is not marked"), run.output());
+	}
+
+	private record GateRun(int exit, String gate, String log) {
+		String output() {
+			return gate + "\n--- log ---\n" + log;
+		}
+	}
 
 	/** The steps' log, with {@code switchOff} set to off while they run, judged by gate-m9's own block. */
 	private static GateRun gateM9(Path temporary, String switchOff, Runnable... steps) throws Exception {
 		net.forbric.api.CompatibilityFindings.reset();
 		SupersededMixins.reset();
+		SupersededMixins.claimForTests("net.fabricmc.fabric.mixin.resource.conditions.SimpleJsonResourceReloadListenerMixin", "resource-conditions");
 		String previous = switchOff == null ? null : System.getProperty(switchOff);
 		java.io.PrintStream out = System.out, err = System.err;
 		java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
@@ -231,7 +275,7 @@ class KernelMixinErrorHandlerTest {
 		builder.environment().put("LOG", log.toString());
 		Process process = builder.redirectErrorStream(true).start();
 		String output = new String(process.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-		return new GateRun(process.waitFor(), output + "\n--- log ---\n" + Files.readString(log));
+		return new GateRun(process.waitFor(), output, Files.readString(log));
 	}
 
 	private static final String CONDITIONAL_OPS = "net.neoforged.neoforge.common.conditions.ConditionalOps";

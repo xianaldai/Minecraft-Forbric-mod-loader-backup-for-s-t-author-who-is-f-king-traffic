@@ -113,8 +113,29 @@ public final class ForbricMixinService
 	static byte[] absorbedCallbacksAsLoaded(byte[] bytes, java.util.function.Function<String,byte[]> resource) {
 		if(gameLoader==null||bytes==null)return bytes;
 		ClassNode source=new ClassNode();new ClassReader(bytes).accept(source,ClassReader.EXPAND_FRAMES);
-		int changed=MixinAbsorbedCallbackTransport.adapt(source,owner->{byte[] current=resource.apply(owner+".class");return current==null?null:MixinFit.parse(current);},
-			owner->NativeGameReferences.reference(MixinStubRebind.ecosystemOf(source.name),owner),loader());
+		// The native shape first, as getClassNode does: a call put back into its method, a value kept in its local, a @Local
+		// pinned — so the transports below see a call that is there again and leave it to the mod's own injector.
+		java.util.function.Function<String,ClassNode> code=owner->{byte[] current=resource.apply(owner+".class");return current==null?null:MixinFit.parse(current);};
+		int changed=NativeCallInlining.adapt(source,code,NativeGameReferences::reference,loader());
+		changed+=NativeLocalMaterialization.adapt(source,code,NativeGameReferences::reference,loader());
+		changed+=NativeLocalPins.adapt(source,code,NativeGameReferences::reference);
+		changed+=NativeEntryRelay.adapt(source,code,NativeGameReferences::reference,loader());
+		changed+=UncalledDecisionEntries.adapt(source,owner->{byte[] current=resource.apply(owner+".class");return current==null?null:MixinFit.parse(current);},NativeGameReferences::reference);
+		changed+=NativeDecisionIsland.adapt(source,code,NativeGameReferences::reference,loader());
+		changed+=ReplacedDecisionValues.adapt(source,code,NativeGameReferences::reference);
+		// With the local variable tables: the decisions are matched by the locals their answers are kept in.
+		changed+=CarrierDecisions.adapt(source,owner->{byte[] current=resource.apply(owner+".class");if(current==null)return null;ClassNode tables=new ClassNode();new ClassReader(current).accept(tables,0);return tables;},NativeGameReferences::reference);
+		changed+=CarrierReturnedCalls.adapt(source,owner->{byte[] current=resource.apply(owner+".class");if(current==null)return null;ClassNode tables=new ClassNode();new ClassReader(current).accept(tables,0);return tables;},NativeGameReferences::reference);
+		changed+=CarrierDefaultChains.adapt(source,owner->{byte[] current=resource.apply(owner+".class");return current==null?null:MixinFit.parse(current);},NativeGameReferences::reference);
+		// An injector these two move binds as moved, not as compiled: judged so, a mixin whose only injector they carry is not UNFIT.
+		changed+=CarrierHelperResults.adapt(source,owner->{byte[] current=resource.apply(owner+".class");if(current==null)return null;ClassNode tables=new ClassNode();new ClassReader(current).accept(tables,0);return tables;},NativeGameReferences::reference);
+		changed+=CarrierMethodReferences.adapt(source,owner->{byte[] current=resource.apply(owner+".class");if(current==null)return null;ClassNode tables=new ClassNode();new ClassReader(current).accept(tables,0);return tables;},NativeGameReferences::reference,loader());
+		changed+=NativeSliceOccurrences.adapt(source,code,NativeGameReferences::reference);
+		changed+=NativeConsumerStores.adapt(source,code,NativeGameReferences::reference);
+		changed+=NativeValueStores.adapt(source,code,NativeGameReferences::reference);
+		changed+=MixinAbsorbedCallbackTransport.adapt(source,owner->{byte[] current=resource.apply(owner+".class");return current==null?null:MixinFit.parse(current);},
+			owner->NativeGameReferences.reference(MixinStubRebind.ecosystemOf(source.name),owner),
+			owner->NativeGameReferences.peers(MixinStubRebind.ecosystemOf(source.name),owner),loader());
 		changed+=MixinOperationSeamTransport.adapt(source,owner->{byte[] current=resource.apply(owner+".class");return current==null?null:MixinFit.parse(current);},NativeGameReferences::reference,loader());
 		if(changed==0)return bytes;org.objectweb.asm.ClassWriter out=new org.objectweb.asm.ClassWriter(0);source.accept(out);return out.toByteArray();
 	}
@@ -305,17 +326,55 @@ public final class ForbricMixinService
 	public ClassNode getClassNode(String name, boolean runTransformers, int readerFlags)
 			throws ClassNotFoundException, IOException {
 		ClassNode node = new ClassNode();
-		new ClassReader(getClassBytes(name, runTransformers)).accept(node, readerFlags);
+		byte[] bytes = getClassBytes(name, runTransformers);
+		new ClassReader(bytes).accept(node, readerFlags);
+		// A mixin its config's plugin added is in no list the config-time pass read: judged here, where Mixin first reads
+		// it, so a carrier retarget is planned for it as for a listed one.
+		KernelGuestMixinAdapter.judgeLate(name.replace('.', '/'), bytes);
 		// The one seam MixinInfo.loadMixinClass reads a mixin through: a retarget plan the adapter remembered for
 		// this mixin is applied to the node Mixin receives, never to jar bytes.
 		MixinRetarget.applyRemembered(name, node);
+		// …and a closed loot callback group the bridge runs, when it is only part of its mixin, is taken out of it here.
+		net.forbric.kernel.boot.LootSourceCallbacks.stripPartialGroup(node);
 		// …and a single-point injector compiled with an array-valued `at` (another Mixin fork's shape) is given the
 		// shape this Mixin declares, before MixinExtras' pre-apply transformer casts it.
 		MixinAtShape.normalise(node);
-		MixinCarrierCallbackAdapters.adapt(node, this::mergedBaseNodeWithCode);
+		// …and a call an injector anchors on, which the surviving carrier now makes inside a helper of its own, is made in the
+		// method again: the helper is inlined there before any adapter below, or Mixin, reads the target.
+		NativeCallInlining.adapt(node, this::mergedBaseNodeWithCode, NativeGameReferences::reference, loader());
+		// …and a value a @Local asks for at a call, which the merged method hands that call straight from the stack, is also
+		// kept in the local the native method keeps it in.
+		NativeLocalMaterialization.adapt(node, this::mergedBaseNodeWithCode, NativeGameReferences::reference, loader());
+		// …and a @Local that names one local at the native point but several at the merged one reads the local its own loader
+		// hands it.
+		NativeLocalPins.adapt(node, this::mergedBaseNodeWithCode, NativeGameReferences::reference);
+		// …and a native decision method an injector enters, whose calls the carrier replaced with its own decision, is asked
+		// again where it was, ahead of the carrier's.
+		NativeEntryRelay.adapt(node, this::mergedBaseNodeWithCode, NativeGameReferences::reference, loader());
+		// …and a HEAD injector on a static decision the merged game no longer calls wraps the carrier's own decision at every place
+		// the native game asked it, handed the native arguments, its cancel the answer there.
+		UncalledDecisionEntries.adapt(node, this::mergedBaseGameCode, NativeGameReferences::reference);
+		// …and a stretch of native decisions the carrier replaced with a hook of its own is asked again ahead of the hook, so an
+		// injector on one of its calls binds there, and the hook is answered what the island answered.
+		NativeDecisionIsland.adapt(node, this::mergedBaseNodeWithCode, NativeGameReferences::reference, loader());
+		// …and a value modifier of a vanilla decision the carrier replaced with its own call, deciding the same branch, names
+		// that call.
+		ReplacedDecisionValues.adapt(node, this::mergedBaseNodeWithCode, NativeGameReferences::reference);
+		// …and a sliced point whose one native call the carrier moved out of the slice names that call where the merged method
+		// makes it, with the same operands under the same conditions.
+		NativeSliceOccurrences.adapt(node, this::mergedBaseNodeWithCode, NativeGameReferences::reference);
+		// …and a value modifier written for a local's one native store, which the carrier stores again on its own paths before the
+		// native read of it, modifies that read instead: once per call, on the value the read sees.
+		NativeConsumerStores.adapt(node, this::mergedBaseNodeWithCode, NativeGameReferences::reference);
+		// …and a value modifier at the store of a call's result, where a carrier first stores another value in the local its
+		// discriminator picks, names the local the merged method stores that result in (straight, or through the carrier's hook).
+		NativeValueStores.adapt(node, this::mergedBaseNodeWithCode, NativeGameReferences::reference);
+		// …and an expression definition naming a method that the class now references through the kernel's thunk names
+		// the thunk too, so a method-reference expression (this::m) still finds the reference.
+		MixinExpressionThunks.adapt(node, this::mergedBaseNodeWithCode);
+		MixinCarrierCallbackAdapters.adapt(node, this::mergedBaseGameCode);
 		MixinBlockQueryAdapters.adapt(node, this::mergedBaseNodeWithCode);
 		MixinBlockInteractionAdapters.adapt(node, this::mergedBaseNodeWithCode);
-		MixinBreathingCallbackAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		MixinEntitySoundCallbackAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		MixinHudContextAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		FabricRegistryLoaderMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
@@ -328,8 +387,19 @@ public final class ForbricMixinService
 		// …and a redirect of a vanilla call the carrier replaced at the same place, whose handler only conditions it,
 		// forwards the carrier's call there instead.
 		ReplacedCallRedirects.adapt(node, this::mergedBaseNodeWithCode);
+		// …and a redirect or injector at a vanilla decision the carrier replaced with a decision of its own (the same branch,
+		// the same way or the opposite one, or the same local) moves onto the carrier's decision, its answer mapped.
+		CarrierDecisions.adapt(node, this::mergedBaseGameCode, NativeGameReferences::reference);
+		// …and a wrap of a vanilla call whose answer was the method's answer, where the carrier answers its own way, moves to
+		// that answer on exactly the ways the call was made.
+		CarrierReturnedCalls.adapt(node, this::mergedBaseGameCode, NativeGameReferences::reference);
+		// …and a locals capture reads, as @Locals, the native locals where the merged body keeps them (before the points are
+		// renumbered below: it reads the point as the native body counts it).
+		MixinCapturedLocals.adapt(node, this::mergedBaseGameCode);
 		// …and an ordinal counted on a vanilla call the carrier makes fewer times names the occurrence it kept.
 		ThinnedCallOrdinals.adapt(node, this::mergedBaseNodeWithCode);
+		// …and an unnumbered call point counts only the native occurrences where the carrier added more of that call.
+		AddedCallOccurrences.adapt(node, this::mergedBaseGameCode);
 		// …and a locals capture that would throw an Error no handler sees is made to skip and warn instead.
 		MixinLocalsCapture.soften(node);
 		// …and an injection point naming a call the surviving carrier gave extra parameters is pointed at the
@@ -338,6 +408,9 @@ public final class ForbricMixinService
 		// …and an injection point on a call the kernel relocated out of its method (MinecraftForge's ItemStack.useOn)
 		// selects the one-call relay that now makes it.
 		MixinRelocatedCall.adapt(node, this::mergedBaseNodeWithCode);
+		// …and an @Inject at the start of a carrier's model-data overload nothing calls (MinecraftForge's tesselateBlock(…,
+		// ModelData)) also starts the overload's edge twin, which the merged vanilla signature now enters first.
+		MixinForgeModelDataEdge.adapt(node, this::mergedBaseNodeWithCode);
 		// …and any structurally proven @WrapOperation whose call the carrier reordered or widened is wrapped, so it binds
 		// to the merged call and its handler still receives the arguments it was written for (never a @Redirect: it
 		// would replace the carrier's call).
@@ -354,7 +427,8 @@ public final class ForbricMixinService
 		MixinNativePredicateSeam.adapt(node, this::mergedBaseNodeWithCode,
 				owner -> NativeGameReferences.reference(MixinStubRebind.ecosystemOf(node.name), owner));
 		MixinAbsorbedCallbackTransport.adapt(node, this::mergedBaseNodeWithCode,
-			owner -> NativeGameReferences.reference(MixinStubRebind.ecosystemOf(node.name), owner), loader());
+			owner -> NativeGameReferences.reference(MixinStubRebind.ecosystemOf(node.name), owner),
+			owner -> NativeGameReferences.peers(MixinStubRebind.ecosystemOf(node.name), owner), loader());
 		MixinOperationSeamTransport.adapt(node, this::mergedBaseNodeWithCode,NativeGameReferences::reference,loader());
 		MixinSharedPredicateSeam.adapt(node, this::mergedBaseNodeWithCode,
 				owner -> NativeGameReferences.reference(MixinStubRebind.ecosystemOf(node.name), owner),
@@ -362,9 +436,12 @@ public final class ForbricMixinService
 					ClassNode original = NativeGameReferences.reference(net.forbric.api.Ecosystem.NEOFORGE, owner);
 					return original != null ? original : NativeGameReferences.runtime(net.forbric.api.Ecosystem.NEOFORGE, owner);
 				});
+		// The modifier stays on its native call where a native decision island can hold it, and the predicate copy the carrier's
+		// hook evaluates reads what the call answered there.
 		MixinCrossHostPredicateIsland.adapt(node, this::mergedBaseNodeWithCode,
 				owner -> NativeGameReferences.reference(MixinStubRebind.ecosystemOf(node.name), owner),
-				ForbricMixinService::registerBeforeDefinition);
+				ForbricMixinService::registerBeforeDefinition,
+				(mixin, handler) -> NativeDecisionIsland.heard(mixin, handler, this::mergedBaseNodeWithCode, NativeGameReferences::reference, loader()));
 		MixinPredicateDelegateAdapter.adapt(node, MixinStubRebind.ecosystemOf(node.name), this::mergedBaseNodeWithCode);
 		MixinResourceContinuationAdapter.adapt(node, MixinStubRebind.ecosystemOf(node.name), this::mergedBaseNodeWithCode);
 		MixinUnusedArgumentObserverAdapter.adapt(node, MixinStubRebind.ecosystemOf(node.name), this::mergedBaseNodeWithCode);
@@ -389,19 +466,27 @@ public final class ForbricMixinService
 		// whatever still cannot bind is explained rather than left as "Invalid descriptor". After the shim, never
 		// before it: a diagnosis for something that is about to be repaired is a false alarm.
 		MixinOverloadPin.pin(node, this::mergedBaseNode);
-		FabricEntityMixinAnchors.adapt(node, this::mergedBaseNodeWithCode);
-		FabricEnchantmentMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		FabricServerLanguageMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		FabricMiningMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		FabricBlockBreakMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		// …and an @Inject the carrier put behind a branch of its own moves ahead of that branch, where it runs on every way it
+		// runs natively. Before the rebind below: an injector on a stub that only forwards is read on the overload here.
+		CarrierGuardedPoints.adapt(node, this::mergedBaseGameCode, NativeGameReferences::reference);
+		// …and a redirect inside a native lambda the carrier replaced with a method reference whose inherited implementation folds in
+		// the lambda's leftover captured value moves onto the reference's call, made in a method the reference is pointed at, and
+		// runs the native lambda's body with the mod's handler at the call.
+		CarrierMethodReferences.adapt(node, this::mergedBaseGameCode, NativeGameReferences::reference, loader());
+		// …and an @Inject at a vanilla call the carrier now makes inside a helper of its own class, whose boolean answer is true
+		// exactly when it made the call, runs on that answer at each of the helper's calls, its @Locals read where the merged
+		// method keeps the same values.
+		CarrierHelperResults.adapt(node, this::mergedBaseNodeWithCode, NativeGameReferences::reference);
 		FabricClientMixinAnchors.adapt(node, this::mergedBaseNodeWithCode);
-		FabricSoundMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		// …and a redirect of a vanilla call the carrier now makes through a method of its own (its inherited implementation
+		// makes the vanilla call) moves onto that method, running its implementation with the handler where it is inherited —
+		// one handler for every method it is bound to, when each of them lost the call to the same carrier call (a bed's
+		// occupancy write in the sleep start and in the wake-up lambda). After the client anchors: an empty redirect they turn
+		// into skipping the carrier's call keeps that meaning.
+		CarrierDefaultChains.adapt(node, this::mergedBaseGameCode, NativeGameReferences::reference);
 		MixinSpriteLoaderCallbackAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		FabricFluidFlowMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		MixinFluidInteractionAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		MixinKeyActionAdapter.adapt(node, this::mergedBaseNodeWithCode);
+		MixinKeyActionAdapter.adapt(node, this::mergedBaseGameCode);
 		MixinStructurePlacementAdapter.adapt(node, this::mergedBaseNodeWithCode);
-		FabricSectionCompilerMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		FabricBlockStateCodecMixinAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		MixinPlayerWorldCallbackAdapter.adapt(node, this::mergedBaseNodeWithCode);
 		MixinFluidReactionAdapter.adapt(node, this::mergedBaseNodeWithCode);
@@ -415,18 +500,46 @@ public final class ForbricMixinService
 		MixinTwinRebind.adapt(node, this::mergedBaseNodeWithCode);
 		// …and, LAST, a Fabric mod's injector that Mixin still binds to a carrier's delegating stub moves to the method
 		// carrying the body — Mixin binds a name-only selector to the FIRST declared overload, which is that stub.
-		// Last so every specific adapter above has had its say: FabricEntityMixinAnchors moves fabric-api's elytra
-		// check onto NeoForge's gliding attribute read, and a rebind first would have changed the selector it matches.
+		// Last so every adapter above has had its say: CarrierGuardedPoints moves an elytra check ahead of NeoForge's
+		// gliding guard, and a rebind first would have changed the selector it reads.
+		// …and an injector at the start or end of a method whose whole body a carrier renamed, which the merged game also
+		// runs without passing through that method, stays where it was written and also edges each method that only
+		// forwards to the renamed body (ALLOW_LOAD: on addEntity, before NeoForge's join event, and on players'
+		// addNewEntityWithoutEvent).
+		MixinRenamedBodyEdges.adapt(node, this::mergedBaseNodeWithCode);
+		// …and an injector at the start or end of a method a carrier split into pieces the merged game runs one by one, and never
+		// through the method (NeoForge's HUD layers draw Hud.extractPlayerHealth's four pieces), moves to the start of the first
+		// piece or the end of the last; a cancel at the start skips the later pieces of that run.
+		MixinSplitBodyEdges.adapt(node, this::mergedBaseNodeWithCode);
 		MixinStubRebind.adapt(node, this::mergedBaseNodeWithCode);
+		// …and an injector anchored in a body a carrier moved behind a builder stub (new builder, hand it over, build) moves
+		// to the overload that makes its calls.
+		MixinBuilderStubRebind.adapt(node, this::mergedBaseGameCode);
+		// …and a point shifted BY a count of nodes lands on the instruction it lands on natively, where a carrier's code now
+		// stands in that stretch (Shoulder Surfing's TAIL-2 FOV override on Camera.calculateFov landed on MinecraftForge's
+		// event call, after the last read of the local it modifies). After the rebind: it reads the injector's final target.
+		// On the raw bytes, which are what Mixin counts nodes in. Before the return ordinals: a point it re-spells is counted
+		// over the merged body.
+		MixinShiftedPoints.adapt(node, this::mergedBaseNodeWithCode);
+		// …and a RETURN ordinal counted on the native body names the return of the merged body that is the same way out
+		// (the last stays the last; an early one is the one the same test decides), when the merge added or dropped exits.
+		// After the rebind: it reads the injector's final target. Before the native tail: that one reads a TAIL as written.
+		MixinReturnOrdinals.adapt(node, this::mergedBaseGameCode);
 		// …and a NeoForge or MinecraftForge mod's TAIL on a method whose early returns the kernel restored keeps every
 		// return its own loader's folded body sent there. After the rebind: it reads the injector's final target.
 		MixinNativeTail.adapt(node, this::mergedBaseNodeWithCode);
+		// …and, after every rule that sets a handler's body aside, each such body is named for its own mixin: Mixin merges it into
+		// the target by name, and two mixins whose handlers share a name would otherwise share one body.
+		MixinHandlerShim.markAsides(node);
 		// …and an @Inject the adapter found Mixin would reject outright ("Invalid descriptor", which fails the whole mixin)
 		// is taken out, after every adapter above has had its say and only while the same rule still says so of this
 		// node, so the rest of the mixin applies. Before remember: the ledger must not expect a handler that is gone. With
 		// code: the rule asks whether the injector's @At finds a point in the method its name binds.
 		net.forbric.kernel.transform.GuestInjectorPruner.pruneRefused(node,
 				(mixin, handler) -> MixinFit.stillRejected(mixin, handler, this::mergedBaseNodeWithCode));
+		// …and a PARTIAL verdict the config-time pass printed is read again on the mixin as handed over: an injector it said never
+		// runs, which an adapter above moved onto a body that runs, is withdrawn from the report with where it landed.
+		KernelGuestMixinAdapter.judgeAsHanded(node);
 		FinalMixinApplications.remember(node);
 		// The call sites its injectors take, as they will apply: a raw post-Mixin patch of another mod that finds one
 		// gone is reported as a contention between the two (ContendedCallSites), not arbitrated.
@@ -434,6 +547,11 @@ public final class ForbricMixinService
 		// …and, after remember has the author's own counts, an injector-level require/allow on a relaxed guest mixin
 		// stops being able to abandon the whole target class: the mod is reported, the class is defined.
 		if (!DIAGNOSTICS) MixinLocalsCapture.softenRequirements(node, ForbricMixinService::allOwnersRelaxed);
+		// …and, last, every point that selects instructions by what they are counts its occurrences over the native body of
+		// its method and selects their counterparts in the merged one, at weave time (NativeOccurrencePoint): an injector runs
+		// once per native execution of its point however many occurrences a carrier added. Last, so the ledger above keeps the
+		// author's own points and every adapter before reads them as written.
+		NativeOccurrences.adapt(node, bytes);
 
 		return node;
 	}
@@ -470,6 +588,38 @@ public final class ForbricMixinService
 			Caught.warn(absent, "[Forbric/Mixin] could not read the merged base's %s; taken as absent", internalName);
 			return null;
 		}
+	}
+
+	/**
+	 * The same node WITH instructions, as the game's own code reads: {@link #codeView}. For the adapters that only read a
+	 * target to decide where a guest's point lands — a call occurrence, a return ordinal, a local's slot. Never for one
+	 * that records a fingerprint or a contract of a target method to compare with the bytes later defined: those are the
+	 * instrumented bytes, so it reads those ({@link #mergedBaseNodeWithCode}).
+	 */
+	private ClassNode mergedBaseGameCode(String internalName) {
+		try {
+			return codeView(loader().getPreMixinClassBytes(internalName.replace('/', '.')));
+		} catch (Throwable absent) {
+			Caught.warn(absent, "[Forbric/Mixin] could not read the merged base's %s; taken as absent", internalName);
+			return null;
+		}
+	}
+
+	/**
+	 * A target's pre-mixin bytes, with code, as the game's own instructions: without the delivery bookkeeping the kernel's
+	 * stand-down writes around the hook calls of a method that calls both families' hooks
+	 * ({@link net.forbric.kernel.transform.DeliveryBookkeeping}). The bookkeeping never moves, removes or repeats a game
+	 * instruction, so every point decided on this view — a call and its occurrence, a return and its ordinal, a local's
+	 * slot — is the same point in the bytes Mixin applies to; read with it in the way, the run in front of a hook, the
+	 * locals at a call or the way a return is reached no longer read as the game's (Create's released-key hooks on
+	 * {@code keyPress} and its section-change hook on {@code onMove} landed nowhere). Null for null bytes.
+	 */
+	static ClassNode codeView(byte[] bytes) {
+		if (bytes == null) return null;
+		ClassNode target = new ClassNode();
+		new ClassReader(bytes).accept(target, 0);
+		net.forbric.kernel.transform.DeliveryBookkeeping.strip(target);
+		return target;
 	}
 
 	/** Whether the merged base (or any owned jar) carries {@code binary}. Bytes only — the class is not loaded. */
@@ -522,6 +672,7 @@ public final class ForbricMixinService
 		if (in == null) return null;
 
 		if(isMixinConfigName(name))MergedBaseMixinCompat.discoverAll(ForbricMixinService::readGameResource);
+		noteLateGuest(name);
 		boolean relax = isRelaxedConfig(name);
 		List<String> named = suppressedMixinsFor(name);
 		List<String> drop = new ArrayList<>(named);
@@ -562,6 +713,9 @@ public final class ForbricMixinService
 			}
 
 			if (relax) {
+				// A parent config is read right after its child names it, and gives the child every option the child
+				// leaves out: its injectors' defaultRequire among them. It belongs to the same mod, so it is relaxed too.
+				noteParent(json);
 				// Three independent relaxations, each for a different way a guest mixin meets the merged base:
 				//
 				//   injectors.defaultRequire -> 0   an injection point whose anchor the byte-merge removed
@@ -698,7 +852,15 @@ public final class ForbricMixinService
 	}
 
 	/** Whether {@code name} looks like a mixin config file — the only resources the owned-target scan should read. */
-	private static boolean isMixinConfigName(String name) {
+	/**
+	 * Whether {@code name} is a mixin config: one the boot registered as such (what a mod declared, whatever it is called),
+	 * or a resource named the way configs usually are (a config registered later, by a mod at run time). By the name alone,
+	 * a mod whose config is called anything else — {@code modmenu_mixins.modmenu.json} — had none of its mixins read by
+	 * the guest-mixin adapter: no owner recorded, so every pass that asks which family wrote a mixin left that mod's alone.
+	 */
+	static boolean isMixinConfigName(String name) {
+		if (name == null) return false;
+		if (registeredConfigs.contains(name)) return true;
 		int slash = name.lastIndexOf('/');
 		String file = slash >= 0 ? name.substring(slash + 1) : name;
 		return file.endsWith(".mixins.json")
@@ -777,6 +939,22 @@ public final class ForbricMixinService
 	 */
 	private static volatile java.util.Set<String> guestConfigs = java.util.Set.of();
 
+	/**
+	 * Parent configs a relaxed config names ({@code "parent": "c2me.mixins.json"}). No mod declares a parent in its
+	 * metadata, yet Mixin reads it right after the child and the child inherits every option it does not set itself:
+	 * C2ME's 20 module configs leave their injectors' {@code defaultRequire} to {@code c2me.mixins.json}, which says 1,
+	 * so one injector of theirs that found nothing failed its whole target class (the dedicated server's watchdog, and
+	 * the server with it) although the child was relaxed.
+	 */
+	private static final java.util.Set<String> guestParents = java.util.concurrent.ConcurrentHashMap.newKeySet();
+	private static final Pattern PARENT = Pattern.compile("\"parent\"\\s*:\\s*\"([^\"]+)\"");
+
+	/** Records the parent config a relaxed config's JSON names, if any: that parent is relaxed in its turn. */
+	static void noteParent(String json) {
+		java.util.regex.Matcher parent = PARENT.matcher(json);
+		if (parent.find()) guestParents.add(parent.group(1));
+	}
+
 	/** Every registered mixin config name, relaxed or not — the input {@link ForeignMixinTargets} indexes. */
 	private static volatile java.util.Set<String> registeredConfigs = java.util.Set.of();
 
@@ -811,6 +989,8 @@ public final class ForbricMixinService
 			registeredConfigs = java.util.Collections.unmodifiableSet(all);
 		}
 
+		guestParents.clear();
+		lateGuests.clear();
 		if (configs == null || "off".equalsIgnoreCase(System.getProperty("forbric.relaxGuestMixins", "on"))) {
 			guestConfigs = java.util.Set.of();
 			return;
@@ -856,8 +1036,26 @@ public final class ForbricMixinService
 		return !owners.isEmpty() && owners.stream().allMatch(ForbricMixinService::isRelaxedConfig);
 	}
 
+	/**
+	 * Mixin configs a mod registered after the boot did ({@code Mixins.addConfiguration} from {@code preLaunch}): Essential's
+	 * loader registers its own and those of every jar it injects as a mod. The kernel authors no mixins, so they are guest
+	 * configs like the ones it registered, and are relaxed the same way; strict, fabric-networking's accessor met NeoForge's
+	 * own {@code getConnection} under {@code @Overwrite}-required rules and failed the class, and the client's connection
+	 * with it.
+	 */
+	private static final java.util.Set<String> lateGuests = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+	/** Records {@code name} as a late guest config when it is a mixin config the boot did not register. */
+	static void noteLateGuest(String name) {
+		if (!isMixinConfigName(name) || registeredConfigs.isEmpty() || registeredConfigs.contains(name) || isInfrastructureConfig(name)
+				|| "off".equalsIgnoreCase(System.getProperty("forbric.relaxGuestMixins", "on"))) return;
+		lateGuests.add(name);
+	}
+
 	static boolean isRelaxedConfig(String name) {
 		if (guestConfigs.contains(name)) return true;
+		if (lateGuests.contains(name)) return true;
+		if (guestParents.contains(name) && !isInfrastructureConfig(name)) return true;
 
 		String csv = System.getProperty("forbric.relaxMixinOverwrites");
 		if (csv == null || csv.isEmpty()) return false;

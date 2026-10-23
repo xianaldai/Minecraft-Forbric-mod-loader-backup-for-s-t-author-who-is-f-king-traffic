@@ -45,6 +45,7 @@ import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FrameNode;
 import org.objectweb.asm.tree.MethodNode;
+import net.forbric.kernel.ExpectCaught;
 
 /**
  * Covers the recomputer against the REAL artifacts, including the crash it was written for.
@@ -155,6 +156,7 @@ class MergedBaseFrameRecomputerTest {
 	}
 
 	/** An unwalkable hierarchy abstains: the original bytes come back, and nothing is guessed. */
+	// The blind resolver is the point: the recomputer reports that it cannot prove a repair, and abstains.
 	@ExpectCaught("cannot prove a frame repair for org.anti_ad.mc.ipnext.item.ItemTypeExtensionsKt")
 	@Test
 	void anUnresolvableHierarchyLeavesTheClassAlone() throws Exception {
