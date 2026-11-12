@@ -26731,6 +26731,78 @@
    "title": null,
    "updated_at": null
   },
+  "3931": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3932": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3933": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3934": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3935": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3936": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3937": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3938": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3939": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "394": {
    "body": null,
    "deleted": true,
@@ -26739,7 +26811,135 @@
    "title": null,
    "updated_at": null
   },
+  "3940": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3941": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3942": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3943": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3944": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3945": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3946": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3947": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3948": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3949": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
   "395": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3950": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3951": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3952": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3953": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3954": {
+   "body": null,
+   "deleted": true,
+   "never_seen": true,
+   "state": null,
+   "title": null,
+   "updated_at": null
+  },
+  "3955": {
    "body": null,
    "deleted": true,
    "never_seen": true,
@@ -27672,6 +27872,14 @@
    "state": "closed",
    "title": "\u79fb\u9664vibeslop\uff08\u7167\u642c issue #59\uff0c\u539f\u8457 @cubk1\uff09",
    "updated_at": "2026-10-18T12:39:58Z"
+  },
+  "4874": {
+   "body": "9133354562b6",
+   "comments": {},
+   "comments_through": "",
+   "state": "open",
+   "title": "Refactor: remove all vibe-coded codes",
+   "updated_at": "2026-11-12T05:35:38Z"
   },
   "488": {
    "body": null,
