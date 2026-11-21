@@ -42,8 +42,10 @@ class MixinCallbackContractsTest {
         contracts.add(create("mixin/StructureTemplateMixin","MixinStructurePlacementAdapter",MixinStructurePlacementAdapter::adapt,3));
         for (String entry : CarpetMixinAdapterTest.NAMES)
             contracts.add(new Contract(entry, "player/world and fluid reactions", () -> CarpetMixinAdapterTest.mixin(entry),
-                    (mixin,targets) -> MixinPlayerWorldCallbackAdapter.adapt(mixin,targets)+MixinFluidReactionAdapter.adapt(mixin,targets),
-                    entry.startsWith("Level_")||entry.endsWith("BlackstoneMixin")?2:1));
+                    // Carpet's mixins are a Fabric mod's, as the service records them, under whatever name a case gives them.
+                    (mixin,targets) -> {MixinStubRebind.noteEcosystem(mixin.name,net.forbric.api.Ecosystem.FABRIC);
+                        return MixinPlayerWorldCallbackAdapter.adapt(mixin,targets)+MixinFluidReactionAdapter.adapt(mixin,targets);},
+                    entry.startsWith("Level_")?2:1));
         contracts.add(jar("sprite loader","build/compat-inputs/player-loading/mods/continuity-3.0.1+26.2.jar",
                 "me/pepperbell/continuity/client/mixin/SpriteSourceListMixin","MixinSpriteLoaderCallbackAdapter",MixinSpriteLoaderCallbackAdapter::adapt,1));
         contracts.add(jar("GUI item","build/sweep80-mac/v020-rounds/r3/mods/itemglintrelight-fabric-26.2-0.3.0+26.2.jar",

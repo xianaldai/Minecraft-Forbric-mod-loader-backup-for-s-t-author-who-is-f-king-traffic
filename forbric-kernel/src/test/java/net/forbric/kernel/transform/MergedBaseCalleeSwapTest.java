@@ -67,21 +67,19 @@ import net.forbric.api.Ecosystem;
 import net.forbric.kernel.mixin.MergedBaseCalleeSwaps;
 
 /**
- * The descriptor-identical callee swaps between stock 26.2 and the merged base, pinned; the safety test that says
+ * The descriptor-identical callee swaps between stock 26.2 and the staged base, pinned; the safety test that says
  * none of them may be rewritten at the call site; and the rows MixinRetarget follows, which must be among them.
  *
- * <p>A swap is: inside a vanilla method that still exists in the merged base (same owner, name, descriptor), a
+ * <p>A swap is: inside a vanilla method that still exists in the staged base (same owner, name, descriptor), a
  * callee {@code owner.name desc} of the vanilla body that the merged body never calls, while the merged body
  * calls {@code owner.other desc} (same owner, same descriptor, a different name) that the vanilla body never
  * calls. Synthetic names ({@code access$N}, {@code lambda$…}) are renumbering, not swaps.
  */
 class MergedBaseCalleeSwapTest {
 	private static final Path RUN = TestFixtures.stagedRoot();
-	private static final Path MERGED = RUN.resolve("merged-base/patched-mc-merged-26.2.jar");
-	private static final Path FORGE_RT = RUN.resolve("forge-runtime/forge-runtime.jar");
-	private static final Path NEO_RT = RUN.resolve("neoforge-runtime/neoforge-runtime.jar");
-	private static final Path FORGE_PATCHED = TestFixtures.forgeMergeInput();
-	private static final Path NEO_PATCHED = RUN.resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
+	private static final Path MERGED = RUN.resolve(TestFixtures.BASE_JAR);
+	private static final Path NEO_RT = RUN.resolve(TestFixtures.NEO_CARRIER_JAR);
+	private static final Path NEO_PATCHED = RUN.resolve(TestFixtures.BASE_JAR);
 
 	/** {@code owner.method | callee-owner.vanilla→merged desc}, one line per swap — 25 on the staged base. */
 	static final Set<String> PINNED = new TreeSet<>(List.of(
@@ -119,16 +117,22 @@ class MergedBaseCalleeSwapTest {
 	static final Map<String, String> ADMITTED_NOT_REWRITTEN = Map.of(
 			"net/minecraft/client/data/models/EquipmentAssetProvider.run(Lnet/minecraft/data/CachedOutput;)Ljava/util/concurrent/CompletableFuture; | net/minecraft/client/data/models/EquipmentAssetProvider.bootstrap→registerModels (Ljava/util/function/BiConsumer;)V",
 			"client data generation only; NeoForge's registerModels is its mod-datagen extension point and no staged mixin anchors "
-					+ "on bootstrap — nothing to gain, and the extension point would be lost");
+					+ "on bootstrap — nothing to gain, and the extension point would be lost",
+			"net/minecraft/server/level/ServerPlayer.teleport(Lnet/minecraft/world/level/portal/TeleportTransition;)Lnet/minecraft/server/level/ServerPlayer; | net/minecraft/server/level/ServerPlayer.unsetRemoved→revive ()V",
+			"NeoForge's Entity.revive() (called at bci 203, where vanilla calls unsetRemoved() at bci 187) implements "
+					+ "IEntityExtension.revive(), NeoForge's extension point: rewriting the call back to unsetRemoved would skip "
+					+ "any override, and native NeoForge makes this same call; no mixin in the C4 corpus scan (1,002 jars, 2,689 "
+					+ "with nested) names unsetRemoved or revive, and the 11 injectors on teleport are HEAD/RETURN/TAIL, which "
+					+ "a callee swap does not move");
 
 	@Test
 	void theCensusOfCalleeSwapsIsExactlyThePinnedSet() throws Exception {
 		Path vanilla = vanillaJar();
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "staged merged base absent");
+		TestFixtures.requireFile(Fixture.STAGED, MERGED, "staged base absent");
 		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(vanilla), "stock 26.2 absent: " + vanilla);
 		Set<String> found = new TreeSet<>();
 		for (Swap swap : swaps(vanilla)) found.add(swap.line());
-		assertEquals(PINNED, found, "descriptor-identical callee swaps between stock 26.2 and the merged base — re-derive, then decide");
+		assertEquals(PINNED, found, "descriptor-identical callee swaps between stock 26.2 and the staged base — re-derive, then decide");
 	}
 
 	/**
@@ -139,8 +143,7 @@ class MergedBaseCalleeSwapTest {
 	@Test
 	void everyAdmittedSwapIsEitherRewrittenOrExplained() throws Exception {
 		Path vanilla = vanillaJar();
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED) && Files.isRegularFile(FORGE_RT)
-				&& Files.isRegularFile(NEO_RT), "staged merged base or carriers absent");
+		TestFixtures.requireFiles(Fixture.STAGED, "staged base or carrier absent", MERGED, NEO_RT);
 		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(vanilla), "stock 26.2 absent: " + vanilla);
 		Map<String, ClassNode> world = new HashMap<>();
 		List<String> admitted = new ArrayList<>();
@@ -204,18 +207,18 @@ class MergedBaseCalleeSwapTest {
 	@Test
 	void everySubstitutionIsOneCallInAnOtherwiseUnchangedBody() throws Exception {
 		Path vanilla = vanillaJar();
-		for (Path jar : List.of(MERGED, FORGE_PATCHED, NEO_PATCHED)) TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), jar + " absent");
+		for (Path jar : List.of(MERGED, NEO_PATCHED)) TestFixtures.requireFile(Fixture.STAGED, jar, jar + " absent");
 		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(vanilla), vanilla + " absent");
 		var derivedSubstitution=net.forbric.kernel.mixin.NativeCallTestEvidence.modelRow();
 		assertNotNull(derivedSubstitution);
 		for (MergedBaseCalleeSwaps.Substitution row : List.of(derivedSubstitution)) {
 			String where = row.target() + "." + row.method();
 			MethodNode merged = debugMethod(MERGED, row.target(), row.method());
-			assertTrue(merged != null, where + " is not in the merged base");
+			assertTrue(merged != null, where + " is not in the staged base");
 			assertEquals(0, occurrences(merged, row.member()), where + ": the merged body makes the reference call again");
 			assertEquals(1, occurrences(merged, row.replacement()), where + ": the merged body no longer makes the replacement once");
 			for (Ecosystem ecosystem : Ecosystem.values()) {
-				Path reference = switch (ecosystem) { case FABRIC -> vanilla; case FORGE -> FORGE_PATCHED; case NEOFORGE -> NEO_PATCHED; };
+				Path reference = ecosystem == Ecosystem.FABRIC ? vanilla : NEO_PATCHED;
 				MethodNode original = debugMethod(reference, row.target(), row.method());
 				assertTrue(original != null, where + " is not in " + ecosystem + "'s own jar");
 				List<Integer> differ = differingInstructions(original, merged);
@@ -239,8 +242,8 @@ class MergedBaseCalleeSwapTest {
 	}
 
 	/**
-	 * Every {@link MergedBaseCalleeSwaps#REPLACED} row, proven against stock 26.2 and the merged base: vanilla declares the
-	 * method privately and the merged base does not; the replacement is private there; the caller is the only method of
+	 * Every {@link MergedBaseCalleeSwaps#REPLACED} row, proven against stock 26.2 and the staged base: vanilla declares the
+	 * method privately and the staged base does not; the replacement is private there; the caller is the only method of
 	 * the class calling either, and calls each exactly once (the merged one never vanilla's); and each vanilla argument,
 	 * read off vanilla's call site, is the row's reading of the merged call's — the same caller local, or a no-argument
 	 * {@code invokevirtual} on it (made at the call, or stored once into a local the call then loads, as vanilla's
@@ -249,7 +252,7 @@ class MergedBaseCalleeSwapTest {
 	@Test
 	void everyReplacementIsOneCallWhoseVanillaArgumentsAreReadOffTheReplacements() throws Exception {
 		Path vanilla = vanillaJar();
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), MERGED + " absent");
+		TestFixtures.requireFile(Fixture.STAGED, MERGED, MERGED + " absent");
 		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(vanilla), vanilla + " absent");
 		var derivedReplacement=net.forbric.kernel.mixin.NativeCallTestEvidence.structureRow();
 		assertNotNull(derivedReplacement);
@@ -258,7 +261,7 @@ class MergedBaseCalleeSwapTest {
 			ClassNode before = debugClass(vanilla, row.owner()), after = debugClass(MERGED, row.owner());
 			MethodNode original = declared(before, row.vanilla());
 			assertTrue(original != null && (original.access & Opcodes.ACC_PRIVATE) != 0, where + ": vanilla no longer declares it privately");
-			assertTrue(declared(after, row.vanilla()) == null, where + ": the merged base declares it again; delete the row");
+			assertTrue(declared(after, row.vanilla()) == null, where + ": the staged base declares it again; delete the row");
 			MethodNode replacement = declared(after, row.replacement());
 			assertTrue(replacement != null && (replacement.access & Opcodes.ACC_PRIVATE) != 0, where + ": the replacement is not private there");
 			assertEquals(List.of(row.caller()), callers(before, row.vanillaMember()), where + ": vanilla's callers");
@@ -561,7 +564,7 @@ class MergedBaseCalleeSwapTest {
 	private static ClassNode load(String internal, Map<String, ClassNode> world) throws IOException {
 		if (world.containsKey(internal)) return world.get(internal);
 		ClassNode node = null;
-		for (Path jar : List.of(MERGED, NEO_RT, FORGE_RT)) {
+		for (Path jar : List.of(MERGED, NEO_RT)) {
 			try (ZipFile zip = new ZipFile(jar.toFile())) {
 				ZipEntry entry = zip.getEntry(internal + ".class");
 				if (entry != null) { node = read(zip, entry); break; }

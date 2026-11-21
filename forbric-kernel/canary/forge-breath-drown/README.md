@@ -1,0 +1,38 @@
+# Breath and drown canaries (gate-m57)
+
+Two mods, each using only its own loader's API. `run/build-breath-drown-canary.sh` builds the NeoForge one into
+`run/canary/`; `run/build-forge-refusal-fixtures.sh` builds the MinecraftForge one, against stand-ins for
+MinecraftForge, into `run/canary/forge-refused/` (entry-for-entry the jar the real MinecraftForge carrier gave):
+
+- `forge/` — `forbricbreathforge`, MinecraftForge: a drowning liquid `murk` (MinecraftForge fluid type, a
+  `LiquidBlock` and a `BucketItem` built from suppliers), a liquid `calm` whose type is built `canDrown(false)` (no
+  bucket), and listeners for `LivingBreatheEvent`, `LivingDrownEvent`
+  (which can also set the bubble count), `LivingAttackEvent` and `LivingHurtEvent` registered with `BUS.addListener`,
+  plus `@SubscribeEvent` listeners (`ForgeAnnotated`) for drowning and `LivingDamageEvent` that cancel by returning
+  true, and one for breathing.
+- `neo/` — `forbricbreathneo`, NeoForge: its own `murk` and bucket, listeners for breathing, drowning,
+  `LivingIncomingDamageEvent` and `LivingDamageEvent.Pre` and a breathing and a drowning listener at `LOWEST` (tags
+  `n-lowest-*`) registered in its constructor, before the kernel's bridges, and a breathing and a drowning listener at
+  `LOW` registered from common setup, after them (tags `n-low-*`).
+- `common/src/Core.java` — the world probe, copied into each jar under the jar's own package. The jar whose family
+  `-Dforbric.breathDrownDriver` names plays the scenarios (`Core.plan`) and writes `-Dforbric.breathDrownProbe`.
+  Listeners act on the body's entity tags (`f-*` MinecraftForge, `n-*` NeoForge); a tag of the other family does
+  nothing, so on a native loader every scenario is what that family's listeners do alone.
+
+`native-reference.json` is what native MinecraftForge 26.2-65.0.1 and NeoForge 26.2.0.88 do with these jars, every
+judged field and the body's random draws agreeing across three runs each. It records the digest of the `.java` and `.toml` sources it was measured
+with, and gate-m57 refuses a reference measured with other sources. After changing a canary, regenerate it from the
+native servers that `run/compat/native-controls.py prepare --family forge` and `prepare --family neo` install (plain
+`prepare` installs Fabric and NeoForge only, not MinecraftForge):
+
+```sh
+python3 forbric-kernel/run/compat/breath-drown.py reference      # M57_NATIVE=<dir> if the images live elsewhere
+```
+
+Since Stage 3 of dropping MinecraftForge, Forbric refuses `forbricbreathforge` (a MinecraftForge-only jar), so on
+Forbric the NeoForge canary plays alone and gate-m57 judges every row against native NeoForge; the MinecraftForge half
+of the reference is read only for the air of the water-breathing row, where native MinecraftForge refills as vanilla
+does. The MinecraftForge canary stays: the gate stages it once to prove a refused jar takes no part, and the reference
+still runs it on its own loader.
+
+Test fixtures only.

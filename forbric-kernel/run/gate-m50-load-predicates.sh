@@ -2,7 +2,7 @@
 # M50 — lithostitched's load predicates are read again with its Fabric build installed.
 #
 # lithostitched (Fabric build) skips a registry entry whose "predicate" fails, from an @Inject on vanilla's
-# Decoder.parse in RegistryLoadTask.PendingRegistration.loadFromResource. NeoForge's merged body decodes through
+# Decoder.parse in RegistryLoadTask.PendingRegistration.loadFromResource. NeoForge's body decodes through
 # ConditionalOps' Codec.parse — the same method, which Mixin's owner match did not see — so every gated entry loaded:
 # datapack and mod content meant only for when another mod is present (Tectonic's compat modifiers) always applied,
 # giving unwanted worldgen or a registry error that blocks the world. MixinSubtypeOwnerRetarget moves the anchor to
@@ -19,6 +19,7 @@ set -uo pipefail
 
 SERVER_DIR="$KERNEL/run/server-predicates-m50"
 RESULTS="$BUILD/verification/m50-load-predicates"
+refuse_shared_rundir "$SERVER_DIR"
 FAIL=0
 rm -rf "$RESULTS"; mkdir -p "$RESULTS"
 
@@ -39,7 +40,7 @@ run_server() {
   seed_server_properties "$SERVER_DIR"
   printf 'level-name=world\nlevel-type=minecraft:flat\ngenerate-structures=false\nmax-tick-time=-1\npause-when-empty-seconds=0\nonline-mode=false\n' >> "$SERVER_DIR/server.properties"
   RUNDIR="$SERVER_DIR" FORBRIC_COMPAT_POLICY="$policy" \
-    FORBRIC_JVM="-Dforbric.predicateProbe=$RESULTS/$phase.json -Dforbric.predicatePhase=$phase $extra" \
+    FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.predicateProbe=$RESULTS/$phase.json -Dforbric.predicatePhase=$phase $extra" \
     "$KERNEL/run/launch-kernel-server.sh" < /dev/null > "$RESULTS/$phase.log" 2>&1 &
   pid=$!; record_server_pid "$SERVER_DIR" "$pid"
   await_server "$pid" "$RESULTS/$phase.log" 240 30

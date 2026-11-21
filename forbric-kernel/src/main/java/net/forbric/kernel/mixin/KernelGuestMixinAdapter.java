@@ -44,27 +44,27 @@ import net.forbric.kernel.util.Caught;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
- * Derives, per mixin config, which of its guest mixins must not apply to the merged base — the general form of
+ * Derives, per mixin config, which of its guest mixins must not apply to the base — the general form of
  * {@link MergedBaseMixinCompat#SUPPRESSED_MIXINS}'s hand-written entries.
  *
- * <p>A guest Fabric/Forge mixin is written against VANILLA bytecode. In the merged base, Forge or NeoForge may have
- * won the byte-merge of the class the mixin targets and restructured it — a field the mixin {@code @Shadow}s is
+ * <p>A guest Fabric mixin is written against VANILLA bytecode. In the base, NeoForge's patches may have
+ * restructured the class the mixin targets — a field the mixin {@code @Shadow}s is
  * never assigned, an {@code @Inject} anchor moved, a param was re-typed. Generic erasure lets many such mixins APPLY
  * with no error and then misbehave at runtime (the archetype: {@code fabric-rendering-v1}'s {@code GuiRendererMixin}
- * reads {@code GuiRenderer.pictureInPictureRenderers}, which the NeoForge-won merge never assigns → NPE). Whether a
+ * reads {@code GuiRenderer.pictureInPictureRenderers}, which NeoForge's constructor never assigns → NPE). Whether a
  * mixin applies cleanly is therefore not a usable signal.
  *
  * <p><b>Provenance is not a usable signal either.</b> This used to drop every mixin whose target matched a
- * hand-curated owned-class/package table. That was wrong at the root: the merged base IS NeoForge's patched
- * Minecraft ({@code MergedBaseBuilder} takes NeoForge as the base and splices Forge in — {@code forge=195
- * neo=10161 MERGED=611}), so "Forge/NeoForge owns this class" describes ~93% of the jar. Measured over the 163
+ * hand-curated owned-class/package table. That was wrong at the root: even the merged base of Forbric 0.3.x and
+ * earlier was NeoForge's patched Minecraft ({@code MergedBaseBuilder} took NeoForge as the base and spliced Forge
+ * in — {@code forge=195 neo=10161 MERGED=611}), so "Forge/NeoForge owns this class" describes ~93% of the jar. Measured over the 163
  * suppressions that rule actually made, 108 targeted a class byte-identical to NeoForge's own jar, and restoring
  * them costs nothing. The table also could not see the failures that matter: fabric-block-api-v1 redirects
- * {@code BlockState.isAir()} inside {@code LevelChunkSection.setBlockState}, which the merged base calls as
+ * {@code BlockState.isAir()} inside {@code LevelChunkSection.setBlockState}, which the base calls as
  * {@code isEmpty()} — silently dead, on a class the table never listed.
  *
  * <p>So the question is asked directly instead: {@link MixinFit} resolves every anchor the mixin names — each
- * {@code @Shadow} member, each injector's target method, each {@code @At(target=…)} — against the merged target's
+ * {@code @Shadow} member, each injector's target method, each {@code @At(target=…)} — against the current target's
  * real bytecode, and reports whether they still exist. See {@link MixinFit.Result#shouldSuppress()} for why a
  * partially-resolving mixin is kept by default rather than dropped.
  *
@@ -116,7 +116,7 @@ public final class KernelGuestMixinAdapter {
 
 	/**
 	 * Reads a mixin PARTIAL at config time again as it is handed to Mixin, once, after every adapter has had its say: an anchor
-	 * the config-time read missed — an injector said never to run, on a body nothing calls — that now lands where the merged
+	 * the config-time read missed — an injector said never to run, on a body nothing calls — that now lands where the
 	 * game runs it is withdrawn from what the boot says of the mixin, with where it landed. A mixin that now fits leaves the
 	 * partial count, and its preflight row is resolved; one still partial keeps its row (the final ledger decides each
 	 * injector), and the line names what is still missing. Says nothing when nothing changed.
@@ -136,14 +136,14 @@ public final class KernelGuestMixinAdapter {
 			String key = handed.configName() + ":" + handed.mixin();
 			boolean fits = fit.verdict() == MixinFit.Verdict.FIT;
 			ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s as handed to Mixin — %d anchor(s) the config-time read missed now land "
-							+ "where the merged game runs them, withdrawn: %s; verdict %s→%s%s", MixinConfigOwners.describe(handed.configName()),
+							+ "where the game runs them, withdrawn: %s; verdict %s→%s%s", MixinConfigOwners.describe(handed.configName()),
 					handed.mixin(), landed.size(), String.join(", ", landed), handed.kept().verdict(), fit.verdict(),
 					fits ? "" : " (" + fit.reason() + ")");
 			if (fits) {
 				PARTIAL.remove(key);
 				REJECTING.remove(key);
 				MixinCompatibility.resolveAs(MixinCompatibility.id(handed.configName(), handed.pkg() + "." + handed.mixin()), handed.configName(),
-						"every anchor lands where the merged game runs it, as the mixin is handed to Mixin");
+						"every anchor lands where the game runs it, as the mixin is handed to Mixin");
 			}
 		} catch (RuntimeException unreadable) {
 			Caught.warn(unreadable, "[Forbric/Mixin] could not read guest mixin %s again as it is handed to Mixin; its config-time verdict stands",
@@ -179,7 +179,7 @@ public final class KernelGuestMixinAdapter {
 	/** The one line a gate greps: the count, and what it costs. */
 	public static String partialSummary() {
 		int rejecting = REJECTING.size();
-		String head = "[Forbric/Mixin] " + PARTIAL.size() + " guest mixin(s) apply only partially on the merged base — ";
+		String head = "[Forbric/Mixin] " + PARTIAL.size() + " guest mixin(s) apply only partially on this base — ";
 		if (rejecting == 0) return head + "each keeps the handlers that bound and loses the rest, with no error at either end";
 		return head + (PARTIAL.size() - rejecting) + " keep the handlers that bound and lose the rest, with no error at either "
 				+ "end; " + rejecting + " keep an injector Mixin rejects outright (-D"
@@ -227,8 +227,6 @@ public final class KernelGuestMixinAdapter {
 			judged = MixinDecodeScopeAdapter.asLoaded(ReplacedCallRedirects.asLoaded(MixinPlayerWorldCallbackAdapter.asLoaded(judged, resource),
 					resource), resource);
 			judged = MixinStructurePlacementAdapter.asLoaded(judged, resource);
-			// …and an injector at the start of a model-data overload nothing calls, judged with the edge twin it is given.
-			judged = MixinForgeModelDataEdge.asLoaded(judged, resource);
 			MixinFit.Result fit = MixinFit.evaluate(judged, resource, net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added,
 					config.nativeView());
 			if (fit.verdict() != MixinFit.Verdict.PARTIAL && fit.verdict() != MixinFit.Verdict.UNFIT) return;
@@ -255,7 +253,7 @@ public final class KernelGuestMixinAdapter {
 
 	/**
 	 * The mixin entries in {@code configJson} (as they appear in its {@code mixins}/{@code client}/{@code server}
-	 * arrays) that no longer fit the merged base, plus anything transitively broken by dropping them.
+	 * arrays) that no longer fit the base, plus anything transitively broken by dropping them.
 	 * {@code resource} resolves a resource path ({@code some/pkg/Name.class}) to its bytes, or null. Best-effort:
 	 * any parse/scan failure on one entry skips that entry, never the config.
 	 */
@@ -271,7 +269,7 @@ public final class KernelGuestMixinAdapter {
 	 * {@code server} on a dedicated server ({@code MixinConfig.prepare} switches on the environment side and never
 	 * looks at the other array). {@code null} — no side known — is every array.
 	 *
-	 * <p>Judging the other side's array was not merely noise. A client-only mod's client mixin, unfit on the merged
+	 * <p>Judging the other side's array was not merely noise. A client-only mod's client mixin, unfit on the
 	 * game, was recorded as a CONFIRMED required loss on a dedicated server, where Mixin would never have applied
 	 * it, and the default STRICT policy stopped the server: fusion (connected textures) in a server's mods folder
 	 * was enough. Same rule as {@code CandidateContractScanner}'s.
@@ -295,9 +293,9 @@ public final class KernelGuestMixinAdapter {
 	}
 
 	/**
-	 * As above, with {@code raw} serving the merged base's bytes BEFORE the transform chain and {@code base} naming
+	 * As above, with {@code raw} serving the base's bytes BEFORE the transform chain and {@code base} naming
 	 * the members digest of the jar that serves a class, which is what lets an injector target the owning mod's own
-	 * platform lacks too be told from one the merge lost ({@link NativeAbsentTargets}). The platform is the config's
+	 * platform lacks too be told from one the base lost ({@link NativeAbsentTargets}). The platform is the config's
 	 * owner's ecosystem ({@link MixinConfigOwners#ecosystemOf}), and the owner's declared requirements are what discovery
 	 * read from its manifest ({@link net.forbric.api.ModPresence#metadata}), which decide whether it is native to the
 	 * game the table describes at all. A config no single mod claims, a null {@code raw} or a null {@code base} asks
@@ -312,7 +310,7 @@ public final class KernelGuestMixinAdapter {
 			config = MixinConfigJson.parse(reader);
 		} catch (RuntimeException | java.io.IOException notAMixinConfig) {
 			Caught.warn(notAMixinConfig, "[Forbric/Mixin] could not parse mixin config %s; none of its mixins is checked "
-					+ "against the merged base", configName);
+					+ "against the base", configName);
 			return List.of();
 		}
 
@@ -340,7 +338,7 @@ public final class KernelGuestMixinAdapter {
 		String pluginClass = asString(config.get(List.of("plugin")));
 		boolean required = Boolean.TRUE.equals(config.get(List.of("required")));
 		// The native game is the owning mod's own: vanilla for a Fabric mod, its patched game for a MinecraftForge or
-		// NeoForge one, which declares methods vanilla does not and the merge may have lost.
+		// NeoForge one, which declares methods vanilla does not and the base may have lost.
 		net.forbric.api.Ecosystem platform = MixinConfigOwners.ecosystemOf(configName);
 		NativeAbsentTargets.Context nativeView = raw == null || base == null || platform == null
 				? NativeAbsentTargets.Context.NONE
@@ -373,8 +371,8 @@ public final class KernelGuestMixinAdapter {
 					MixinFit.Result accessors = MixinFit.evaluate(classBytes, resource,
 							net.forbric.kernel.classloading.DelegationPolicy::alwaysGame);
 					if (!accessors.unresolved().isEmpty()) {
-						ForbricLog.info("[Forbric/Mixin] guest accessor mixin %s:%s cannot bind — %s (kept; the merge "
-								+ "re-typed or removed the member, so the generated accessor will throw when called)",
+						ForbricLog.info("[Forbric/Mixin] guest accessor mixin %s:%s cannot bind — %s (kept; NeoForge's "
+								+ "patches re-typed or removed the member, so the generated accessor will throw when called)",
 								MixinConfigOwners.describe(configName), mixin, String.join(", ", accessors.unresolved()));
 					}
 					continue;
@@ -385,16 +383,14 @@ public final class KernelGuestMixinAdapter {
 				// on Fabric and here (moreculling's shadow of the mesh field fabric-renderer-api adds).
 				MixinAddedMembers.View added = MixinAddedMembers.before(configName, mixin, resource);
 				// Judged as Mixin will receive it: callback anchor adapters run when Mixin loads the class, after this
-				// read, so an anchor they move onto the merged game is not missing (MixinPlayerWorldCallbackAdapter.asLoaded).
+				// read, so an anchor they move onto the game is not missing (MixinPlayerWorldCallbackAdapter.asLoaded).
 				byte[] judged = adaptedSourceProtocols(classBytes,resource);
                 judged = ForbricMixinService.absorbedCallbacksAsLoaded(judged, resource);
                 judged = MixinDecodeScopeAdapter.asLoaded(ReplacedCallRedirects.asLoaded(
                         MixinPlayerWorldCallbackAdapter.asLoaded(judged, resource), resource), resource);
-				// …and a callback on a vanilla method the merged class no longer declares (StructureTemplate.placeEntities),
+				// …and a callback on a vanilla method the current class no longer declares (StructureTemplate.placeEntities),
 				// which binds nothing as compiled, is judged where the adapter moves it.
 				judged = MixinStructurePlacementAdapter.asLoaded(judged, resource);
-				// …and an injector at the start of a model-data overload nothing calls, judged with the edge twin it is given.
-				judged = MixinForgeModelDataEdge.asLoaded(judged, resource);
 				MixinFit.Result fit = MixinFit.evaluate(judged, resource,
 						net.forbric.kernel.classloading.DelegationPolicy::alwaysGame, added, nativeView);
 				List<String> groupFailures = MixinGroupConstraints.failures(MixinFit.parse(judged), resource, added);
@@ -419,11 +415,11 @@ public final class KernelGuestMixinAdapter {
 				}
 				if (!fit.nativeAbsent().isEmpty()) {
 					// Informational, and deliberately nothing more: no finding, no mark on the mod's row. Native Mixin
-					// drops this injector on the mod's own platform without a word, so it is no loss of the merge's --
+					// drops this injector on the mod's own platform without a word, so it is no loss of the base's --
 					// and Mixin will drop it here the same way, the rest of the mixin applying around it.
 					ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s names %s, which %s lacks too; native Mixin drops "
 							+ "that injector without a word (nothing requires it to inject), and so will this boot — not a "
-							+ "merged-base loss", MixinConfigOwners.describe(configName), mixin,
+							+ "loss of this base", MixinConfigOwners.describe(configName), mixin,
 							String.join(", ", fit.nativeAbsent()), NativeAbsentTargets.describe(platform));
 				}
 				if (!fit.shouldSuppress()) {
@@ -441,7 +437,7 @@ public final class KernelGuestMixinAdapter {
 					}
 					if (!shown.foreign().isEmpty()) {
 						// A DIFFERENT thing from the line below, and the reason the two are separated. An anchor
-						// that misses on a merged-base class is routine -- 1226 such anchors across every gate log
+						// that misses on a base class is routine -- 1226 such anchors across every gate log
 						// in this repo, on runs that pass. An anchor that misses on ANOTHER MOD's class is not:
 						// across those same 1226 there is not one. It means two mods that were built to fit each
 						// other no longer do, and the failure that follows names neither of them. Iris 1.11.2
@@ -469,8 +465,8 @@ public final class KernelGuestMixinAdapter {
 						preflight(configName, pkg, mixin, pluginClass, classBytes, required,
 								"preflight could not resolve this mixin's anchors on another mod", shown.foreign());
 					} else if (shown.verdict() == MixinFit.Verdict.PARTIAL) {
-						// Before reporting a PARTIAL, ask whether it is one the merge MADE: an injector bound by
-						// explicit descriptor to a merge-added delegating stub whose body moved. If rebinding it to
+						// Before reporting a PARTIAL, ask whether it is one the base MADE: an injector bound by
+						// explicit descriptor to a carrier-added delegating stub whose body moved. If rebinding it to
 						// the delegate makes the mixin fit, remember the plan; Mixin receives the rewritten
 						// annotation from the bytecode provider.
 						if (retargeted(configName, pkg, mixin, pluginClass, classBytes, required, judged, shown, resource, added,
@@ -493,17 +489,17 @@ public final class KernelGuestMixinAdapter {
 						notePartial(configName, mixin, kept);
 						preflight(configName, pkg, mixin, pluginClass, classBytes, required, kept.reason(), kept.unresolved());
 						handed(configName, pkg, mixin, resource, added, nativeView, kept);
-						ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s applies only partially on the merged base "
+						ForbricLog.info("[Forbric/Mixin] guest mixin %s:%s applies only partially on this base "
 								+ "— %s (kept; -Dforbric.mixinFit=strict drops these%s)", MixinConfigOwners.describe(configName), mixin,
 								kept.reason(), rejectionNote(kept));
 					}
 					continue;
 				}
-				// An UNFIT the merge MADE is asked the same question first: MoogsStructureLib's HEAD of placeEntities,
+				// An UNFIT the base MADE is asked the same question first: MoogsStructureLib's HEAD of placeEntities,
 				// alone in its mixin, misses only because the carrier replaced that method, and R7 moves it there.
 				if (fit.verdict() == MixinFit.Verdict.UNFIT && retargeted(configName, pkg, mixin, pluginClass, classBytes,
 						required, judged, fit, resource, added, configMinimum, suppress, nativeView)) continue;
-				// UNFIT means "no anchor resolves against the merged base", which the adapter reads as dead weight.
+				// UNFIT means "no anchor resolves against the base", which the adapter reads as dead weight.
 				// It is not dead weight when the anchor belongs to ANOTHER mod: a cross-mod compatibility mixin
 				// targets a member that mod's own mixin adds at runtime. See ForeignMixinTargets for the two Physics
 				// Mod cases (Sodium's SpriteCoordinateExpander.transform, Iris' VertexFormat.bindAttributesIris) that
@@ -530,10 +526,10 @@ public final class KernelGuestMixinAdapter {
 							+ "integration is not applicable on this boot", MixinConfigOwners.describe(configName), mixin, optional);
 					continue;
 				}
-				ForbricLog.info("[Forbric/Mixin] auto-suppressing guest mixin %s:%s — %s on the merged base (%s)",
+				ForbricLog.info("[Forbric/Mixin] auto-suppressing guest mixin %s:%s — %s on this base (%s)",
 						MixinConfigOwners.describe(configName), mixin, fit.verdict(), fit.reason());
 				report(MixinCompatibility.id(configName, pkg + "." + mixin), configName, pkg, mixin, pluginClass, classBytes,
-						"guest mixin " + mixin + " did not fit the merged game and was left out",
+						"guest mixin " + mixin + " did not fit the game and was left out",
 						CompatibilityFinding.Confidence.CONFIRMED, required, List.of(fit.reason(), "kernel suppressed this mixin"));
 			} catch (RuntimeException perMixin) {
 				Caught.warn(perMixin, "[Forbric/Mixin] could not scan guest mixin %s:%s; it is applied unchecked",
@@ -660,14 +656,14 @@ public final class KernelGuestMixinAdapter {
 			// The kernel's measured decision, with a named repair doing the whole job: not a loss the player decides on.
 			// Left out before Mixin reads the config, so nothing is lost until the target class is defined; the row is a
 			// note until the repair is seen in the class the game defines, or shown not to be there.
-			String detail = "the kernel leaves out its mixin " + mixin + " on the merged game";
+			String detail = "the kernel leaves out its mixin " + mixin + " on this base";
 			evidence.add(SUPERSEDE_PENDING);
 			report(MixinCompatibility.id(configName, binary), configName, pkg, mixin, pluginClass, classBytes, detail,
 					CompatibilityFinding.Confidence.SUSPECTED, false, evidence);
 			SupersededMixins.awaitProofProvisionally(configName, binary, detail, evidence);
 		} else {
 			report(MixinCompatibility.id(configName, binary), configName, pkg, mixin, pluginClass, classBytes,
-					"guest mixin " + mixin + " did not fit the merged game and was left out",
+					"guest mixin " + mixin + " did not fit the game and was left out",
 					CompatibilityFinding.Confidence.CONFIRMED, required, evidence);
 		}
 		return null;
@@ -788,7 +784,7 @@ public final class KernelGuestMixinAdapter {
 				Caught.warn(unreadable, "[Forbric/Mixin] could not read the targets of %s:%s; its removal is reported "
 						+ "without them", MixinConfigOwners.describe(configName), mixin);
 			}
-			String detail = "the kernel leaves out its mixin " + mixin + " on the merged game";
+			String detail = "the kernel leaves out its mixin " + mixin + " on this base";
 			List<String> evidence = new ArrayList<>(List.of("kernel suppressed this mixin by name", "source=" + e.getValue(),
 					"config required=" + required));
 			// A repair claims this mixin's whole job: nothing is lost before its target class is defined, so the row is
@@ -912,7 +908,7 @@ public final class KernelGuestMixinAdapter {
 						row.target().substring(row.target().lastIndexOf('/') + 1), String.join(", ", unsupplied));
 				report(MixinCompatibility.id(configName, pkg + "." + mixin), configName, pkg, mixin, pluginClass, e.getValue(),
 						"guest mixin " + mixin + " was left out: it relies on " + contract + ", which nothing implements "
-								+ "on the merged game",
+								+ "on this base",
 						CompatibilityFinding.Confidence.CONFIRMED, false,
 						List.of("it implements, casts to or calls through " + row.contract(),
 								"only " + row.pin() + " implements it, and the kernel leaves that mixin out",
@@ -1099,7 +1095,7 @@ public final class KernelGuestMixinAdapter {
 	 * ({@code InjectionInfo.postInject}), so the {@code "defaultRequire": -1} mods write to say "my injectors may find
 	 * nothing" requires exactly nothing — and {@code MixinConfig.InjectorOptions.mergeFrom} replaces only a 0 with the
 	 * parent's, so that -1 stands in a child config as well. Read as an unknown, it made every compatibility injector
-	 * aimed at another mod's added method a loss the merge never caused, and marked the mod DEGRADED when that mod was
+	 * aimed at another mod's added method a loss the base never caused, and marked the mod DEGRADED when that mod was
 	 * not installed.
 	 *
 	 * <p>{@link NativeAbsentTargets#UNKNOWN_DEFAULT_REQUIRE} only when the count cannot be known: a value that is not a

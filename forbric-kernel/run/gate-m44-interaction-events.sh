@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# M44 — using an item on a block and picking a block, as Fabric's and NeoForge's events see them on the merged base.
+# M44 — using an item on a block and picking a block, as Fabric's and NeoForge's events see them on NeoForge's patched
+# game.
 #
-# The merged ItemStack.useOn is MinecraftForge's body: it never posted NeoForge's UseItemOnBlockEvent ITEM_AFTER_BLOCK
-# phase, and its Item.useOn calls live in ForgeHooks.onPlaceItemIntoWorld and a lambda, where fabric-api's
-# ItemEvents.USE_ON wrap could not reach them (ItemUseOnInjector restores the phase and routes both calls through one
-# ItemStack relay; MixinRelocatedCall moves the wrap there). The merged pick-block handler calls NeoForge's
-# getCloneItemStack(BlockPos, LevelReader, boolean, Player), so fabric-api's PlayerPickItemEvents.BLOCK wrap of vanilla's
-# three-argument call matched nothing (MixinWrapOperationShim binds it to NeoForge's call in its own argument order).
+# NeoForge posts UseItemOnBlockEvent itself (ITEM_BEFORE_BLOCK from ItemStack.onItemUseFirst, ITEM_AFTER_BLOCK from
+# ItemStack.useOn, which calls CommonHooks.onPlaceItemIntoWorld at bci 46 on the server side: javap of the genuine
+# base, sha1 67bbf24f), but its Item.useOn calls live in CommonHooks.onPlaceItemIntoWorld and a lambda, where fabric-api's ItemEvents.USE_ON wrap of vanilla's
+# call in useOn could not reach them (ItemUseOnInjector routes both calls through one ItemStack relay; MixinRelocatedCall
+# moves the wrap there). NeoForge's pick-block handler calls its own getCloneItemStack(BlockPos, LevelReader, boolean,
+# Player), so fabric-api's PlayerPickItemEvents.BLOCK wrap of vanilla's three-argument call matched nothing
+# (MixinWrapOperationShim binds it to NeoForge's call in its own argument order).
 # A dedicated server with a probe mod (canary/interaction-events) and the unmodified fabric-events-interaction-v0 uses a
 # stone block item on stone with a fake player and picks blocks through the server's own packet handler:
 #   use-on — the block is placed (control); NeoForge's ITEM_BEFORE_BLOCK (control) and ITEM_AFTER_BLOCK each once, in
@@ -17,8 +19,16 @@
 #
 #   1. positive — STRICT, every case passes, zero confirmed required findings.
 #   2. off — -Dforbric.itemUseOn=off -Dforbric.mixinRelocatedCall=off -Dforbric.wrapOperationShim=off: exactly the
-#      repaired cases fail, and the controls (block placed, ITEM_BEFORE_BLOCK, pick-entity) still hold.
+#      repaired cases fail, and the controls (block placed, ITEM_BEFORE_BLOCK, a NeoForge cancel, pick-entity) still hold.
 # Not covered here: a client (the use-on lambda and client pick), and a native NeoForge or Fabric server as an oracle.
+#
+# STAGE 4 OF DROPPING MinecraftForge: on the merged base useOn was MinecraftForge's body, which never posted
+# ITEM_AFTER_BLOCK and called ForgeHooks.onPlaceItemIntoWorld; ItemUseOnInjector also re-posted the phase there, and the
+# compat claim routePlaceItemHookToNeoForge sent that MinecraftForge hook to NeoForge's (C5 critic F11 #44/#61 asked for
+# a phase that exercises it). No phase can: the claim was deleted in C3 (87014cb1) because NeoForge's own useOn calls
+# CommonHooks.onPlaceItemIntoWorld, and every placement case in phase 1 (use.place.block, use.place.fabric,
+# use.place.neoAfter, use.direct) runs through that native call; on the merged base without the claim the first
+# placement threw a BlockSnapshot ClassCastException (C3 evidence row c').
 # GATE-PARALLEL: rundirs=server-interaction-m44 mem=2000
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
@@ -26,7 +36,10 @@ set -uo pipefail
 SERVER_DIR="$KERNEL/run/server-interaction-m44"
 RESULTS="$BUILD/verification/m44-interaction-events"
 FAIL=0
-REPAIRED="{'use.place.fabric', 'use.place.neoAfter', 'use.fabricOverrides', 'use.neoCancel', 'use.direct', 'pick.block.vanilla', 'pick.block.fabric', 'pick.block.empty', 'pick.block.includeData'}"
+refuse_shared_rundir "$SERVER_DIR"
+# use.neoCancel is a control: NeoForge's own useOn returns a cancelling listener's result itself (the merged base's
+# MinecraftForge body needed ItemUseOnInjector to put that post back; that half went with the merged base).
+REPAIRED="{'use.place.fabric', 'use.place.neoAfter', 'use.fabricOverrides', 'use.direct', 'pick.block.vanilla', 'pick.block.fabric', 'pick.block.empty', 'pick.block.includeData'}"
 rm -rf "$RESULTS"; mkdir -p "$RESULTS"
 
 kernel_jar
@@ -43,7 +56,7 @@ run_server() {
   seed_server_properties "$SERVER_DIR"
   printf 'level-name=world\nlevel-type=minecraft:flat\ngenerate-structures=false\nmax-tick-time=-1\npause-when-empty-seconds=0\nonline-mode=false\n' >> "$SERVER_DIR/server.properties"
   RUNDIR="$SERVER_DIR" FORBRIC_COMPAT_POLICY="$policy" \
-    FORBRIC_JVM="-Dforbric.interactionProbe=$RESULTS/$phase.json -Dforbric.interactionPhase=$phase $extra" \
+    FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.interactionProbe=$RESULTS/$phase.json -Dforbric.interactionPhase=$phase $extra" \
     "$KERNEL/run/launch-kernel-server.sh" < /dev/null > "$RESULTS/$phase.log" 2>&1 &
   pid=$!; record_server_pid "$SERVER_DIR" "$pid"
   await_server "$pid" "$RESULTS/$phase.log" 240 30
@@ -75,7 +88,9 @@ judge positive "not failed" "all 12 cases pass"
 if python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r['confirmedRequired']==0 else 1)" "$RESULTS/positive-compatibility.json" 2>/dev/null
 then echo "[kernel] PASS positive: zero confirmed required findings under STRICT"
 else echo "[kernel] FAIL positive: STRICT report missing or has confirmed required findings"; FAIL=1; fi
-check "positive: the use-on relay was installed" 'ItemStack.useOn posts NeoForge' "$RESULTS/positive.log"
+# NeoForge's useOn posts ITEM_AFTER_BLOCK itself; ItemUseOnInjector only routes its Item.useOn call (the merged base's
+# "posts NeoForge's ... again" half went with that base).
+check "positive: the use-on relay was installed on NeoForge's own useOn" 'ItemStack\.useOn is NeoForge.s, which posts UseItemOnBlockEvent \(ITEM_AFTER_BLOCK\) itself' "$RESULTS/positive.log"
 check "positive: NeoForge's place hook calls the item through the relay" 'CommonHooks.onPlaceItemIntoWorld calls Item.useOn through ItemStack' "$RESULTS/positive.log"
 check "positive: fabric-api's use-on wrap moved to the relay" 'handleUseOnEvent now wraps Item.useOn in forbric\$useOnItem' "$RESULTS/positive.log"
 check "positive: fabric-api's pick-block wrap bound to NeoForge's call" 'onPickItemFromBlock now wraps getCloneItemStack' "$RESULTS/positive.log"

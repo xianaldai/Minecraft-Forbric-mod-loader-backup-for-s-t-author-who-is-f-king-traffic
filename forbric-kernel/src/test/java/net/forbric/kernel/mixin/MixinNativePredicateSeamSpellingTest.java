@@ -213,7 +213,7 @@ class MixinNativePredicateSeamSpellingTest {
 		MixinPlayerWorldCallbackAdapter.set(MixinFit.atNodes(MixinFit.injectorOf(handler)).getFirst(), "target", target);
 	}
 
-	/** The staged merged base and runtimes, vanilla as fabric-api was compiled against it, and the renamed released wrap. */
+	/** The staged base and runtimes, vanilla as fabric-api was compiled against it, and the renamed released wrap. */
 	private record Inputs(Function<String, ClassNode> classes, Function<String, ClassNode> natives, byte[] releasedBytes,
 			String handlerName, List<String> releasedSelectors) {
 		ClassNode mixin() { return parse(releasedBytes); }
@@ -241,19 +241,19 @@ class MixinNativePredicateSeamSpellingTest {
 	}
 
 	private static Inputs inputs() throws Exception {
-		Path base = Path.of(System.getProperty("forbric.predicateBase", TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").toString()));
-		Path neo = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar"), forge = TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar");
+		Path base = Path.of(System.getProperty("forbric.predicateBase", TestFixtures.stagedBase().toString()));
+		Path neo = TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR);
 		Path api = Path.of(System.getProperty("forbric.fabricApi", TestFixtures.fabricApi().toString()));
-		TestFixtures.requireFiles(TestFixtures.Fixture.STAGED, "hash-pinned native predicate base, runtimes and the actual Fabric API", base, neo, forge, api);
+		TestFixtures.requireFiles(TestFixtures.Fixture.STAGED, "hash-pinned native predicate base, runtime and the actual Fabric API", base, neo, api);
 		Map<String, byte[]> cache = new HashMap<>();
 		Function<String, byte[]> resource = name -> cache.computeIfAbsent(name, path -> {
-			for (Path jar : List.of(base, neo, forge)) try (ZipFile zip = new ZipFile(jar.toFile())) {
+			for (Path jar : List.of(base, neo)) try (ZipFile zip = new ZipFile(jar.toFile())) {
 				var entry = zip.getEntry(path);
 				if (entry != null) return zip.getInputStream(entry).readAllBytes();
 			} catch (java.io.IOException unreadable) { throw new IllegalStateException(unreadable); }
 			return null;
 		});
-		NativeGameReferences references = new NativeGameReferences(resource);
+		NativeGameReferences references = new NativeGameReferences(resource, null, TestFixtures.launchSources(base));
 		TestFixtures.require(TestFixtures.Fixture.STAGED, references.get(Ecosystem.FABRIC, HOST) != null, "native-indexed vanilla AbstractBoat required");
 		byte[] guest = null;
 		try (ZipFile outer = new ZipFile(api.toFile())) {

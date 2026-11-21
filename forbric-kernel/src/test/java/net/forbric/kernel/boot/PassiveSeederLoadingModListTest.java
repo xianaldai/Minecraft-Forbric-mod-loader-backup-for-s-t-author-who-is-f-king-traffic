@@ -67,7 +67,7 @@ class PassiveSeederLoadingModListTest {
 	 * Through {@link TestFixtures#stagedRoot()}, the root the game side compiled against: this class hardcoded the
 	 * relative path, so in a second worktree every case here skipped and the suite reported green.
 	 */
-	static final Path NEO_RUNTIME = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
+	static final Path NEO_RUNTIME = TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR).normalize();
 
 	@TempDir
 	Path tmp;
@@ -224,7 +224,7 @@ class PassiveSeederLoadingModListTest {
 	 * are enough; the test self-skips when the staged jar is absent.
 	 */
 	private ClassLoader neoForgeLoader() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEO_RUNTIME),
+		TestFixtures.requireFile(Fixture.STAGED, NEO_RUNTIME,
 				"staged neoforge-runtime.jar absent — skipping real-bytecode LoadingModList seeding check");
 		Path stubs = loggingStubs(tmp.resolve("stubs"));
 		return new URLClassLoader(new URL[] {stubs.toUri().toURL(), NEO_RUNTIME.toUri().toURL()},

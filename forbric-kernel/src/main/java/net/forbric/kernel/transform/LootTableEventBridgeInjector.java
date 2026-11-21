@@ -51,17 +51,17 @@ import net.forbric.kernel.util.ForbricLog;
  * so fabric-loot-api-v3's {@code LootTableEvents} can fire from the same point NeoForge's own
  * {@code LootTableLoadEvent} fires.
  *
- * <p>fabric-loot-api-v3's {@code ReloadableServerRegistriesMixin} cannot fit the merged base and stays pinned in
+ * <p>fabric-loot-api-v3's {@code ReloadableServerRegistriesMixin} cannot fit NeoForge's base and stays pinned in
  * {@link net.forbric.kernel.mixin.MergedBaseMixinCompat}: NeoForge swapped the last two parameters of
  * {@code lambda$scheduleRegistryLoad$0} and split vanilla's one element map into two, so {@code modifyLootTable}'s
  * {@code @Local Map} can never bind (the recorded {@code VerifyError}). Only that handler: its sibling
  * {@code onLootTablesLoaded} is vanilla-shaped and {@code MixinHandlerShim} would wrap it onto the reordered lambda,
- * so the pin is also what keeps ALL_LOADED from firing twice -- once there and once from this bridge. What survived
- * the merge, verbatim, are two single instructions in the class:
+ * so the pin is also what keeps ALL_LOADED from firing twice -- once there and once from this bridge. What the base
+ * keeps verbatim are two single instructions in the class:
  * <ul>
  *   <li>{@code invokestatic EventHooks.loadLootTable(HolderLookup.Provider, Identifier, LootTable)} inside
  *       {@code lambda$scheduleRegistryLoad$1} — reached for every loaded {@code LootTable}, a {@code null} result
- *       drops the table. A constant-pool scan of the whole merged base finds it named there and nowhere else.</li>
+ *       drops the table. A constant-pool scan of the whole old merged base found it named there and nowhere else.</li>
  *   <li>{@code invokestatic TagLoader.loadTagsForRegistry(ResourceManager, WritableRegistry)} inside
  *       {@code lambda$scheduleRegistryLoad$0}, followed only by the registry's return — the program point the
  *       pinned mixin's {@code onLootTablesLoaded} fires {@code ALL_LOADED} from.</li>
@@ -142,7 +142,7 @@ public final class LootTableEventBridgeInjector implements ClassTransformer {
 		tags.get(0).owner = BRIDGE;
 		routed += 2;
 		ForbricLog.info("[Forbric/LootBridge] routed %d loot-table load site(s) and %d tag-load site(s) in "
-				+ "ReloadableServerRegistries through the kernel — fabric-loot-api-v3's mixin cannot fit the merged "
+				+ "ReloadableServerRegistries through the kernel — fabric-loot-api-v3's mixin cannot fit NeoForge's "
 				+ "base, so LootTableEvents fire from NeoForge's own LootTableLoadEvent seam", 1, 1);
 
 		// Owner swaps only: no instruction, frame or stack change.
@@ -158,7 +158,7 @@ public final class LootTableEventBridgeInjector implements ClassTransformer {
 	/** The events {@link net.forbric.kernel.boot.LootTableEventDispatch} fires on every loot reload, by their public fields. */
 	public static final Set<String> BRIDGED_EVENTS = Set.of("REPLACE", "MODIFY", "ALL_LOADED");
 
-	/** Whether {@code node} (the merged {@code ReloadableServerRegistries}) has the one seam of each kind this bridge routes. */
+	/** Whether {@code node} (NeoForge's {@code ReloadableServerRegistries}) has the one seam of each kind this bridge routes. */
 	public static boolean routable(ClassNode node) {
 		int loot = 0, tags = 0;
 		if (node == null) return false;

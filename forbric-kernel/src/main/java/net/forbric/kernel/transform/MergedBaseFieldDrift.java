@@ -19,7 +19,7 @@ package net.forbric.kernel.transform;
 import java.util.List;
 
 /**
- * Vanilla fields whose descriptor the merge changed and that nothing restores: a mod compiled against vanilla
+ * Vanilla fields whose descriptor NeoForge changed and that nothing restores: a mod compiled against vanilla
  * reads them with vanilla's descriptor and gets {@code NoSuchFieldError}.
  *
  * <p>This is the ledger {@code MergedBaseNoVanishedVanillaFieldTest} keeps honest in both directions (a new
@@ -32,7 +32,7 @@ public final class MergedBaseFieldDrift {
 	/**
 	 * @param owner       the class (internal name)
 	 * @param name        the field
-	 * @param vanillaDesc the descriptor a vanilla-compiled reader carries — the one the merged base no longer has
+	 * @param vanillaDesc the descriptor a vanilla-compiled reader carries — the one the base no longer has
 	 * @param cost        what a reader loses, in one sentence
 	 */
 	public record Drift(String owner, String name, String vanillaDesc, String cost) {
@@ -49,7 +49,7 @@ public final class MergedBaseFieldDrift {
 	private MergedBaseFieldDrift() {
 	}
 
-	/** The row for {@code owner.name:desc}, or null when that access is fine on the merged base. */
+	/** The row for {@code owner.name:desc}, or null when that access is fine on the base. */
 	public static Drift find(String owner, String name, String desc) {
 		for (Drift drift : KNOWN) {
 			if (drift.owner().equals(owner) && drift.name().equals(name) && drift.vanillaDesc().equals(desc)) return drift;

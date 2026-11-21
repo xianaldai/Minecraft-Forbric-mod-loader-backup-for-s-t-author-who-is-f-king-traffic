@@ -48,8 +48,11 @@ class MixinDefaultCallbackTransportSpellingTest {
 		Map<String, ClassNode> types = new HashMap<>();
 		types.put(LIVING, TransportSpellings.merged(LIVING));
 		types.put("net/minecraft/world/level/block/LadderBlock", TransportSpellings.merged("net/minecraft/world/level/block/LadderBlock"));
-		Path neo = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(neo), "the staged NeoForge runtime required: " + neo);
+		// LadderBlock reaches NeoForge's makesOpenTrapdoorAboveClimbable through Block's IBlockExtension (genuine NeoForge
+		// declares no forwarder in LadderBlock), so the hierarchy the transport walks is part of the input.
+		types.put("net/minecraft/world/level/block/Block", TransportSpellings.merged("net/minecraft/world/level/block/Block"));
+		Path neo = TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR);
+		TestFixtures.requireFile(Fixture.STAGED, neo, "the staged NeoForge runtime required: " + neo);
 		try (ZipFile jar = new ZipFile(neo.toFile())) {
 			ZipEntry entry = jar.getEntry(EXTENSION + ".class");
 			TestFixtures.require(Fixture.STAGED, entry != null, EXTENSION + " in the staged NeoForge runtime");

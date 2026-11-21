@@ -16,7 +16,7 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
  * A wrap of vanilla's private registry loader moves to the live pair the GUEST's selector maps to, not to a fixed overload.
  * The fixture is not fabric-registry-sync's: another mod's mixin, a thread-local instead of a ScopedValue, the wrap on the
  * networked (client) entry point with the factory typed rather than coerced, and its companion a single-argument
- * {@code @ModifyArg}. On the merged base the networked entry calls the widened loader itself, so the wrap must stay on the
+ * {@code @ModifyArg}. On NeoForge's base the networked entry calls the widened loader itself, so the wrap must stay on the
  * networked entry; moving it to the resource-manager path would mark the server's load instead of the client's.
  */
 class RegistryLoaderSelectorMappingTest {
@@ -63,14 +63,24 @@ class RegistryLoaderSelectorMappingTest {
 		assertArrayEquals(before, StagedFabricMixinFixture.bytes(mixin));
 	}
 
-	/** RED: a bare "load" names the dead loader and its live overloads alike — the mixin is left as written. */
-	@Test void aBareNameCompanionLeavesTheWholeMixinAlone() throws Exception {
+	/**
+	 * A bare "load" companion is the first {@code load}'s: the resource-manager entry, on vanilla and on NeoForge's class
+	 * alike (javap of both; NeoForge declares no private loader of vanilla's shape for it to name). It binds the same
+	 * method it binds on vanilla, so it stays as written, and the wrap still moves.
+	 */
+	@Test void aBareNameCompanionStaysOnTheEntryVanillaBindsItTo() throws Exception {
 		ClassNode loader = StagedFabricMixinFixture.game(LOADER, false), mixin = mixin(NETWORKED, "markNetworked");
-		AnnotationNode companion = MixinFit.injectorOf(StagedFabricMixinFixture.method(mixin, "handOverMark"));
+		MethodNode hand = StagedFabricMixinFixture.method(mixin, "handOverMark");
+		AnnotationNode companion = MixinFit.injectorOf(hand);
 		companion.values.set(companion.values.indexOf("method") + 1, new ArrayList<>(List.of("load")));
-		byte[] before = StagedFabricMixinFixture.bytes(mixin);
-		assertEquals(0, FabricRegistryLoaderMixinAdapter.adapt(mixin, name -> loader));
-		assertArrayEquals(before, StagedFabricMixinFixture.bytes(mixin));
+		MethodNode vanillaBinds = MixinTargetSelectors.one(hand, StagedFabricMixinFixture.game(LOADER, true)), currentBinds = MixinTargetSelectors.one(hand, loader);
+		assertEquals(RESOURCES, vanillaBinds.name + vanillaBinds.desc, "premise: vanilla binds it to its resource-manager entry");
+		assertEquals(RESOURCES, currentBinds.name + currentBinds.desc, "premise: and so does NeoForge's class");
+		byte[] before = StagedFabricMixinFixture.bytes(alone(hand));
+		assertEquals(1, FabricRegistryLoaderMixinAdapter.adapt(mixin, name -> loader), "the wrap alone moves");
+		assertArrayEquals(before, StagedFabricMixinFixture.bytes(alone(StagedFabricMixinFixture.method(mixin, "handOverMark"))),
+				"the companion is left as written, its injector, its point and its body");
+		assertEquals("L" + LOADER + ";" + LIVE, MixinFit.value(MixinFit.atNodes(MixinFit.injectorOf(StagedFabricMixinFixture.method(mixin, "markNetworked"))).getFirst(), "target"));
 	}
 
 	/** RED: a callback that declares the dead loader's parameters would not fit the widened one, so nothing moves. */
@@ -130,6 +140,19 @@ class RegistryLoaderSelectorMappingTest {
 		hand.visibleAnnotations = new ArrayList<>(List.of(modify));
 		mixin.methods.add(hand);
 		return mixin;
+	}
+
+	/** A one-method class holding a copy of {@code method} (annotations and body), so two states of it compare byte for byte. */
+	private static ClassNode alone(MethodNode method) {
+		ClassNode holder = new ClassNode();
+		holder.version = Opcodes.V21;
+		holder.access = Opcodes.ACC_PUBLIC;
+		holder.name = "org/example/Holder";
+		holder.superName = "java/lang/Object";
+		MethodNode copy = new MethodNode(method.access, method.name, method.desc, method.signature, null);
+		method.accept(copy);
+		holder.methods.add(copy);
+		return holder;
 	}
 
 	private static AnnotationNode injector(String desc, String method, String point) {

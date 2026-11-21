@@ -162,34 +162,32 @@ class KernelLoadReportTest {
 
 	@Test
 	void theServerStartedHookWritesTheReportAgain() throws Exception {
-		java.nio.file.Path compiled = java.nio.file.Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime",
-				"net", "forbric", "kernel", "runtime", "KernelGameServerLifecycle.class").normalize();
-		TestFixtures.require(Fixture.GAME_SIDE, java.nio.file.Files.isRegularFile(compiled), "runtime helper not compiled");
+		java.nio.file.Path runtime = java.nio.file.Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime",
+				"net", "forbric", "kernel", "runtime").normalize();
+		java.nio.file.Path duties = runtime.resolve("KernelServerDuties.class");
+		TestFixtures.require(Fixture.GAME_SIDE, java.nio.file.Files.isRegularFile(duties), "runtime helper not compiled");
+		// The report is the kernel's own work at server start: KernelServerDuties', installed whatever else is there.
+		assertTrue(lambdaWrites(duties, "lambda$installStartedDuties$"), "the kernel's server-started work writes the report");
+		// Installed before NeoForge's game bus starts, so it is in place for the first ServerStartedEvent.
+		String lifecycleSource = java.nio.file.Files.readString(java.nio.file.Path.of(System.getProperty("user.dir"), "src", "main", "java",
+				"net", "forbric", "kernel", "boot", "KernelLifecycle.java"));
+		int kernelDuties = lifecycleSource.indexOf("KernelServerDutiesInstaller.install(cl);"),
+				neoBus = lifecycleSource.indexOf("\"NeoForge.EVENT_BUS\");");
+		assertTrue(kernelDuties >= 0 && neoBus > kernelDuties, "the kernel's work is installed before NeoForge's bus starts");
+	}
+
+	/** Whether a lambda of {@code compiled} whose name starts with {@code prefix} calls {@code KernelLoadReport.write}. */
+	private static boolean lambdaWrites(java.nio.file.Path compiled, String prefix) throws Exception {
 		org.objectweb.asm.tree.ClassNode node = new org.objectweb.asm.tree.ClassNode();
 		new org.objectweb.asm.ClassReader(java.nio.file.Files.readAllBytes(compiled)).accept(node, 0);
-		// The report is the kernel's own work at server start, not part of the forward to MinecraftForge's hook: the
-		// forward stands down where the merged game already called that hook, and the report must not go with it.
-		boolean writes = false, forwardWrites = false;
 		for (org.objectweb.asm.tree.MethodNode m : node.methods) {
-			boolean duty = m.name.startsWith("lambda$installStartedDuties$"), forward = m.name.startsWith("lambda$installStarted$");
-			if (!duty && !forward) continue;
+			if (!m.name.startsWith(prefix)) continue;
 			for (org.objectweb.asm.tree.AbstractInsnNode insn = m.instructions.getFirst(); insn != null; insn = insn.getNext()) {
 				if (insn instanceof org.objectweb.asm.tree.MethodInsnNode call && "net/forbric/kernel/boot/KernelLoadReport".equals(call.owner)
-						&& "write".equals(call.name)) {
-					writes |= duty;
-					forwardWrites |= forward;
-				}
+						&& "write".equals(call.name)) return true;
 			}
 		}
-		assertTrue(writes, "the kernel's server-started work writes the report");
-		assertFalse(forwardWrites, "the forward to MinecraftForge's handleServerStarted, which stands down where the base calls"
-				+ " it natively, does not carry the report");
-		// AFTER MinecraftForge's handleServerStarted: the work is registered after the forward, on the same event and
-		// priority, and a native call precedes NeoForge's in the merged runServer.
-		String multiplexer = java.nio.file.Files.readString(java.nio.file.Path.of(System.getProperty("user.dir"), "src", "main", "java",
-				"net", "forbric", "kernel", "boot", "GameEventMultiplexer.java"));
-		int forwardInstall = multiplexer.indexOf("\"installStarted\")"), dutyInstall = multiplexer.indexOf("\"installStartedDuties\")");
-		assertTrue(forwardInstall >= 0 && dutyInstall > forwardInstall, "the kernel's work is installed after the started forward");
+		return false;
 	}
 
 	@Test
@@ -411,6 +409,38 @@ class KernelLoadReportTest {
 		assertTrue(text.contains("records loading results"), "the report must describe loading without claiming the game started");
 		assertFalse(text.contains("the game did start"), "strict startup can stop before a game is ready");
 		assertFalse(text.contains("is not running"), text);
+	}
+
+	/**
+	 * After a boot that stopped on a mod's failure (D82, lane STOP), the report says the game stopped, in both languages, and
+	 * none of what the carry-on note says: that Forbric did not stop, that the mod is still partly present, that the
+	 * compatibility decision decides (lane STOP review A-1).
+	 */
+	@Test
+	void afterAStopTheReportSaysTheGameStoppedAndNotThatItCarriedOn() {
+		List<ModCatalog.Entry> failures = List.of(failed("alpha", "Alpha", "a.jar", "it threw during load complete"));
+		String en = KernelLoadReport.render(false, failures, List.of(), List.of(), List.of(), java.util.Set.of(), true);
+		String zh = KernelLoadReport.render(true, failures, List.of(), List.of(), List.of(), java.util.Set.of(), true);
+
+		assertTrue(en.contains("The game stopped at this mod's error") && en.contains("crash-reports"), en);
+		assertTrue(zh.contains("游戏在上面这个 mod 的报错处停下了") && zh.contains("crash-reports"), zh);
+		for (String text : List.of(en, zh)) {
+			assertTrue(text.contains("it threw during load complete"), text);
+			assertFalse(text.contains("does not stop at the first mod") || text.contains("不会因为一个 mod 出问题就停下来"), text);
+			assertFalse(text.contains("still partly present") || text.contains("还有一部分留在游戏里"), text);
+			assertFalse(text.contains("depends on the compatibility decision") || text.contains("是否继续由兼容性选择决定"), text);
+		}
+		// A stop no mod row carries (a NeoForge registration step) leaves only findings; the report still says it stopped.
+		net.forbric.api.CompatibilityFinding step = new net.forbric.api.CompatibilityFinding("neoforge-registration:x", "forbric",
+				"NeoForge built-in registration", "RegistrationEvents.init", net.forbric.api.CompatibilityFinding.Confidence.CONFIRMED,
+				true, "NeoForge's x failed", List.of("boom"));
+		String rowless = KernelLoadReport.render(false, List.of(), List.of(step), List.of(), List.of(), java.util.Set.of(), true);
+		assertTrue(rowless.contains("The game stopped at a mod's error"), rowless);
+		assertFalse(KernelLoadReport.render(false, List.of(), List.of(step), List.of(), List.of(), java.util.Set.of(), false)
+				.contains("The game stopped"), "and a boot that did not stop does not say so");
+		// And the other direction: the same rows without a stop keep the carry-on note.
+		String carriedOn = KernelLoadReport.render(false, failures, List.of(), List.of(), List.of(), java.util.Set.of(), false);
+		assertTrue(carriedOn.contains("does not stop at the first mod"), carriedOn);
 	}
 
 	@Test

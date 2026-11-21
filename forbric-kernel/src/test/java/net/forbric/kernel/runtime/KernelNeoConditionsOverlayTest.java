@@ -88,6 +88,13 @@ class KernelNeoConditionsOverlayTest {
 			Method bind = helper.getDeclaredMethod("bindKnownTypesForTest", Predicate.class);
 			bind.setAccessible(true);
 			bind.invoke(null, (Predicate<String>) id -> false);
+			// Outside an overlay scope the condition is a data file's, tolerated only in a Fabric mod's own pack (D69): the
+			// decodes here read as from one.
+			Class<?> sources = Class.forName("net.forbric.kernel.runtime.KernelConditionSources", true, cl);
+			Method bindPacks = sources.getDeclaredMethod("bindFabricModPacksForTest", Predicate.class);
+			bindPacks.setAccessible(true);
+			bindPacks.invoke(null, (Predicate<Object>) pack -> true);
+			sources.getMethod("reading", Object.class).invoke(null, new Object());
 			Method error = dataResult.getMethod("error", java.util.function.Supplier.class);
 			strict = Proxy.newProxyInstance(cl, new Class<?>[] { codecClass }, (proxy, method, args) -> {
 				if ("decode".equals(method.getName())) return error.invoke(null, (java.util.function.Supplier<String>) () -> "strict");
@@ -149,13 +156,12 @@ class KernelNeoConditionsOverlayTest {
 	private static URLClassLoader gameSideLoader() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime").normalize();
 		Path run = TestFixtures.stagedRoot();
-		Path forgeRt = run.resolve("forge-runtime/forge-runtime.jar");
-		Path neoRt = run.resolve("neoforge-runtime/neoforge-runtime.jar");
-		Path merged = run.resolve("merged-base/patched-mc-merged-26.2.jar");
-		TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(forgeRt) && Files.isRegularFile(neoRt) && Files.isRegularFile(merged),
-				"the staged artifacts are absent");
+		Path neoRt = run.resolve(TestFixtures.NEO_CARRIER_JAR);
+		Path merged = run.resolve(TestFixtures.BASE_JAR);
+		TestFixtures.requireFiles(TestFixtures.Fixture.STAGED,
+				"the staged artifacts are absent", neoRt, merged);
 		TestFixtures.require(TestFixtures.Fixture.GAME_SIDE, Files.isDirectory(compiled), "the game-side set is not compiled");
-		List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), forgeRt.toUri().toURL(), neoRt.toUri().toURL(), merged.toUri().toURL()));
+		List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), neoRt.toUri().toURL(), merged.toUri().toURL()));
 		for (String pattern : List.of("com/mojang/datafixerupper", "com/google/code/gson", "com/mojang/brigadier", "com/google/guava/guava",
 				"it/unimi/dsi/fastutil", "org/slf4j/slf4j-api", "org/apache/logging/log4j/log4j-api",
 				"io/netty/netty-common", "io/netty/netty-buffer", TestFixtures.nettyCodecLibrary(), "io/netty/netty-transport", "io/netty/netty-handler",

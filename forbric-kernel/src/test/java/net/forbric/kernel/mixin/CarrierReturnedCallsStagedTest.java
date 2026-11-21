@@ -28,7 +28,7 @@ import net.forbric.api.Ecosystem;
 import net.forbric.kernel.TestFixtures;
 
 /**
- * {@link CarrierReturnedCalls} on the unmodified upstream fabric-api entity mixin against the staged merged base and its
+ * {@link CarrierReturnedCalls} on the unmodified upstream fabric-api entity mixin against the staged base and its
  * native references. Natively {@code LivingEntity.getBedOrientation()} returns {@code BedBlock.getBedOrientation(level, pos)}
  * when the entity has a sleeping position, and fabric-api wraps that call to ask {@code MODIFY_SLEEPING_DIRECTION}; NeoForge
  * answers by asking the bed block. The wrap moves to the answer at the one return reached with a sleeping position, handed
@@ -45,8 +45,8 @@ class CarrierReturnedCallsStagedTest {
 	}
 
 	private static Path merged() {
-		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
-		TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(jar), "actual game required");
+		Path jar = TestFixtures.stagedBase();
+		TestFixtures.requireFile(TestFixtures.Fixture.STAGED, jar, "actual game required");
 		return jar;
 	}
 
@@ -68,7 +68,7 @@ class CarrierReturnedCallsStagedTest {
 			} catch (Exception unreadable) {
 				return null;
 			}
-		});
+		}, null, TestFixtures.launchSources(jar));
 		return references::get;
 	}
 

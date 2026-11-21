@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -30,6 +31,8 @@ import java.util.Locale;
 import java.util.Set;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 
 /**
  * The ten tables, checked against each other.
@@ -105,9 +108,9 @@ class DialogLangTest {
 		assertEquals("Biomes O' Plenty needs terrablender, which is not installed",
 				DialogLang.EN.get("bullet.absent", "Biomes O' Plenty", "terrablender"));
 		// A placeholder repeated in one sentence — fix.install names the ecosystem twice — must be filled twice.
-		String install = DialogLang.EN.get("fix.install", "terrablender", "Biomes O' Plenty", "FORGE");
+		String install = DialogLang.EN.get("fix.install", "terrablender", "Biomes O' Plenty", "NEOFORGE");
 		assertFalse(install.contains("{"), install);
-		assertEquals(2, install.split("FORGE", -1).length - 1, install);
+		assertEquals(2, install.split("NEOFORGE", -1).length - 1, install);
 	}
 
 	@Test
@@ -189,6 +192,77 @@ class DialogLangTest {
 		}
 	}
 
+	/**
+	 * {@code -Dforbric.dialogLanguage=zh} names two tables. It used to be ignored (the system language decided), so the
+	 * switch gates and a player use could not ask for Chinese without a region. It resolves as a {@code zh} locale does:
+	 * the system's region picks Traditional for TW/HK/MO (or a Hant system), Simplified anywhere else.
+	 * Red-checked on 421c53cc: the first lookup answered EN.
+	 */
+	@Test
+	@ResourceLock("system-properties")
+	@ResourceLock(Resources.LOCALE)
+	void aBareChineseSwitchTakesTheSystemsRegionLikeALocaleDoes() {
+		String before = System.getProperty(DialogLang.SWITCH);
+		Locale locale = Locale.getDefault();
+		try {
+			System.setProperty(DialogLang.SWITCH, "zh");
+			Locale.setDefault(Locale.US);
+			assertSame(DialogLang.ZH_CN, DialogLang.ofSystem(), "zh on an English system with no Chinese region");
+			Locale.setDefault(Locale.TRADITIONAL_CHINESE);
+			assertSame(DialogLang.ZH_TW, DialogLang.ofSystem(), "zh on a Taiwanese system");
+			Locale.setDefault(Locale.of("en", "HK"));
+			assertSame(DialogLang.ZH_TW, DialogLang.ofSystem(), "zh plus the system's region HK");
+			Locale.setDefault(Locale.forLanguageTag("zh-Hant"));
+			assertSame(DialogLang.ZH_TW, DialogLang.ofSystem(), "a Traditional-script system with no region");
+			Locale.setDefault(Locale.SIMPLIFIED_CHINESE);
+			System.setProperty(DialogLang.SWITCH, "ZH");
+			assertSame(DialogLang.ZH_CN, DialogLang.ofSystem(), "case does not decide");
+			assertSame(DialogLang.ZH_TW, DialogLang.ofBareLanguage("zh", Locale.of("ja", "MO")));
+			assertNull(DialogLang.ofBareLanguage("klingon", Locale.US), "a language with no table is not resolved here");
+			assertNull(DialogLang.ofBareLanguage("ja", Locale.US), "one table: byTag already has it");
+		} finally {
+			Locale.setDefault(locale);
+			if (before == null) System.clearProperty(DialogLang.SWITCH);
+			else System.setProperty(DialogLang.SWITCH, before);
+		}
+	}
+
+	/**
+	 * A switch value with a region or script that names no table ({@code zh-HK}, {@code zh_hant}, {@code en_GB}) resolves
+	 * the way a locale of that tag does, instead of being ignored for the system's language. Red-checked on 1aecbbcd: every
+	 * such value answered the system's table (EN for zh-HK on an English system).
+	 */
+	@Test
+	@ResourceLock("system-properties")
+	@ResourceLock(Resources.LOCALE)
+	void aSwitchWithARegionOrScriptResolvesLikeThatLocale() {
+		String before = System.getProperty(DialogLang.SWITCH);
+		Locale locale = Locale.getDefault();
+		try {
+			Locale.setDefault(Locale.US);
+			for (String value : new String[] {"zh-HK", "zh_hk", "zh_hant", "zh-Hant-CN", "ZH_MO"}) {
+				System.setProperty(DialogLang.SWITCH, value);
+				assertSame(DialogLang.ZH_TW, DialogLang.ofSystem(), value + " on an English system");
+			}
+			for (String value : new String[] {"zh_sg", "zh-Hans", "zh-CN"}) {
+				System.setProperty(DialogLang.SWITCH, value);
+				assertSame(DialogLang.ZH_CN, DialogLang.ofSystem(), value + " on an English system");
+			}
+			Locale.setDefault(Locale.SIMPLIFIED_CHINESE);
+			System.setProperty(DialogLang.SWITCH, "en_GB");
+			assertSame(DialogLang.EN, DialogLang.ofSystem(), "en_GB on a Chinese system is English, not the system's");
+			System.setProperty(DialogLang.SWITCH, "pt_PT");
+			assertSame(DialogLang.PT_BR, DialogLang.ofSystem(), "the one Portuguese table");
+			System.setProperty(DialogLang.SWITCH, "xx_YY");
+			assertSame(DialogLang.ZH_CN, DialogLang.ofSystem(), "a language with no table leaves the system's");
+			assertNull(DialogLang.ofLocaleTag("zh"), "a bare language is ofBareLanguage's");
+		} finally {
+			Locale.setDefault(locale);
+			if (before == null) System.clearProperty(DialogLang.SWITCH);
+			else System.setProperty(DialogLang.SWITCH, before);
+		}
+	}
+
 	@Test
 	void everyTableHasItsOwnTagAndItsOwnWords() {
 		Set<String> tags = new LinkedHashSet<>();
@@ -226,5 +300,26 @@ class DialogLangTest {
 			}
 		}
 		return found;
+	}
+
+	/**
+	 * With no switch, the table is the system language's: what a player on a Chinese system gets without any flag.
+	 * Red-checked: with {@code ofSystem} reading {@code Locale.ROOT} instead of the default locale, both lookups answered EN.
+	 */
+	@Test
+	void withNoSwitchTheSystemLanguageDecides() {
+		String before = System.getProperty(DialogLang.SWITCH);
+		Locale locale = Locale.getDefault();
+		try {
+			System.clearProperty(DialogLang.SWITCH);
+			Locale.setDefault(Locale.SIMPLIFIED_CHINESE);
+			assertSame(DialogLang.ZH_CN, DialogLang.ofSystem());
+			Locale.setDefault(Locale.ENGLISH);
+			assertSame(DialogLang.EN, DialogLang.ofSystem());
+		} finally {
+			Locale.setDefault(locale);
+			if (before == null) System.clearProperty(DialogLang.SWITCH);
+			else System.setProperty(DialogLang.SWITCH, before);
+		}
 	}
 }

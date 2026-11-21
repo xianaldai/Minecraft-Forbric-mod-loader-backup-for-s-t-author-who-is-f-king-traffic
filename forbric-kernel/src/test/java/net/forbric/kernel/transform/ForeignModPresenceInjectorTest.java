@@ -49,8 +49,7 @@ import net.forbric.kernel.TestFixtures.Fixture;
 @ExecutesInjector(ForeignModPresenceInjector.class)
 class ForeignModPresenceInjectorTest {
 	private static final Path STAGE = TestFixtures.stagedRoot();
-	private static final Path NEOFORGE = STAGE.resolve("neoforge-runtime/neoforge-runtime.jar");
-	private static final Path FORGE = STAGE.resolve("forge-runtime/forge-runtime.jar");
+	private static final Path NEOFORGE = STAGE.resolve(TestFixtures.NEO_CARRIER_JAR);
 	private static final String PRESENCE = "net/forbric/api/ModPresence";
 	private static final String NEO_MOD_LIST = "net.neoforged.fml.ModList";
 	private static final String FORGE_MOD_LIST = "net.minecraftforge.fml.ModList";
@@ -76,27 +75,9 @@ class ForeignModPresenceInjectorTest {
 	}
 
 	@Test
-	void theStaticOverloadReadsTheIdFromSlotZero() throws Exception {
-		ModPresence.publishFabric(List.of(fabric("iris")));
-
-		byte[] out = transform(FORGE_MOD_LIST, syntheticModList(FORGE_MOD_LIST.replace('.', '/'), true));
-		Class<?> loaded = define(FORGE_MOD_LIST, out);
-
-		// A static isLoaded takes the id in slot 0; reading slot 1 would either verify-fail or read garbage.
-		assertTrue((boolean) loaded.getMethod("isLoaded", String.class).invoke(null, "iris"));
-		assertFalse((boolean) loaded.getMethod("isLoaded", String.class).invoke(null, "oculus"));
-	}
-
-	@Test
 	void theRealNeoForgeModListIsRewrittenAndStillVerifies() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE), "staged NeoForge runtime absent — skipping real-bytecode check");
+		TestFixtures.requireFile(Fixture.STAGED, NEOFORGE, "staged NeoForge runtime absent — skipping real-bytecode check");
 		assertRewritten(NEO_MOD_LIST, readClass(NEOFORGE, "net/neoforged/fml/ModList.class"));
-	}
-
-	@Test
-	void theRealMinecraftForgeModListIsRewrittenAndStillVerifies() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(FORGE), "staged MinecraftForge runtime absent — skipping real-bytecode check");
-		assertRewritten(FORGE_MOD_LIST, readClass(FORGE, "net/minecraftforge/fml/ModList.class"));
 	}
 
 	@Test

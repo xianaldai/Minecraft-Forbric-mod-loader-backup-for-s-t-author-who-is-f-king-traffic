@@ -40,25 +40,21 @@ import net.forbric.kernel.util.ForbricLog;
  * <p>Vanilla's {@code actuallyHurt(level, source, damage)} starts {@code damage = getDamageAfterArmorAbsorb(source,
  * damage)}: the first {@code fload 3} is the armour call's argument, and a Fabric mod's
  * {@code @ModifyVariable(at = @At(value = "LOAD", ordinal = 0), index = 3)} rewrites the damage about to be armoured.
- * The merged bodies are NeoForge's, which keep the amount in the entity's {@code DamageContainer} and do not read the
+ * NeoForge's bodies keep the amount in the entity's {@code DamageContainer} and do not read the
  * parameter until long after armour, magic, absorption and NeoForge's {@code LivingDamageEvent.Pre}. So that injector
  * lands at the end of the pipeline, too late to change anything — and TaCZ's pair of them breaks outright: its
  * {@code LOAD} handler creates the {@code LivingHurtEvent} it {@code @Share}s, its {@code @Inject} at the armour call
  * reads it, and the read now runs first: every hit on a living entity was a NullPointerException on the server thread.
  *
- * <p>So right after the invulnerability check — before MinecraftForge's Hurt seam, which reads the container —
- * {@code KernelLivingDamage.vanillaRead(this, container, damage, damage)} is called. Its first {@code fload 3} is the
+ * <p>So right after the invulnerability check {@code KernelLivingDamage.vanillaRead(this, container, damage, damage)} is called. Its first {@code fload 3} is the
  * one such an injector binds to; the second is the parameter as it came. Only when the two differ does the helper move
  * the container by the difference, so with no such mod NeoForge's damage is untouched, bit for bit — including the
  * invulnerability-frame call, whose parameter and container already differ by a reduction other mods may modify.
  *
  * <p>Applied to {@code LivingEntity} and {@code Player} (which overrides it the same way), only where the method opens
  * with the invulnerability check and armours the container's amount rather than the parameter. A read of the
- * parameter before armour does not make the body vanilla's: the edit-splicing merge keeps MinecraftForge's
- * {@code damage = ForgeHooks.onLivingHurt(this, source, damage)} right after the check, whose result NeoForge's body
- * never reads again, so a mod rewriting that first read would still change nothing. Registered after
- * {@code ForgeDamageSeamsInjector}, and placed right after the invulnerability check, so the read lands ahead of
- * MinecraftForge's Hurt — the seam's or the merged body's own. {@code -Dforbric.vanillaDamageRead=off}.
+ * parameter before armour does not make the body vanilla's: NeoForge's body never reads the parameter again after the
+ * check, so a mod rewriting such a read would still change nothing. Placed right after the invulnerability check. {@code -Dforbric.vanillaDamageRead=off}.
  *
  * <p>The same for vanilla's value at the absorption call. Vanilla holds the damage left after absorption in the parameter
  * when it calls {@code setAbsorptionAmount}, and goes on to the health with that value; NeoForge's body stores the
@@ -75,11 +71,16 @@ public final class VanillaDamageReadInjector implements ClassTransformer {
 	/** {@code -Dforbric.vanillaDamageRead.absorbed=off}: no read at the absorption call. */
 	public static final String ABSORBED_PROPERTY = "forbric.vanillaDamageRead.absorbed";
 	static final String LIVING = "net/minecraft/world/entity/LivingEntity";
-	static final String ABSORBED_DESC = "(L" + LIVING + ";L" + ForgeDamageSeamsInjector.CONTAINER + ";FF)F";
+	/** NeoForge's per-hit damage record, which its {@code actuallyHurt} keeps the amount in. */
+	static final String CONTAINER = "net/neoforged/neoforge/common/damagesource/DamageContainer";
+	/** The game-side helpers both reads call. */
+	static final String HELPER = "net/forbric/kernel/runtime/KernelLivingDamage";
+	private static final String SOURCE = "Lnet/minecraft/world/damagesource/DamageSource;";
+	/** {@code actuallyHurt(ServerLevel, DamageSource, float)}. */
+	static final String HURT_DESC = "(Lnet/minecraft/server/level/ServerLevel;" + SOURCE + "F)V";
+	static final String ABSORBED_DESC = "(L" + LIVING + ";L" + CONTAINER + ";FF)F";
 	static final List<String> TARGETS = List.of("net.minecraft.world.entity.LivingEntity", "net.minecraft.world.entity.player.Player");
-	static final String HURT_DESC = ForgeDamageSeamsInjector.HURT_DESC;
-	static final String HELPER = ForgeDamageSeamsInjector.RUNTIME;
-	static final String HELPER_DESC = "(L" + LIVING + ";L" + ForgeDamageSeamsInjector.CONTAINER + ";FF)V";
+	static final String HELPER_DESC = "(L" + LIVING + ";L" + CONTAINER + ";FF)V";
 
 	public static boolean enabled() {
 		return !"off".equalsIgnoreCase(System.getProperty(PROPERTY, "on"));
@@ -143,8 +144,8 @@ public final class VanillaDamageReadInjector implements ClassTransformer {
 		}
 		// No armour call at all, or no container, is not this method's shape. Vanilla's flow armours the parameter
 		// itself (its float argument is `fload 3`), so a mod changing the parameter changes the damage: nothing to do.
-		// NeoForge's body armours the container's amount; there a read of the parameter before armour — such as
-		// MinecraftForge's own Hurt hook, which a merge keeping both sides' edits carries — feeds nothing it applies.
+		// NeoForge's body armours the container's amount; there a read of the parameter before armour (on the old merged
+		// base, MinecraftForge's own Hurt hook) feeds nothing it applies.
 		if (armour < 1 || containers == null || load(code.get(armour - 1), Opcodes.FLOAD, 3)) return false;
 
 		InsnList read = new InsnList();
@@ -152,7 +153,7 @@ public final class VanillaDamageReadInjector implements ClassTransformer {
 		read.add(new VarInsnNode(Opcodes.ALOAD, 0));
 		read.add(new FieldInsnNode(Opcodes.GETFIELD, containers.owner, "damageContainers", "Ljava/util/Stack;"));
 		read.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "java/util/Stack", "peek", "()Ljava/lang/Object;", false));
-		read.add(new TypeInsnNode(Opcodes.CHECKCAST, ForgeDamageSeamsInjector.CONTAINER));
+		read.add(new TypeInsnNode(Opcodes.CHECKCAST, CONTAINER));
 		read.add(new VarInsnNode(Opcodes.FLOAD, 3));
 		read.add(new VarInsnNode(Opcodes.FLOAD, 3));
 		read.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HELPER, "vanillaRead", HELPER_DESC, false));
@@ -188,7 +189,7 @@ public final class VanillaDamageReadInjector implements ClassTransformer {
 			}
 		}
 		if (containers == null || store < 0 || !(code.get(store - 1) instanceof MethodInsnNode amount)
-				|| !amount.owner.equals(ForgeDamageSeamsInjector.CONTAINER) || !amount.name.equals("getNewDamage") || !amount.desc.equals("()F")) return false;
+				|| !amount.owner.equals(CONTAINER) || !amount.name.equals("getNewDamage") || !amount.desc.equals("()F")) return false;
 		for (int i = call + 1; i < store - 1; i++) if (code.get(i) instanceof MethodInsnNode || code.get(i) instanceof org.objectweb.asm.tree.JumpInsnNode
 				|| code.get(i) instanceof VarInsnNode v && v.var != 0) {
 			if (!(code.get(i) instanceof MethodInsnNode m && m.owner.equals("java/util/Stack") && m.name.equals("peek"))) return false;
@@ -217,7 +218,7 @@ public final class VanillaDamageReadInjector implements ClassTransformer {
 		method.maxLocals = read + 1;
 		InsnList before = new InsnList();
 		before.add(container(containers));
-		before.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, ForgeDamageSeamsInjector.CONTAINER, "getNewDamage", "()F", false));
+		before.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, CONTAINER, "getNewDamage", "()F", false));
 		before.add(new org.objectweb.asm.tree.InsnNode(Opcodes.DUP));
 		before.add(new VarInsnNode(Opcodes.FSTORE, 3));
 		before.add(new VarInsnNode(Opcodes.FSTORE, read));
@@ -279,7 +280,7 @@ public final class VanillaDamageReadInjector implements ClassTransformer {
 		out.add(new VarInsnNode(Opcodes.ALOAD, 0));
 		out.add(new FieldInsnNode(Opcodes.GETFIELD, containers.owner, "damageContainers", "Ljava/util/Stack;"));
 		out.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "java/util/Stack", "peek", "()Ljava/lang/Object;", false));
-		out.add(new TypeInsnNode(Opcodes.CHECKCAST, ForgeDamageSeamsInjector.CONTAINER));
+		out.add(new TypeInsnNode(Opcodes.CHECKCAST, CONTAINER));
 		return out;
 	}
 

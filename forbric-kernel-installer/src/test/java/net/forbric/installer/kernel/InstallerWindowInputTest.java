@@ -62,7 +62,7 @@ public final class InstallerWindowInputTest {
 		// A supplied set it refuses on content, so nothing is downloaded: the refusal names the files inside the
 		// unquoted folder, which is the proof the quotes were dropped before the installer looked.
 		Path wrong = Files.createDirectories(work.resolve("wrong set"));
-		for (String name : List.of("patched-mc-merged-26.2.jar", "forge-runtime-interop.jar", "neoforge-runtime.jar")) {
+		for (String name : List.of("patched-mc-neoforge-26.2.jar", "neoforge-runtime.jar")) {
 			try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(wrong.resolve(name)))) {
 				out.putNextEntry(new ZipEntry("com/google/gson/Gson.class"));
 				out.closeEntry();
@@ -76,8 +76,58 @@ public final class InstallerWindowInputTest {
 		require(!Files.exists(mcDir.resolve("versions")), "something was written for a refused set");
 		checks += 3;
 
+		// ---- InstallerText: the window's title and the install's last line name the two ecosystems Forbric loads ----
+		// Since Stage 3 of dropping MinecraftForge the kernel refuses a MinecraftForge-only mod; telling the player
+		// that MinecraftForge mods "all go in" the mods folder would send them straight into that refusal.
+		String previous = System.getProperty("forbric.dialogLanguage");
+		try {
+			Path mods = work.resolve("mods");
+			System.setProperty("forbric.dialogLanguage", "en");
+			String en = InstallerText.modsFolder(mods, "26.2-forbric");
+			require(en.startsWith("Fabric and NeoForge mods go in " + mods) && en.contains("versions/26.2-forbric/mods")
+					&& en.contains("Forbric no longer loads MinecraftForge mods"), "English mods-folder line: " + en);
+			require(InstallerText.title().equals("Forbric — Fabric and NeoForge mods in one game"),
+					"English title: " + InstallerText.title());
+			System.setProperty("forbric.dialogLanguage", "zh_CN");
+			String zh = InstallerText.modsFolder(mods, "26.2-forbric");
+			require(zh.startsWith("Fabric 和 NeoForge 的 mod 都放进 " + mods) && zh.contains("versions/26.2-forbric/mods")
+					&& zh.contains("Forbric 不再加载 MinecraftForge 版的 mod"), "Chinese mods-folder line: " + zh);
+			require(InstallerText.title().contains("Fabric 和 NeoForge"), "Chinese title: " + InstallerText.title());
+			for (String line : List.of(en, zh, InstallerText.title())) {
+				require(!line.contains("MinecraftForge and NeoForge") && !line.contains("Forge and NeoForge mods all"),
+						"a sentence still offers MinecraftForge mods: " + line);
+			}
+		} finally {
+			if (previous == null) System.clearProperty("forbric.dialogLanguage");
+			else System.setProperty("forbric.dialogLanguage", previous);
+		}
+		checks += 5;
+
+		// ---- with no switch, the system language decides (D88b: no Chinese runs, so the locale path is held here) ----
+		// A player never passes -Dforbric.dialogLanguage: what they see is chosen by their system locale.
+		java.util.Locale locale = java.util.Locale.getDefault();
+		try {
+			System.clearProperty("forbric.dialogLanguage");
+			Path mods = work.resolve("mods");
+			java.util.Locale.setDefault(java.util.Locale.SIMPLIFIED_CHINESE);
+			require(InstallerText.title().equals("Forbric —— 在同一个游戏里运行 Fabric 和 NeoForge mod"),
+					"zh_CN system locale, title: " + InstallerText.title());
+			require(InstallerText.modsFolder(mods, "26.2-forbric").startsWith("Fabric 和 NeoForge 的 mod 都放进 " + mods),
+					"zh_CN system locale, mods-folder line: " + InstallerText.modsFolder(mods, "26.2-forbric"));
+			java.util.Locale.setDefault(java.util.Locale.ENGLISH);
+			require(InstallerText.title().equals("Forbric — Fabric and NeoForge mods in one game"),
+					"English system locale, title: " + InstallerText.title());
+			require(InstallerText.modsFolder(mods, "26.2-forbric").startsWith("Fabric and NeoForge mods go in " + mods),
+					"English system locale, mods-folder line: " + InstallerText.modsFolder(mods, "26.2-forbric"));
+		} finally {
+			java.util.Locale.setDefault(locale);
+			if (previous == null) System.clearProperty("forbric.dialogLanguage");
+			else System.setProperty("forbric.dialogLanguage", previous);
+		}
+		checks += 4;
+
 		System.out.println("PASS installer window input: " + checks + " checks (quoted, blank and invalid paths;"
-				+ " every failure reaches the window's log)");
+				+ " every failure reaches the window's log; the which-mods sentences in English and Chinese, by the switch and by the system locale)");
 	}
 
 	/** Install as the button does, returning the window's log; nothing may escape. */

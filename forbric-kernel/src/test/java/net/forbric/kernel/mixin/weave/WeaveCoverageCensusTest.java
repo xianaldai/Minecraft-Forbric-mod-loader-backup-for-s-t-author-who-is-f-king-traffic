@@ -53,14 +53,12 @@ class WeaveCoverageCensusTest {
 	static final Map<String, Switch> WOVEN = Map.ofEntries(
 			// KernelGuestMixinAdapterWeaveTest; NativeAbsentTargetsWeaveTest flips NativeAbsentTargets' switch, which the
 			// adapter's verdict reads, and this one as its native control.
-			// The late judgment alone, by behaviour: PluginAddedRenameRetargetWeaveTest (a repair only MixinRetarget's plan makes);
-			// PluginAddedMixinRetargetWeaveTest's builder-stubbed wrap is moved by MixinBuilderStubRebind too.
+			// The late judgment alone, by behaviour: PluginAddedRenameRetargetWeaveTest (a repair only MixinRetarget's plan makes).
 			Map.entry("KernelGuestMixinAdapter", Switch.own("forbric.guestMixinAdapter", "forbric.lateMixinJudgment")), // + PluginAddedMixinRetargetWeaveTest
 			Map.entry("FinalMixinApplications", Switch.own()), // WeaveHarnessSelfTest, MixinOutcomeWeaveTest
 			// MixinOutcomeWeaveTest; the redirect of a widened static call in MixinAtWidenedRedirectWeaveTest.
 			Map.entry("MixinAtWidenedCall", Switch.own("forbric.mixinAtWiden", "forbric.mixinAtWidenRedirect")),
 			Map.entry("MixinStubRebind", Switch.own("forbric.mixinStubRebind")),
-			Map.entry("MixinForgeModelDataEdge", Switch.own("forbric.forgeModelDataEdge")), // ForgeModelDataFlowWeaveTest
 			// The whole retarget, and R3's census of carrier renames: MixinRetargetWeaveTest; its left exit:
 			// MixinRetargetSleepPieceWeaveTest; its move into a renamed body nothing calls: MixinRetargetUncalledBodyWeaveTest;
 			// R7 (a vanilla method the carrier replaced): MixinRetargetReplacedCallWeaveTest.
@@ -78,7 +76,7 @@ class WeaveCoverageCensusTest {
 			Map.entry("MixinDefaultCallbackTransport", Switch.own("forbric.mixinDefaultCallbacks")), // MixinDefaultCallbackTransportWeaveTest
 			Map.entry("MixinNativePredicateSeam", Switch.own("forbric.nativePredicateSeams")), // MixinNativePredicateSeamWeaveTest
 			Map.entry("MixinAbsorbedCallbackTransport", new Switch(List.of("forbric.mixinAbsorbedCall"), "net.forbric.kernel.mixin.MergedBaseAbsorbedCalls")), // MixinAbsorbedCallbackTransportWeaveTest
-			Map.entry("MixinOperationSeamTransport", Switch.own("forbric.operationSeams", "forbric.operationSeams.locals")), // MixinOperationSeamTransportWeaveTest
+			Map.entry("MixinOperationSeamTransport", Switch.own("forbric.operationSeams", "forbric.operationSeams.locals", "forbric.operationSeams.additions")), // MixinOperationSeamTransportWeaveTest, NativeCallInliningRegisteredMixinsWeaveTest
 			Map.entry("MixinSharedPredicateSeam", Switch.own("forbric.sharedPredicateSeams")), // MixinSharedPredicateSeamWeaveTest
 			Map.entry("MixinCrossHostPredicateIsland", Switch.own("forbric.crossHostPredicateIslands")), // MixinCrossHostPredicateIslandWeaveTest
 			Map.entry("MixinPredicateDelegateAdapter", Switch.own("forbric.mixinPredicateDelegates")), // MixinPredicateDelegateWeaveTest
@@ -91,7 +89,6 @@ class WeaveCoverageCensusTest {
 			Map.entry("MixinLocalsCapture", Switch.own("forbric.localsFailSoft", "forbric.requireFailSoft")),
 			Map.entry("MixinAtShape", Switch.own("forbric.mixinAtShape")),
 			Map.entry("MixinOverloadPin", Switch.own("forbric.mixinOverloadPin")),
-			Map.entry("MixinMergedTwin", Switch.own("forbric.mixinMergedTwins")),
 			// MixinNativeTail stands down with VanillaEarlyReturns, whose split its test puts on the run's pre-Mixin chain.
 			Map.entry("MixinNativeTail", new Switch(List.of("forbric.vanillaEarlyReturns"), "net.forbric.kernel.transform.VanillaEarlyReturns")),
 			// MixinHandlerShimWeaveTest; its aside marks (run once, after every adapter): UncalledDecisionTwoMixinsWeaveTest.
@@ -105,16 +102,14 @@ class WeaveCoverageCensusTest {
 			Map.entry("AddedCallOccurrences", Switch.own("forbric.addedCallOccurrences")), // AddedCallOccurrencesWeaveTest
 			Map.entry("NativeOccurrences", Switch.own("forbric.nativeOccurrences")), // NativeOccurrencePointWeaveTest
 			Map.entry("MixinCapturedLocals", Switch.own("forbric.capturedLocals")), // MixinCapturedLocalsWeaveTest
-			Map.entry("MixinBuilderStubRebind", Switch.own("forbric.builderStubRebind")), // MixinBuilderStubRebindWeaveTest
 			Map.entry("MixinExpressionThunks", Switch.own("forbric.expressionThunks")), // MixinExpressionThunksWeaveTest
 			Map.entry("MixinRenamedBodyEdges", Switch.own("forbric.renamedBodyEdges")), // MixinRenamedBodyEdgesWeaveTest
 			Map.entry("MixinSplitBodyEdges", Switch.own("forbric.splitBodyEdges")), // MixinSplitBodyEdgesWeaveTest
 			Map.entry("MixinReturnOrdinals", Switch.own("forbric.returnOrdinals")), // MixinReturnOrdinalsWeaveTest
 			Map.entry("MixinShiftedPoints", Switch.own("forbric.shiftedPoints")), // MixinShiftedPointsWeaveTest
-			Map.entry("NativeCallInlining", Switch.own("forbric.nativeCallInlining")), // NativeCallInliningWeaveTest
+			Map.entry("NativeCallInlining", Switch.own("forbric.nativeCallInlining", "forbric.nativeCallInlining.registeredMixins")), // NativeCallInliningWeaveTest, NativeCallInliningRegisteredMixinsWeaveTest
 			Map.entry("NativeLocalMaterialization", Switch.own("forbric.nativeLocalMaterialization")), // NativeLocalMaterializationWeaveTest
 			Map.entry("NativeLocalPins", Switch.own("forbric.nativeLocalPins")), // NativeLocalPinsWeaveTest
-			Map.entry("NativeEntryRelay", Switch.own("forbric.nativeEntryRelay")), // NativeEntryRelayWeaveTest, FluidPairMixinAdaptersWeaveTest
 			Map.entry("UncalledDecisionEntries", Switch.own("forbric.uncalledDecisionEntries")), // UncalledDecisionEntriesWeaveTest
 			Map.entry("NativeDecisionIsland", Switch.own("forbric.nativeDecisionIsland")), // NativeDecisionIslandWeaveTest
 			Map.entry("NativeConsumerStores", Switch.own("forbric.nativeConsumerStores")), // NativeConsumerStoresWeaveTest
@@ -126,25 +121,31 @@ class WeaveCoverageCensusTest {
 			Map.entry("CarrierReturnedCalls", Switch.own("forbric.carrierReturnedCalls")), // CarrierReturnedCallsWeaveTest
 			Map.entry("NativeSliceOccurrences", Switch.own("forbric.nativeSliceOccurrences")), // NativeSliceOccurrencesWeaveTest
 			Map.entry("MixinGuiItemCaptureAdapter", Switch.own("forbric.guiItemCaptureAnchor")),
-			Map.entry("KernelClientHookMixinAnchors", Switch.own("forbric.clientHookMixinAnchors")),
-			Map.entry("MixinShearsRelay", Switch.own("forbric.shearsRelay")),
+			// The block rows: MixinShearsRelayWeaveTest; the sheep and snow golem rows: MixinShearsRelayMobsWeaveTest.
+			Map.entry("MixinShearsRelay", Switch.own("forbric.shearsRelay", "forbric.shearsRelayMobs")),
 			Map.entry("InsertedLambdaArgumentShim", Switch.own("forbric.insertedLambdaArguments")),
 			Map.entry("MixinPlayerWorldCallbackAdapter", Switch.own("forbric.playerWorldCallbacks")),
-			// MixinFluidReactionAdapter stands down with MixinPlayerWorldCallbackAdapter's switch, which both read through its enabled().
-			Map.entry("MixinFluidReactionAdapter", new Switch(List.of("forbric.playerWorldCallbacks"), "net.forbric.kernel.mixin.MixinPlayerWorldCallbackAdapter")),
+			// The neighbour-change wrap, TAIL and reaction-point handler: CarpetFluidMixinAdapterWeaveTest, MixinFluidReactionWeaveTest;
+			// HEAD handlers: FluidPairMixinAdaptersWeaveTest. The adapter also stands down with forbric.playerWorldCallbacks
+			// (MixinPlayerWorldCallbackAdapter.PROPERTY, read through its enabled()), which no weave test flips: carpet-gate.py's
+			// baseline run does, in a dedicated server.
+			Map.entry("MixinFluidReactionAdapter", Switch.own("forbric.fluidReactionNeighbourChange", "forbric.fluidReactionNeighbourChange.head")),
 			Map.entry("NativeCoremodParity", Switch.own("forbric.flowerPotRepair")), // NativeCoremodParityWeaveTest
 			Map.entry("PostMixinFixups", Switch.own("forbric.postMixinFixups")), // PostMixinFixupsWeaveTest
 			Map.entry("UncalledValueRelay", Switch.own("forbric.uncalledValueRelay")), // UncalledValueRelayWeaveTest
 			Map.entry("PostMixinCodecReturnArbitration", Switch.own("forbric.postMixinCodecArbitration")), // PostMixinCodecReturnArbitrationWeaveTest
 			Map.entry("PostMixinCallbackPriority", Switch.own()), // MixinNullableCompositeWeaveTest's absent installed-callback control
-			// An audit with no switch: ForgeTransferShapeAuditWeaveTest's control is an unreviewed twin in the same run.
-			Map.entry("ForgeTransferShapeAudit", Switch.own()),
+			// No switch: without it NeoForge's postRegisterEvents runs as shipped. RegisterEventsSeamWeaveTest weaves a guest on it.
+			Map.entry("RegisterEventsSeam", Switch.own()),
 			Map.entry("FabricRegistryInitializationMixinAdapter", Switch.own("forbric.fabricRegistryInitialization")),
 			// FabricFreezeHookMixinAdapter stands down with FabricFreezePointInjector, whose hooks its test puts on the pre-Mixin chain.
 			Map.entry("FabricFreezeHookMixinAdapter", new Switch(List.of("forbric.fabricFreezePoint"), "net.forbric.kernel.transform.FabricFreezePointInjector")),
 			Map.entry("FabricCreativePagerMixinAdapter", Switch.own("forbric.fabricCreativeKeyboard")),
 			Map.entry("FabricRegistryLoaderMixinAdapter", Switch.own("forbric.fabricRegistryLoader")),
 			Map.entry("FabricBlockStateCodecMixinAdapter", Switch.own("forbric.blockStateModelFormats")),
+			Map.entry("FabricCommonPayloadMixinAdapter", Switch.own("forbric.playPayloadFallThrough")), // FabricCommonPayloadMixinAdapterWeaveTest
+			Map.entry("MixinPrivateDefaultCollision", Switch.own("forbric.mixinPrivateDefaults")), // MixinPrivateDefaultCollisionWeaveTest
+			Map.entry("FabricItemDamageMixinAdapter", Switch.own("forbric.itemDamageHandler")), // FabricItemDamageMixinAdapterWeaveTest
 			Map.entry("FabricClientMixinAnchors", Switch.own("forbric.fabricClientAnchors")),
 			Map.entry("CarrierHelperResults", Switch.own("forbric.carrierHelperResults")), // CarrierHelperResultsWeaveTest
 			Map.entry("CarrierMethodReferences", Switch.own("forbric.carrierMethodReferences")), // CarrierMethodReferencesWeaveTest
@@ -165,7 +166,10 @@ class WeaveCoverageCensusTest {
 			Map.entry("ContendedCallSites", Switch.own("forbric.contendedCallSites")));
 
 	private static final String NO_SCENARIO = "no weave scenario yet; ClassNode-level tests only";
-	/** Only shrinks. Every row is a stage whose output no CI test has yet run through the real weave. */
+	/**
+	 * Only shrinks. Every row is a stage whose output no CI test has yet run through the real weave. Empty: the last row,
+	 * FabricItemDamageMixinAdapter, has FabricItemDamageMixinAdapterWeaveTest.
+	 */
 	static final Map<String, String> NOT_WOVEN_YET = notWovenYet();
 
 	@Test void everyPipelineStageIsWovenOrListedWithAReason() throws Exception {
@@ -175,7 +179,7 @@ class WeaveCoverageCensusTest {
 		assertEquals(Set.of("KernelGuestMixinAdapter"), configTime, "the config-time stages changed; place the new one in a list");
 		assertTrue(preMixin.size() >= 40, "the census could not read getClassNode's adapters: " + preMixin);
 		assertEquals(Set.of("NativeCoremodParity", "PostMixinFixups", "UncalledValueRelay", "InterfaceDefaultConflictRepair",
-				"ForgeTransferShapeAudit", "PostMixinCodecReturnArbitration", "PostMixinCallbackPriority"), postMixin, "the post-Mixin stages changed; place the new one in a list");
+				"PostMixinCodecReturnArbitration", "PostMixinCallbackPriority", "RegisterEventsSeam"), postMixin, "the post-Mixin stages changed; place the new one in a list");
 
 		Set<String> stages = new TreeSet<>(configTime);
 		stages.addAll(preMixin);

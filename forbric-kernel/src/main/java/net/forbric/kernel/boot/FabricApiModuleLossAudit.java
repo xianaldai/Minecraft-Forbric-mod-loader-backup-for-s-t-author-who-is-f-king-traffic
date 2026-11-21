@@ -41,17 +41,17 @@ import net.forbric.kernel.util.Caught;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
- * Names every installed mod that uses a fabric-api surface the merged base still switches off, and marks it
+ * Names every installed mod that uses a fabric-api surface NeoForge's base still switches off, and marks it
  * DEGRADED in the catalog so the loss reaches the log and {@code .forbric-kernel/load-report.txt} instead of
  * failing silently somewhere downstream.
  *
  * <p>{@link net.forbric.kernel.mixin.MergedBaseMixinCompat} pins a handful of fabric-api mixins that cannot fit
- * the merged base. Most of what they carried is restored by other means now (loot events by
+ * NeoForge's base. Most of what they carried is restored by other means now (loot events by
  * {@link LootTableEventDispatch}, model-loading plugins by {@link GuestInjectorPruner}, {@code fabric:type} model
  * formats by {@link ModelFormatFunnelInjector}); what is NOT is listed here, one surface per row, with the
  * predicate that says whether it is still lost on THIS boot — so switching a restoration off with its
  * {@code -Dforbric.<x>=off} makes its users show up here, and the row goes quiet again the day the surface is
- * restored. Same needle/note/report shape as {@link CapabilityUseAudit}.
+ * restored. Same needle/note/report shape as the retired {@code CapabilityUseAudit}.
  *
  * <p>A constant-pool needle over-reports a mod that names the API only in an optional compat class. That is the
  * safe direction: a DEGRADED row that turns out not to matter costs a glance; a silent loss costs a bug hunt.
@@ -229,7 +229,7 @@ public final class FabricApiModuleLossAudit {
 				thirdParty.add(entry.jar());
 			}
 			if (thirdParty.isEmpty()) continue;
-			ForbricLog.warn("[Forbric/FabricApi] %d mod jar(s) use %s's %s, which is switched off on the merged base — %s%s. "
+			ForbricLog.warn("[Forbric/FabricApi] %d mod jar(s) use %s's %s, which is switched off on this boot — %s%s. "
 					+ "Marked DEGRADED: %s (jars: %s)", thirdParty.size(), loss.module(), simple(loss.needle()),
 					loss.cost(), implementing.isEmpty() ? "" : "; for " + implementing + ", " + loss.implementerCost(),
 					named, thirdParty);

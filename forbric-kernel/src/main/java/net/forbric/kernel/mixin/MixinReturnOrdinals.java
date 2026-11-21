@@ -13,13 +13,13 @@ import net.forbric.api.Ecosystem;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
- * Re-counts a guest's {@code @At("RETURN", ordinal = n)} on the merged body, when the merged body's returns are not the
+ * Re-counts a guest's {@code @At("RETURN", ordinal = n)} on the current body, when the current body's returns are not the
  * native body's returns one for one.
  *
- * <p>The ordinal counts the returns of the body the guest was compiled against. A merge that keeps another family's
- * early exit gives the method one more return in front of the one the guest named (MinecraftForge's
+ * <p>The ordinal counts the returns of the body the guest was compiled against. A base that keeps another family's
+ * early exit gives the method one more return in front of the one the guest named (on the old merged base, MinecraftForge's
  * {@code onBlockStartBreak} veto in {@code ServerPlayerGameMode.destroyBlock}: Apoli's {@code action_on_block_break}
- * names vanilla's last return, ordinal 4, and the merged ordinal 4 is the creative-mode exit, where the two booleans it
+ * names vanilla's last return, ordinal 4, and the current ordinal 4 is the creative-mode exit, where the two booleans it
  * reads are not even in scope — the injector failed and the power never acted); a carrier that dropped or joined exits
  * gives it fewer. Which current return is which native return is read off both bodies ({@link ReturnAlignment}): the
  * native last return is the current last, an early return is the one the same test decides. A point it proves lands
@@ -85,7 +85,7 @@ public final class MixinReturnOrdinals {
 			if (!proved) {
 				if (currentReturns != map.length) {
 					ForbricLog.warn("[Forbric/Mixin] %s: %s's RETURN ordinal(s) %s on %s.%s count the native body's %d returns; not every one "
-							+ "is proved to be one of the merged body's %d, so they stay as compiled", mixin.name.replace('/', '.'), handler.name,
+							+ "is proved to be one of the current body's %d, so they stay as compiled", mixin.name.replace('/', '.'), handler.name,
 							ordinals(points), current.name.replace('/', '.'), after.name, map.length, currentReturns);
 				}
 				continue;
@@ -96,7 +96,7 @@ public final class MixinReturnOrdinals {
 			CurrentBodyOrdinals.mark(handler);
 			moved++;
 			ForbricLog.info("[Forbric/Mixin] %s: %s's RETURN ordinal(s) %s on %s.%s count the native body's %d returns; the same ways out "
-					+ "are the merged body's %s of %d", mixin.name.replace('/', '.'), handler.name, was, current.name.replace('/', '.'),
+					+ "are the current body's %s of %d", mixin.name.replace('/', '.'), handler.name, was, current.name.replace('/', '.'),
 					after.name, map.length, ordinals(points), currentReturns);
 		}
 		return moved;

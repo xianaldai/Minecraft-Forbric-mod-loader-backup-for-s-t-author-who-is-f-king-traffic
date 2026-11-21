@@ -9,6 +9,10 @@
 # NeoForge's inherited default with fabric-api's own handler at the vanilla write: every bed that inherits that default
 # (vanilla's beds, the stone spot ALLOW_BED turns into a bed, a mod's own BedBlock — bed-inherit-*) is exact; a bed that
 # overrides it keeps its own setter, untouched, and those two cases now assert exactly that.
+# Each phase boots in a rundir of its own (build/entity-callback-runs/<uuid>) on the scheduler's GATE_PORT and writes
+# its evidence to build/verification/m37-entity, which no other gate touches; its canary builder writes only its
+# own files under run/canary. So it runs beside other gates: undeclared, it ran alone in every sweep (lane OPT).
+# GATE-PARALLEL: mem=2000
 set -euo pipefail
 GATE_PORT="${GATE_PORT:-25597}"
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
@@ -27,7 +31,7 @@ PY
 fi
 kernel_jar
 bash "$KERNEL/run/build-entity-callbacks-canary.sh"
-python3 - <<'PY'
+python3 - <<'PY' || { echo "[kernel] FAIL M37 — the driver stopped on the assertion above"; exit 1; }
 import json, os, pathlib, shutil, subprocess, uuid, signal
 kernel=pathlib.Path(os.environ['KERNEL']);root=kernel.parent;results=kernel/'build/verification/m37-entity';results.mkdir(parents=True,exist_ok=True)
 inputs=json.loads((kernel/'run/canary/m37-build-inputs.json').read_text());port=os.environ['GATE_PORT']
@@ -45,7 +49,7 @@ for phase in ('positive','off','guard-off'):
  (run/'server.properties').write_text(f'server-ip=127.0.0.1\nserver-port={port}\nonline-mode=false\nlevel-name=world\nlevel-type=minecraft:flat\nlevel-seed=8035262\nmax-tick-time=-1\npause-when-empty-seconds=0\nview-distance=2\nsimulation-distance=2\n')
  for item in [inputs['mod'],*inputs['modules']]:source=pathlib.Path(item['path']);shutil.copy2(source,run/'mods'/source.name)
  env=os.environ.copy();env.update(RUNDIR=str(run),FORBRIC_COMPAT_POLICY='continue' if phase=='off' else 'strict',M37_RESULT_COMPATIBILITY=str(results/(phase+'-compatibility.json')),
-   FORBRIC_JVM=f'-Dforbric.entityPhase={phase} -Dforbric.entityNonce={nonce} -Dforbric.entityRoot={run}'
+   FORBRIC_JVM=os.environ.get('FORBRIC_JVM','')+f' -Dforbric.entityPhase={phase} -Dforbric.entityNonce={nonce} -Dforbric.entityRoot={run}'
    # Every case is repaired by mechanisms that know no mod, each with its own switch, so the negative control turns every
    # one of them off: CarrierDefaultChains moves the bed occupancy redirect onto the state's setBedOccupied; the generic
    # renamed-body retarget (MixinRetarget R3) moves the sleep redirect into NeoForge's lambda; the carrier-stub rebind
@@ -56,9 +60,12 @@ for phase in ('positive','off','guard-off'):
    # the sleeping direction wrap to NeoForge's answer.
    +(' -Dforbric.carrierDefaultChains=off -Dforbric.mixinRetarget=off -Dforbric.mixinStubRebind=off -Dforbric.scopedClearRelay=off -Dforbric.carrierDecisions=off -Dforbric.carrierGuardedPoints=off -Dforbric.carrierReturnedCalls=off' if phase=='off' else '')
    +(' -Dforbric.carrierGuardedPoints=off' if phase=='guard-off' else ''))
- for key,role in [('MERGED','merged'),('FORGE_RT','forge'),('NEO_RT','neo')]:env[key]=inputs[role]['path']
+ # The game base (NeoForge's patched game) and its one carrier the canary was built and recorded against, handed to the
+ # launcher as BASE and NEO_RT and attested under the neo-patched / neo-runtime roles. (Stage 4: no merged base, no
+ # MinecraftForge carrier.)
+ for key,role in [('BASE','base'),('NEO_RT','neo')]:env[key]=inputs[role]['path']
  command=['python3',str(kernel/'run/compat/evidence.py'),'run','--source',str(root),'--mods',str(run/'mods'),'--output',str(results/(phase+'.json'))]
- for role,path in [('merged',env['MERGED']),('forge-interop',env['FORGE_RT']),('neo-runtime',env['NEO_RT']),('fabric-api',inputs['fabricApi']['path']),('kernel',str(kernel/'build/libs/forbric-kernel-0.1.0-SNAPSHOT.jar')),('kernel-runtime',str(kernel/'build/libs/forbric-kernel-runtime-0.1.0-SNAPSHOT.jar'))]:command+=['--artifact',role+'='+path]
+ for role,path in [('neo-patched',env['BASE']),('neo-runtime',env['NEO_RT']),('fabric-api',inputs['fabricApi']['path']),('kernel',str(kernel/'build/libs/forbric-kernel-0.1.0-SNAPSHOT.jar')),('kernel-runtime',str(kernel/'build/libs/forbric-kernel-runtime-0.1.0-SNAPSHOT.jar'))]:command+=['--artifact',role+'='+path]
  command+=['--','bash',str(kernel/'run/gate-m37-entity-callbacks.sh'),'--execute']
  (results/(phase+'.log')).unlink(missing_ok=True)  # the lost-port check below must not read an earlier run's log
  with (results/(phase+'-driver.log')).open('w') as output:
@@ -96,6 +103,6 @@ for phase in ('positive','off','guard-off'):
  assert (direction in text)==(phase!='off'),(phase,'the sleeping direction wrap moves to the answer in every phase but the negative control')
  relay='[Forbric/ScopedClear] net.minecraft.world.entity.LivingEntity: [removeAllEffects()Z(activeEffects)]'
  assert (relay in text)==(phase!='off'),(phase,'the scoped-clear relay runs in every phase but the negative control')
- print('[M37] PASS',phase,'nineteen actual entity callback cases with expected verdicts',flush=True)
-print('[M37] GATE GREEN')
+ print('[kernel] PASS M37',phase,'nineteen actual entity callback cases with expected verdicts',flush=True)
+print('[kernel] M37 GATE GREEN')
 PY

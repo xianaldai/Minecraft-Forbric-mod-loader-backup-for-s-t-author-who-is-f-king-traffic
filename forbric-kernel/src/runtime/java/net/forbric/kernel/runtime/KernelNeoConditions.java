@@ -43,8 +43,8 @@ import net.forbric.kernel.util.ForbricLog;
  *
  * <h2>The failure</h2>
  *
- * <p>The merged {@code RegistryLoadTask$PendingRegistration.loadFromResource} carries NeoForge's patch: where
- * stock Minecraft calls {@code Decoder.parse} directly, the merged body wraps every element in
+ * <p>NeoForge's {@code RegistryLoadTask$PendingRegistration.loadFromResource} carries NeoForge's patch: where
+ * stock Minecraft calls {@code Decoder.parse} directly, the base's body wraps every element in
  * {@code ConditionalOps.createConditionalCodec}. That is unconditional and global — EVERY datapack-registry
  * element, from EVERY pack, is decoded through NeoForge's condition evaluator, whichever ecosystem's mod shipped
  * the file.
@@ -59,8 +59,10 @@ import net.forbric.kernel.util.ForbricLog;
  *
  * <h2>What this does instead</h2>
  *
- * <p>A condition type NeoForge does not know is not NeoForge's to judge. It is decoded as a condition that does
- * not veto, so the element loads and the OTHER ecosystem's evaluator — which owns that id — decides. Failing
+ * <p>A condition type NeoForge does not know is not NeoForge's to judge — in a Fabric mod's own pack. There it is decoded
+ * as a condition that does not veto, so the element loads and the OTHER ecosystem's evaluator — which owns that id —
+ * decides. In any other pack (a NeoForge mod's, vanilla's, a world datapack) NeoForge's own codec decides, as on native
+ * NeoForge: the file is skipped ({@link KernelConditionSources}, decision D69). Failing
  * the parse instead loses the element, the registry and the world; ignoring one condition's opinion loses one
  * condition's opinion.
  *
@@ -122,11 +124,11 @@ public final class KernelNeoConditions {
 	/** The foreign types met while decoding one pack.mcmeta overlay list; present only during that decode. */
 	private static final ThreadLocal<Set<String>> OVERLAY = new ThreadLocal<>();
 
-	/** The foreign types met while {@link #judgesItsOwnDialect} reads one element's NeoForge conditions. */
-	private static final ThreadLocal<Set<String>> PROBE = new ThreadLocal<>();
 	private static final Set<String> VETOED_REPORTED = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
 	private static final Set<String> REPORTED = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+	private static final Set<String> NATIVE_REPORTED = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
 	/** {@code -Dforbric.neoConditions=off}: decode strictly, exactly as the carrier's own codec would. Read per decode. */
 	public static final String PROPERTY = "forbric.neoConditions";
@@ -151,14 +153,6 @@ public final class KernelNeoConditions {
 	}
 
 	/**
-	 * Whether NeoForge's condition registry has this type id; an id that does not parse is registered by nobody. What
-	 * MinecraftForge's leniency asks to tell a type another ecosystem owns from one nobody here owns.
-	 */
-	static boolean registers(String id) {
-		return Identifier.tryParse(id) != null && known.test(id);
-	}
-
-	/**
 	 * Wraps NeoForge's own {@code ICondition} codec, which is what {@code ICondition.<clinit>} hands over.
 	 *
 	 * <p>Declared and returned as {@code Codec} so the rewritten {@code <clinit>} is one inserted instruction
@@ -173,10 +167,14 @@ public final class KernelNeoConditions {
 				if (!enabled()) return strict.decode(ops, input);
 				String foreign = foreignType(ops, input);
 				if (foreign != null) {
-					report(foreign);
-					Set<String> probe = PROBE.get();
-					if (probe != null) probe.add(foreign);
 					Set<String> overlay = OVERLAY.get();
+					if (overlay == null && !KernelConditionSources.foreignConditionsTolerated()) {
+						// A data file of a pack that is not a Fabric mod's: NeoForge's own verdict, as on native NeoForge
+						// (the file fails to parse and is skipped). D69.
+						reportNative(foreign, KernelConditionSources.currentPackId());
+						return strict.decode(ops, input);
+					}
+					report(foreign);
 					if (overlay != null && overlayVetoEnabled()) {
 						overlay.add(foreign);
 						return DataResult.success(Pair.of(VETO, ops.empty()));
@@ -200,34 +198,6 @@ public final class KernelNeoConditions {
 				return "Forbric(" + strict + ")";
 			}
 		};
-	}
-
-	/**
-	 * Whether NeoForge's evaluator judges this element's NeoForge conditions itself -- the value under the key the
-	 * NeoForge decoder reading it judges, usually {@code neoforge:conditions}.
-	 *
-	 * <p>It does unless they name a condition type NeoForge's registry lacks: {@link #lenient} then decodes that
-	 * condition as one that does not veto and says the ecosystem owning the id decides, so NeoForge's verdict on the
-	 * element is not a judgement of it. Read with NeoForge's own {@code ICondition.LIST_CODEC}, the codec its
-	 * conditional decoder reads the key with, so every nesting level is seen the way NeoForge will see it; nothing is
-	 * evaluated and nothing about the element changes. Conditions that do not decode at all are NeoForge's to fail,
-	 * as they fail now, so they count as judged.
-	 */
-	public static <T> boolean judgesItsOwnDialect(DynamicOps<T> ops, T conditions) {
-		Set<String> outer = PROBE.get();
-		Set<String> foreign = new LinkedHashSet<>();
-		PROBE.set(foreign);
-		try {
-			ICondition.LIST_CODEC.decode(ops, conditions);
-		} catch (RuntimeException unreadable) {
-			Caught.expected(unreadable);
-			// NeoForge's own decode meets the same input next and fails it with its own error.
-			return true;
-		} finally {
-			if (outer == null) PROBE.remove();
-			else PROBE.set(outer);
-		}
-		return foreign.isEmpty();
 	}
 
 	/**
@@ -353,10 +323,17 @@ public final class KernelNeoConditions {
 		}
 	}
 
+	private static void reportNative(String type, String pack) {
+		if (!NATIVE_REPORTED.add(type + "|" + pack)) return;
+		ForbricLog.info("[Forbric/Conditions] resource condition '%s' in pack '%s' is not in NeoForge's condition registry, "
+				+ "and that pack is not a Fabric mod's: NeoForge's evaluator decides, as on native NeoForge — the data file is "
+				+ "skipped (-D%s=off keeps it, as Forbric 0.3.x did)", type, pack, KernelConditionSources.PROPERTY);
+	}
+
 	private static void report(String type) {
 		if (!REPORTED.add(type)) return;
 		ForbricLog.warn("[Forbric/Conditions] resource condition '%s' is not in NeoForge's condition registry, so "
-				+ "NeoForge's evaluator — which the merged base runs over EVERY datapack element from every pack — "
+				+ "NeoForge's evaluator — which NeoForge's base runs over EVERY datapack element from every pack — "
 				+ "could not judge it and used to fail the whole registry load with it. It is being ignored here "
 				+ "instead; the ecosystem that owns that id decides. %d distinct condition(s) so far",
 				type, REPORTED.size());

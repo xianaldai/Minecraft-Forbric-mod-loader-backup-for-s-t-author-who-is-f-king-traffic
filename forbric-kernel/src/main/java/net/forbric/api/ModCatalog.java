@@ -48,7 +48,7 @@ import java.util.Locale;
  *
  * <h2>Publishing</h2>
  *
- * <p>Once, during boot, by whoever has all three ecosystems' mods in hand — which is exactly one place. Readers
+ * <p>Once, during boot, by whoever has both ecosystems' mods in hand — which is exactly one place. Readers
  * are game-side (the Mods screen), so this lives in {@code net.forbric.api}, which is parent-loaded: the screen
  * and the boot code that filled it see the same class and the same list.
  */
@@ -60,10 +60,16 @@ public final class ModCatalog {
 	 * renderer and a null there is a crash in the middle of a frame rather than a blank line. {@code iconPath} is
 	 * the path INSIDE {@code jar} — resolving it is the caller's business, and the game side is the only place
 	 * that can turn it into a texture anyway.
+	 *
+	 * <p>{@code ecosystem} is null for exactly one kind of row: a jar Forbric refused ({@link #refused()}), whose
+	 * {@code refusedLoader} names the loader it was built for ("MinecraftForge") and {@code refusedSpelling} how reports
+	 * spell that loader ("FORGE", the word the load report's {@code ecosystem} field and the finding evidence have always
+	 * carried for it). A refusal is no ecosystem's claim, so the row is counted under none ({@link #count}) and shown with
+	 * the loader it names ({@link #loaderName()}).
 	 */
 	public record Entry(Ecosystem ecosystem, String modId, String name, String version, String description,
 			List<String> authors, String jar, String iconPath, String bundledBy, Status status,
-			String statusDetail) {
+			String statusDetail, String refusedLoader, String refusedSpelling) {
 
 		/**
 		 * The nine-argument form every existing caller uses. A mod is {@link Status#OK} until something says
@@ -74,8 +80,29 @@ public final class ModCatalog {
 			this(ecosystem, modId, name, version, description, authors, jar, iconPath, bundledBy, Status.OK, "");
 		}
 
+		/** A row of a mod that loads, with what became of it. */
+		public Entry(Ecosystem ecosystem, String modId, String name, String version, String description,
+				List<String> authors, String jar, String iconPath, String bundledBy, Status status, String statusDetail) {
+			this(ecosystem, modId, name, version, description, authors, jar, iconPath, bundledBy, status, statusDetail, "", "");
+		}
+
+		/**
+		 * The row of a jar in {@code mods/} that Forbric refused: built for {@code loader} (its display name, spelled
+		 * {@code spelling} in reports), loaded by no ecosystem, {@link Status#FAILED} with {@code detail}.
+		 */
+		public static Entry refused(String loader, String spelling, String modId, String name, String jar, String detail) {
+			if (loader == null || loader.isBlank()) throw new IllegalArgumentException("loader");
+			if (spelling == null || spelling.isBlank()) throw new IllegalArgumentException("spelling");
+			return new Entry(null, modId, name, "", "", List.of(), jar, "", "", Status.FAILED, detail, loader, spelling);
+		}
+
 		public Entry {
-			if (ecosystem == null) throw new NullPointerException("ecosystem");
+			refusedLoader = orEmpty(refusedLoader);
+			refusedSpelling = orEmpty(refusedSpelling);
+			if (ecosystem == null && (refusedLoader.isEmpty() || refusedSpelling.isEmpty())) throw new NullPointerException("ecosystem");
+			if (ecosystem != null && !(refusedLoader.isEmpty() && refusedSpelling.isEmpty())) {
+				throw new IllegalArgumentException("a refused row has no ecosystem");
+			}
 			if (modId == null || modId.isBlank()) throw new IllegalArgumentException("modId");
 			name = orEmpty(name).isEmpty() ? modId : name.trim();
 			version = orEmpty(version);
@@ -91,7 +118,22 @@ public final class ModCatalog {
 		/** The same mod, with what became of it. */
 		public Entry withStatus(Status newStatus, String detail) {
 			return new Entry(ecosystem, modId, name, version, description, authors, jar, iconPath, bundledBy,
-					newStatus, detail);
+					newStatus, detail, refusedLoader, refusedSpelling);
+		}
+
+		/** Whether this is the row of a jar Forbric refused, which no ecosystem loads. */
+		public boolean refused() {
+			return ecosystem == null;
+		}
+
+		/** The loader this row is shown under: its ecosystem's name, or the loader a refused jar was built for. */
+		public String loaderName() {
+			return ecosystem != null ? ecosystem.displayName() : refusedLoader;
+		}
+
+		/** How reports spell this row's loader: its ecosystem's constant, or the refused loader's spelling. */
+		public String loaderSpelling() {
+			return ecosystem != null ? ecosystem.name() : refusedSpelling;
 		}
 
 		/**
@@ -185,7 +227,16 @@ public final class ModCatalog {
 	public static int count(Ecosystem ecosystem) {
 		int n = 0;
 		for (Entry e : installed) {
-			if (e.ecosystem() == ecosystem) n++;
+			if (e.ecosystem() == ecosystem && ecosystem != null) n++;
+		}
+		return n;
+	}
+
+	/** How many installed jars Forbric refused (a MinecraftForge build, say): rows no ecosystem counts. */
+	public static int refusedCount() {
+		int n = 0;
+		for (Entry e : installed) {
+			if (e.refused()) n++;
 		}
 		return n;
 	}
@@ -243,23 +294,36 @@ public final class ModCatalog {
 	}
 
 	/**
-	 * The detail a re-marked row carries: the new reason when the status rises; the existing reason when the new
-	 * one is outranked (a DEGRADED reason adds nothing to "did not finish loading"); both reasons, joined, when a
-	 * second distinct reason arrives at the same status; the existing text when the new one repeats it or is
-	 * empty.
+	 * The detail a re-marked row carries: when the status rises, the new reason first and then what was already wrong
+	 * with the mod; the existing reason when the new one is outranked (a DEGRADED reason arriving after "did not finish
+	 * loading" adds nothing to it); both reasons, joined, when a second distinct reason arrives at the same status; the
+	 * existing text when the new one repeats it or is empty.
+	 *
+	 * <p>A rise used to start over with the new reason. But what was already wrong is often why the mod failed: an ABI
+	 * audit's "compiled against a different NeoForge" lands first, then the deferred task that touched the missing class
+	 * fails the mod, and since D82 that failure stops the boot — so the load report a player reads after the stop said only
+	 * that a deferred task threw, and the reason it threw was gone (lane STOP review A-2).
 	 */
 	private static String joinedDetail(Entry e, Status incomingStatus, Status kept, String detail) {
 		String incoming = detail == null ? "" : detail.trim();
 		String existing = e.statusDetail();
-		if (kept != e.status() || existing.isEmpty()) return incoming;
+		if (existing.isEmpty()) return incoming;
+		if (kept != e.status()) return joinClauses(incoming, existing);
 		if (incomingStatus != e.status() || incoming.isEmpty()) return existing;
+		return joinClauses(existing, incoming);
+	}
 
+	/** {@code first}'s clauses, then {@code second}'s that are not already among them, joined with "; ". */
+	private static String joinClauses(String first, String second) {
 		// Clause by clause, not whole string by whole string. A reason is often several clauses already joined
 		// with "; " — one repair naming two things it could not do — and comparing the whole incoming text to
 		// each existing clause never matches, so the SAME two-clause reason arriving twice was printed twice on
 		// the Mods screen and in the load report. fabric-item-api's tooltip row read that way for months.
-		List<String> reasons = new ArrayList<>(List.of(existing.split("; ")));
-		for (String clause : incoming.split("; ")) {
+		List<String> reasons = new ArrayList<>();
+		for (String clause : first.split("; ")) {
+			if (!clause.isEmpty() && !reasons.contains(clause)) reasons.add(clause);
+		}
+		for (String clause : second.split("; ")) {
 			if (!clause.isEmpty() && !reasons.contains(clause)) reasons.add(clause);
 		}
 		return String.join("; ", reasons);

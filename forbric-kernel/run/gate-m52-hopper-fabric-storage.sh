@@ -2,7 +2,7 @@
 # M52 — hoppers move items into and out of Fabric item storages NeoForge's hopper cannot see.
 #
 # fabric-transfer-api-v1's HopperBlockEntityMixin asks ItemStorage.SIDED after vanilla's getAttachedContainer and
-# getSourceContainer; the merged hopper is NeoForge's, which calls neither, so it never attached. NeoForge sees a
+# getSourceContainer; NeoForge's hopper calls neither, so it never attached. NeoForge sees a
 # Fabric storage only through the kernel's capability bridge, which exposes slotted storages on block entities: an
 # unslotted storage, one on a block with no block entity, or any with the bridge off, never met a hopper.
 #
@@ -25,7 +25,7 @@
 #   3. off — both of those off: exactly the unslotted and block-only moves (and the pickup stop) fail; the slotted
 #      storage, refused faces, locked hoppers and vanilla chests hold.
 #   4. bridge-off — -Dforbric.transferBridge=off, STRICT: every case passes, the slotted one now through Fabric too.
-#   5. lithium — positive with lithium-neoforge from the merged pack, whose own hopper mixins land on the same methods
+#   5. lithium — positive with lithium-neoforge from client-merged-pack, whose own hopper mixins land on the same methods
 #      and redirect the lookup: every case passes and nothing fails to verify.
 # GATE-PARALLEL: rundirs=server-hopper-m52 mem=2000
 set -uo pipefail
@@ -33,6 +33,7 @@ set -uo pipefail
 
 SERVER_DIR="$KERNEL/run/server-hopper-m52"
 RESULTS="$BUILD/verification/m52-hopper-fabric-storage"
+refuse_shared_rundir "$SERVER_DIR"
 FAIL=0
 FAPI="$KERNEL/run/client-merged-pack/mods/fabric-api-0.155.2+26.2.jar"
 LITHIUM="$(ls "$KERNEL"/run/client-merged-pack/mods/lithium-neoforge-*.jar 2>/dev/null | head -1)"
@@ -54,7 +55,7 @@ run_server() {
   seed_server_properties "$SERVER_DIR"
   printf 'level-name=world\nlevel-type=minecraft:flat\ngenerate-structures=false\nmax-tick-time=-1\npause-when-empty-seconds=0\nonline-mode=false\nspawn-animals=false\n' >> "$SERVER_DIR/server.properties"
   RUNDIR="$SERVER_DIR" FORBRIC_COMPAT_POLICY="$policy" \
-    FORBRIC_JVM="-Dforbric.hopperProbe=$RESULTS/$phase.json -Dforbric.hopperPhase=$phase $extra" \
+    FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.hopperProbe=$RESULTS/$phase.json -Dforbric.hopperPhase=$phase $extra" \
     "$KERNEL/run/launch-kernel-server.sh" < /dev/null > "$RESULTS/$phase.log" 2>&1 &
   pid=$!; record_server_pid "$SERVER_DIR" "$pid"
   await_server "$pid" "$RESULTS/$phase.log" 300 30
@@ -119,7 +120,7 @@ check "fallback: a block-only store went through Fabric's lookup" "Hopper\] a ho
 check_absent "fallback: the slotted store went through the bridge, not the fallback" "Hopper\] a hopper .* Fabric storage forbric.hopper.Stores\\\$EntityStore through" "$RESULTS/fallback.log"
 check_absent "fallback: no verifier error" 'VerifyError|Exception stopping' "$RESULTS/fallback.log"
 
-step "3. off: the same server with the hopper left as merged and fabric-transfer's callbacks unattached"
+step "3. off: the same server with the hopper left as the base has it and fabric-transfer's callbacks unattached"
 run_server off continue "-Dforbric.hopperFabricStorage=off -Dforbric.mixinNullableCompositeCallbacks=off"
 judge off "failed == $LOST" "exactly the unslotted and block-only cases fail; slotted, refused faces, locked hoppers and chests hold"
 check_absent "off: nothing asks Fabric's lookup" 'Hopper\] HopperBlockEntity.ejectItems and suckInItems ask Fabric' "$RESULTS/off.log"

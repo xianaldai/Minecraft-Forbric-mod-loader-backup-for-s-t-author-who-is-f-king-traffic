@@ -37,8 +37,8 @@ class MergedBaseMixinCompatPinnedContractsTest {
         System.setProperty(FabricCreativePagerMixinAdapter.PROPERTY,"off");
         // The game's own classes beside each module's, as the service's resource reader serves them: a gate that reads
         // the merged class a mixin targets (the registry loader's dead call) judges it against the class the game ships.
-        Path base = net.forbric.kernel.TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
-        net.forbric.kernel.TestFixtures.requireFiles(net.forbric.kernel.TestFixtures.Fixture.STAGED, "the staged merged base", base);
+        Path base = net.forbric.kernel.TestFixtures.stagedBase();
+        net.forbric.kernel.TestFixtures.requireFiles(net.forbric.kernel.TestFixtures.Fixture.STAGED, "the staged base", base);
         try (ZipFile game = new ZipFile(base.toFile())) {
         for(byte[] module:modules.values()) {
             Map<String,byte[]> content=entries(module);

@@ -38,8 +38,7 @@ import net.forbric.kernel.util.ForbricLog;
  * In such a class each of those {@code ModList} calls — {@code getMods}, {@code getSortedMods}/{@code getLoadedMods},
  * {@code getModContainerById}, {@code getModFileById}, {@code forEachModContainer}, {@code forEachModInOrder},
  * {@code applyForEachModContainer}, again as a call or a method reference — goes through the game side's
- * {@code KernelDeclarationReaders} (NeoForge) or {@code KernelForgeDeclarationReaders} (MinecraftForge), which
- * answers what {@code ModList} answers and then the declaring Fabric mods. The by-id lookups are included because a
+ * {@code KernelDeclarationReaders}, which answers what {@code ModList} answers and then the declaring Fabric mods. The by-id lookups are included because a
  * reader that found a mod in the list resolves it again by id (Sodium reads the name and version for the options page
  * that way), and the list must not contradict itself.
  *
@@ -59,14 +58,13 @@ import net.forbric.kernel.util.ForbricLog;
  *
  * <p>A class that enumerates {@code ModList} without reading properties — a mod list screen, a crash report section,
  * the handshake, a version checker — keeps the native answer: it is asking what the family LOADED, and a Fabric mod
- * is not that. Measured on the merged base and both carriers: none of their {@code ModList} readers reads properties,
+ * is not that. Measured on the old merged base and both its carriers: none of their {@code ModList} readers reads properties,
  * so no platform class is touched. A reader whose walk and whose property read sit in two different classes is not
  * reached either; on the packs measured, every reader has both in one class.
  */
 public final class DeclarationReaderModListInjector implements ClassTransformer {
-	/** One family's names, and how it calls its {@code ModList}: NeoForge's is an object, MinecraftForge's static. */
-	record Family(Ecosystem ecosystem, String modList, List<String> infoTypes, String hook, boolean staticList,
-			Map<String, String> members) {
+	/** One family's names: its {@code ModList} (an object, whose receiver the hook takes first), mod info types and hook. */
+	record Family(Ecosystem ecosystem, String modList, List<String> infoTypes, String hook, Map<String, String> members) {
 	}
 
 	private static final String PROPERTIES = "getModProperties";
@@ -82,21 +80,19 @@ public final class DeclarationReaderModListInjector implements ClassTransformer 
 			"applyForEachModContainer", "(Ljava/util/function/Function;)");
 
 	static final List<Family> FAMILIES = List.of(
-			family(Ecosystem.NEOFORGE, "net/forbric/kernel/runtime/KernelDeclarationReaders", false, "getSortedMods"),
-			family(Ecosystem.FORGE, "net/forbric/kernel/runtime/KernelForgeDeclarationReaders", true, "getLoadedMods"));
+			family(Ecosystem.NEOFORGE, "net/forbric/kernel/runtime/KernelDeclarationReaders", "getSortedMods"));
 
-	private static Family family(Ecosystem ecosystem, String hook, boolean staticList, String containerList) {
+	private static Family family(Ecosystem ecosystem, String hook, String containerList) {
 		Map<String, String> members = new java.util.HashMap<>(SHARED_MEMBERS);
 		members.put(containerList, "()");
 		return new Family(ecosystem, ForeignType.MOD_LIST.internal(ecosystem),
 				List.of(ForeignType.MOD_INFO_SPI.internal(ecosystem), ForeignType.MOD_INFO.internal(ecosystem)), hook,
-				staticList, Map.copyOf(members));
+				Map.copyOf(members));
 	}
 
 	private static final byte[][] NEEDLES = {
 			ByteScan.poolEntry(PROPERTIES),
-			ByteScan.poolEntry(FAMILIES.get(0).modList()),
-			ByteScan.poolEntry(FAMILIES.get(1).modList())};
+			ByteScan.poolEntry(FAMILIES.get(0).modList())};
 
 	@Override
 	public String name() {
@@ -124,7 +120,7 @@ public final class DeclarationReaderModListInjector implements ClassTransformer 
 		for (Family family : FAMILIES) {
 			if (!readsProperties(node, family)) continue;
 			reader = true;
-			if (names[1] || names[2]) rewritten += redirect(node, family);
+			if (names[1]) rewritten += redirect(node, family);
 		}
 		// Recorded for every reader, also one that reads LoadingModList and never ModList, and before it can run.
 		if (reader) {
@@ -167,12 +163,10 @@ public final class DeclarationReaderModListInjector implements ClassTransformer 
 	/** Sends this family's mod-list questions in {@code node} through its hook; returns how many were rewritten. */
 	private static int redirect(ClassNode node, Family family) {
 		int count = 0;
-		int listCall = family.staticList() ? Opcodes.INVOKESTATIC : Opcodes.INVOKEVIRTUAL;
-		int listHandle = family.staticList() ? Opcodes.H_INVOKESTATIC : Opcodes.H_INVOKEVIRTUAL;
 		for (MethodNode method : node.methods) {
 			for (AbstractInsnNode insn : method.instructions) {
 				if (insn instanceof MethodInsnNode call) {
-					if (call.getOpcode() != listCall || !isMember(call.owner, call.name, call.desc, family)) continue;
+					if (call.getOpcode() != Opcodes.INVOKEVIRTUAL || !isMember(call.owner, call.name, call.desc, family)) continue;
 					call.setOpcode(Opcodes.INVOKESTATIC);
 					call.owner = family.hook();
 					call.desc = hookDesc(call.desc, family);
@@ -180,7 +174,7 @@ public final class DeclarationReaderModListInjector implements ClassTransformer 
 					count++;
 				} else if (insn instanceof InvokeDynamicInsnNode indy && indy.bsmArgs != null) {
 					for (int i = 0; i < indy.bsmArgs.length; i++) {
-						if (!(indy.bsmArgs[i] instanceof Handle handle) || handle.getTag() != listHandle
+						if (!(indy.bsmArgs[i] instanceof Handle handle) || handle.getTag() != Opcodes.H_INVOKEVIRTUAL
 								|| !isMember(handle.getOwner(), handle.getName(), handle.getDesc(), family)) {
 							continue;
 						}
@@ -200,9 +194,9 @@ public final class DeclarationReaderModListInjector implements ClassTransformer 
 		return arguments != null && desc.startsWith(arguments);
 	}
 
-	/** The hook's descriptor: the {@code ModList} receiver, when there is one, becomes the first argument. */
+	/** The hook's descriptor: the {@code ModList} receiver becomes the first argument. */
 	static String hookDesc(String desc, Family family) {
-		return family.staticList() ? desc : "(L" + family.modList() + ";" + desc.substring(1);
+		return "(L" + family.modList() + ";" + desc.substring(1);
 	}
 
 	// ---- how a reader reads each key --------------------------------------------------------------------------------

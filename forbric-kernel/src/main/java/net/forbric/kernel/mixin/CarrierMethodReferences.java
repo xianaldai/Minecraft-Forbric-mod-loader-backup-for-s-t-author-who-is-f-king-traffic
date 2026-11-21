@@ -66,15 +66,15 @@ import net.forbric.kernel.util.ForbricLog;
  * is the same move where the decision is a whole lambda and the carrier's call is a method reference.
  *
  * <p>Nothing here knows a mod, a class or a method by name. The redirect moves when, read off the native class (the mod's
- * loader's) and the merged one:
+ * loader's) and the current one:
  * <ul>
  *   <li>it is a {@code @Redirect} with one {@code INVOKE} point, no slice and no {@code @Group}, static, bound natively to one
  *       static method that is a lambda's implementation — the handle of exactly one {@code LambdaMetafactory} call in one
- *       method of the class — and absent merged; the point selects one call there (its ordinal's occurrence), which the
+ *       method of the class — and absent from the current class; the point selects one call there (its ordinal's occurrence), which the
  *       handler does not make itself;</li>
- *   <li>the merged method makes exactly one {@code LambdaMetafactory} call of the same functional method and types, handed on to
+ *   <li>the current method makes exactly one {@code LambdaMetafactory} call of the same functional method and types, handed on to
  *       the same consumer, whose handle is a method reference to another class's instance method on a captured receiver; the
- *       lambda captured that receiver first, the same value, and exactly one more boolean — and the merged method holds that
+ *       lambda captured that receiver first, the same value, and exactly one more boolean — and the current method holds that
  *       boolean's value in a local at the call (the same expression over its own values, {@link NativeCallChanges#localsAt});</li>
  *   <li>the lambda's answer depends on the call's answer and that boolean only, and the method reference's inherited
  *       implementation (followed through every level the receiver inherits) first tests that very boolean's expression,
@@ -85,7 +85,7 @@ import net.forbric.kernel.util.ForbricLog;
  *   <li>everything the lambda's body names, but the call, is public.</li>
  * </ul>
  *
- * <p>Then the merged method's method reference is materialized, before the class is defined, as a private static method of
+ * <p>Then the current method's method reference is materialized, before the class is defined, as a private static method of
  * the class taking the lambda's own parameters (the receiver, the folded boolean read from its local, the functional
  * arguments) and making the method reference's one call; the method reference names it. The redirect moves onto that call
  * there; the mod's handler keeps its body under its name with {@code $forbricOriginal} appended, and a new handler of the
@@ -200,7 +200,7 @@ public final class CarrierMethodReferences {
 	private static Move plan(ClassNode mixin, MethodNode handler, AnnotationNode redirect, AnnotationNode at, ClassNode original, ClassNode merged,
 			Function<String, ClassNode> code, StringBuilder why) {
 		// The native lambda the redirect is bound to: one static method that is one metafactory call's implementation, gone from
-		// the merged class or left there dead (nothing in it names it), whatever its name binds there now.
+		// the current class or left there dead (nothing in it names it), whatever its name binds there now.
 		MethodNode lambda = MixinTargetSelectors.one(handler, original);
 		if (lambda == null || (lambda.access & Opcodes.ACC_STATIC) == 0 || referenced(merged, lambda.name, lambda.desc)) return null;
 		MethodNode nativeHost = null;
@@ -221,19 +221,19 @@ public final class CarrierMethodReferences {
 		for (AbstractInsnNode instruction : handler.instructions)
 			if (instruction instanceof MethodInsnNode own && own.owner.equals(call.owner) && own.name.equals(call.name) && own.desc.equals(call.desc)) return declined(why, "the handler makes the call it redirects itself");
 
-		// The merged method's one metafactory call of the same functional shape, handed to the same consumer: a method reference.
+		// The current method's one metafactory call of the same functional shape, handed to the same consumer: a method reference.
 		MethodNode mergedHost = declared(merged, nativeHost.name, nativeHost.desc);
-		if (mergedHost == null) return declined(why, "the merged class has no " + nativeHost.name + nativeHost.desc);
+		if (mergedHost == null) return declined(why, "the current class has no " + nativeHost.name + nativeHost.desc);
 		InvokeDynamicInsnNode reference = null;
 		for (AbstractInsnNode instruction : mergedHost.instructions) {
 			if (!(instruction instanceof InvokeDynamicInsnNode indy) || !metafactory(indy) || !indy.name.equals(created.name)
 					|| !indy.bsmArgs[0].equals(created.bsmArgs[0]) || !indy.bsmArgs[2].equals(created.bsmArgs[2])
 					|| !Type.getReturnType(indy.desc).equals(Type.getReturnType(created.desc))) continue;
-			if (reference != null) return declined(why, "the merged " + mergedHost.name + " makes more than one metafactory call of that functional shape");
+			if (reference != null) return declined(why, "the current " + mergedHost.name + " makes more than one metafactory call of that functional shape");
 			reference = indy;
 		}
 		if (reference == null || !(reference.bsmArgs[1] instanceof Handle handle) || !sameConsumer(created, reference))
-			return declined(why, reference == null ? "the merged " + mergedHost.name + " makes no metafactory call of that functional shape" : "the merged method reference is handed to another consumer");
+			return declined(why, reference == null ? "the current " + mergedHost.name + " makes no metafactory call of that functional shape" : "the current method reference is handed to another consumer");
 		// A method reference to another class's instance method on its captured receiver; or one already materialized by an
 		// earlier read of this mixin: a static method of the class that hands its parameters, unchanged, to such a method.
 		Handle method = handle;
@@ -243,12 +243,12 @@ public final class CarrierMethodReferences {
 			materialized = true;
 		}
 		if (method == null || method.getOwner().equals(merged.name) || method.getTag() != Opcodes.H_INVOKEINTERFACE && method.getTag() != Opcodes.H_INVOKEVIRTUAL)
-			return declined(why, "the merged reference is not to another class's instance method" + (materialized ? " (its materialized thunk does not forward)" : ""));
+			return declined(why, "the current reference is not to another class's instance method" + (materialized ? " (its materialized thunk does not forward)" : ""));
 
 		// Captures: the reference's receiver is the lambda's first capture; the lambda captures exactly one boolean more.
 		Type[] lambdaCaptures = Type.getArgumentTypes(created.desc), referenceCaptures = Type.getArgumentTypes(reference.desc);
 		if (referenceCaptures.length != (materialized ? 2 : 1) || lambdaCaptures.length != 2 || !lambdaCaptures[1].equals(Type.BOOLEAN_TYPE))
-			return declined(why, "the captures differ: native " + created.desc + ", merged " + reference.desc);
+			return declined(why, "the captures differ: native " + created.desc + ", current " + reference.desc);
 		List<NativeCallChanges.Expr> nativeCaptures = captures(original.name, nativeHost, created), mergedCaptures = captures(merged.name, mergedHost, reference);
 		if (nativeCaptures == null || mergedCaptures == null || !nativeCaptures.getFirst().equals(mergedCaptures.getFirst())
 				|| materialized && !nativeCaptures.equals(mergedCaptures))
@@ -257,10 +257,10 @@ public final class CarrierMethodReferences {
 		List<Integer> slots = new ArrayList<>();
 		if (!materialized) {
 			Map<Integer, NativeCallChanges.Expr> held = NativeCallChanges.localsAt(merged.name, mergedHost, reference);
-			if (held == null) return declined(why, "the merged " + mergedHost.name + "'s locals at the reference cannot be read");
+			if (held == null) return declined(why, "the current " + mergedHost.name + "'s locals at the reference cannot be read");
 			for (int slot : MixinLocalOriginProof.typedSlots(mergedHost, mergedHost.instructions.indexOf(reference), Type.BOOLEAN_TYPE, false))
 				if (folded.equals(held.get(slot))) slots.add(slot);
-			if (slots.size() != 1) return declined(why, slots.size() + " boolean locals of the merged " + mergedHost.name + " hold the lambda's captured value at the reference (one is needed)");
+			if (slots.size() != 1) return declined(why, slots.size() + " boolean locals of the current " + mergedHost.name + " hold the lambda's captured value at the reference (one is needed)");
 		}
 		// The lambda's parameters: its captures, then the functional arguments, which the reference hands its call.
 		Type[] lambdaParameters = Type.getArgumentTypes(lambda.desc), samArguments = ((Type) created.bsmArgs[2]).getArgumentTypes();

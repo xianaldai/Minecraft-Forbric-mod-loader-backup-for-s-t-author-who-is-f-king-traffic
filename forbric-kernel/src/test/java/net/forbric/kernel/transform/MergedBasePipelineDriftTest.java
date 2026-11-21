@@ -55,7 +55,7 @@ import org.objectweb.asm.tree.VarInsnNode;
 /**
  * The census that found the two defects nothing else could see, kept runnable.
  *
- * <p>The merged base's Minecraft half comes out of NeoForge's decompile-recompile pipeline, so it is not vanilla's
+ * <p>NeoForge's patched game, the staged base, comes out of its decompile-recompile pipeline, so it is not vanilla's
  * bytecode even where nobody patched anything. {@code merge-conflicts.txt} reports conflicts by REFERENCE — which
  * is the right signal for a merge, and structurally blind to a method that names no ecosystem class and came back
  * computing something else. Two did: {@code nextDouble()} rounding through float, and the radians-to-degrees
@@ -71,7 +71,7 @@ import org.objectweb.asm.tree.VarInsnNode;
  * one. ~1s over 94k methods.
  */
 class MergedBasePipelineDriftTest {
-	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED_BASE = TestFixtures.stagedBase();
 	private static final Path VANILLA = TestFixtures.vanillaJar();
 
 	/**
@@ -83,7 +83,7 @@ class MergedBasePipelineDriftTest {
 	 *
 	 * <ul>
 	 * <li>{@code Goat.finalizeSpawn} compares a float against 0.1f. Vanilla widens both sides and compares in
-	 * double ({@code f2d; ldc2_w 0.10000000149011612; dcmpg}); the merged base compares in float
+	 * double ({@code f2d; ldc2_w 0.10000000149011612; dcmpg}); NeoForge's patched game compares in float
 	 * ({@code ldc 0.1f; fcmpg}). {@code f2d} is exact and order-preserving, {@code 0.10000000149011612} IS
 	 * {@code (double)0.1f}, and {@code dcmpg} and {@code fcmpg} agree on NaN — identical for every input.</li>
 	 * <li>{@code ServerboundSelectKnownPacks.<clinit>} 64 → 1024 and {@code ModelDiscovery$ModelWrapper} 7 → 8
@@ -118,7 +118,7 @@ class MergedBasePipelineDriftTest {
 
 	@Test
 	void everyNumericDifferenceFromVanillaIsOneTheKernelRepairs() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "merged base not staged: " + MERGED_BASE);
+		TestFixtures.requireFile(Fixture.STAGED, MERGED_BASE, "base not staged: " + MERGED_BASE);
 		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(VANILLA), "no vanilla 26.2 jar at " + VANILLA);
 
 		List<String> unrepaired = new ArrayList<>();
@@ -167,7 +167,7 @@ class MergedBasePipelineDriftTest {
 		assertTrue(repaired.size() >= 2, "the census found " + repaired.size() + " repaired numeric differences; the "
 				+ "two known ones (nextDouble and the radians-to-degrees constant) must still be found, or this "
 				+ "test has stopped looking at what it was written for");
-		assertEquals(List.of(), unrepaired, "the merged base computes something vanilla does not, in a method no "
+		assertEquals(List.of(), unrepaired, "the staged base computes something vanilla does not, in a method no "
 				+ "repair covers. Either add a repair, or add it to ARGUED with the argument for why "
 				+ "it is not pipeline drift");
 	}

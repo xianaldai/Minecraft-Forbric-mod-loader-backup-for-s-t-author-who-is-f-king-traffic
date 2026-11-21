@@ -16,7 +16,6 @@
 
 package net.forbric.kernel.boot;
 
-import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -67,6 +66,15 @@ public final class KernelRuntimeClasses {
 		 * fabric-api, which is a mod the user installs rather than a staged artifact.
 		 */
 		GENERATED,
+		/**
+		 * Compiled into {@code forbric-kernel-runtime.jar} like {@link #COMPILED}, but implementing an API that only an
+		 * installed mod -- or the kernel's stand-in for it -- defines, so whether it LINKS is a property of the launch,
+		 * not of the build. {@link #verify} checks that it is packed and never loads it: loading it on a launch without
+		 * that API would fail for no fault of the build, and loading it on one with the API would define the mod's
+		 * interface at boot for no reason. Its source is not in {@code src/runtime/java} but in the source set that
+		 * compiles against the API.
+		 */
+		PACKED,
 	}
 
 	/**
@@ -86,12 +94,6 @@ public final class KernelRuntimeClasses {
 	private static final Map<String, Entry> CLASSES = new LinkedHashMap<>();
 
 	static {
-		// Bytecode readers compose the two native part arrays without choosing an entity family.
-		CLASSES.put("net.forbric.kernel.runtime.KernelMultipartViews", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelModifiableDataViews", new Entry(Origin.COMPILED, List.of()));
-		// The full-power game-side lookup Forge's EventBus needs to spin listener lambdas. See KernelGameLookup.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameLookupHelper", new Entry(Origin.COMPILED, List.of(
-				new Call("lookup", MethodHandles.Lookup.class))));
 		// The mod-container factory: the whole IModInfo/IModFileInfo/IModFile/IConfigurable chain plus the
 		// ModContainer itself. Only this entry point is named from the boot side; the five classes behind it are
 		// reached through it, game-side, with the compiler checking every call. See KernelModContainerFactory.
@@ -100,36 +102,12 @@ public final class KernelRuntimeClasses {
 				new Call("container", Object.class, String.class, Object.class, Path.class, Object.class),
 				new Call("modInfo", Object.class, String.class, Path.class),
 				new Call("minecraftContainer", Object.class))));
-		// The traditional-Forge loading context: BusGroup + FMLModContainer + FMLJavaModLoadingContext, and the
-		// IModInfo they carry. A separate factory from KernelContainers because traditional Forge differs from
-		// NeoForge at every joint the kernel touches. See KernelForgeModContext.
-		// Its one entry point takes six GAME types, which cannot be named from here — the descriptor the
-		// transformer writes is the contract, and TransformerAnchorCensusTest is what holds the two in step.
-		CLASSES.put("net.forbric.kernel.runtime.KernelItemTooltips", new Entry(Origin.COMPILED, List.of()));
 		// Every parameter is Object (netty is not on the runtime source set's compile path), so the call CAN be
 		// checked: a rename on either side becomes one line at the top of the log instead of an AbstractMethodError
 		// inside the netty pipeline.
 		CLASSES.put("net.forbric.kernel.runtime.KernelPacketContext", new Entry(Origin.COMPILED, List.of(
 				new Call("encodeInFabricContext", void.class, Object.class, Object.class, Object.class,
 						Object.class))));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeContainers", new Entry(Origin.COMPILED, List.of(
-				new Call("create", KernelForgeModContext.Handle.class, String.class),
-				new Call("lowCode", Object.class, String.class, Path.class),
-				new Call("setActiveContainer", void.class, Object.class),
-				new Call("constructMod", Object.class, String.class, KernelForgeModContext.Handle.class),
-				new Call("startup", void.class, Object.class))));
-		// The traditional-Forge setup phases: build one mod-lifecycle event, post it at every MinecraftForge mod,
-		// drain the stage's deferred queue. Separate from KernelForgeContainers because a phase is a different
-		// question from a container, and because this one names six event types a NeoForge-only instance must never
-		// be made to resolve. See KernelForgeSetup.
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeSetup", new Entry(Origin.COMPILED, List.of(
-				new Call("firePhase", int.class, List.class, net.forbric.api.ForeignType.class, String.class))));
-		// Which registries traditional Forge's RegisterEvent is posted for, and how one is built and posted. The
-		// dispatch LOOP stays boot-side (KernelForgeModContext.dispatchIsolated) because it names no game type and
-		// the per-(registry, mod) isolation is the property worth asserting off-game. See KernelForgeRegistries.
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeRegistries", new Entry(Origin.COMPILED, List.of(
-				new Call("targets", List.class),
-				new Call("post", void.class, Object.class, Object[].class))));
 		// Serving a Forge-family mod jar's own data/ to the server datapack repository. The POLICY — which jars
 		// carry data, who owns them, what each pack is called and how they stack — stays boot-side in
 		// KernelDataPacks, where it names no game type and is tested as such. See KernelDataPackSource.
@@ -137,6 +115,11 @@ public final class KernelRuntimeClasses {
 				new Call("buildPack", Object.class, String.class, Path.class, Object.class),
 				new Call("buildPack", Object.class, String.class, Path.class, Object.class, String.class, String.class, String.class),
 				new Call("addSource", void.class, Object.class, List.class, String.class))));
+		// Renaming, in a world's saved pack lists, the NeoForge carrier's pack id an earlier install wrote (D43;
+		// v0.3.1-beta2 or older, or a 0.4.0-dev build that still had MinecraftForge). Called from the head of
+		// MinecraftServer.configurePackRepository with its WorldDataConfiguration, a game type no JDK type stands for;
+		// the rule itself is boot-side (KernelDataPacks.migrateCarrierIds).
+		CLASSES.put("net.forbric.kernel.runtime.KernelCarrierPackIds", new Entry(Origin.COMPILED, List.of()));
 		// Serving an ecosystem jar's assets/ to the CLIENT resource repository: every Pack, the visible parent
 		// that lets a player's own pack sit above mod textures, the overlay count and the RepositorySource. The
 		// policy stays boot-side in KernelClientPacks. See KernelClientPackSource.
@@ -149,19 +132,12 @@ public final class KernelRuntimeClasses {
 		// hand-ordered in KernelLifecycle.closeRegistrationWindow and stays there; only what each DOES is here.
 		// See KernelRegistryContent.
 		CLASSES.put("net.forbric.kernel.runtime.KernelRegistryContent", new Entry(Origin.COMPILED, List.of(
-				new Call("rebuildBlockStateIds", int.class),
-				new Call("rebuildFlowerPotTable", int.class),
 				new Call("initialiseBlockStateCaches", int.class),
 				new Call("initialiseBlockInfoCaches", boolean.class),
 				new Call("sortCreativeTabs", void.class),
 				new Call("startCreativeTabProbe", void.class),
 				new Call("linkBlockItems", int.class),
 				new Call("logRegisteredContent", void.class))));
-		// Called from MinecraftForge's item callbacks (BlockItemLinkInjector): the live item registry's block->item map is
-		// Item.BY_BLOCK. Object-typed on purpose — linking this class here must load no game class. See KernelBlockItemLinks.
-		CLASSES.put("net.forbric.kernel.runtime.KernelBlockItemLinks", new Entry(Origin.COMPILED, List.of(
-				new Call("blockToItemMap", Object.class, Object.class, Object.class),
-				new Call("clear", void.class, Object.class, Object.class))));
 		// Loading NeoForge's configs: the early pass and the late pass that catches what it could not have seen.
 		// WHICH types each covers stays boot-side, where lateConfigTypes has a test. See KernelConfigLoad.
 		// Key mappings a mod registered on a bus that is not in ModList, so the one fan-out from Options.<init>
@@ -171,321 +147,139 @@ public final class KernelRuntimeClasses {
 		CLASSES.put("net.forbric.kernel.runtime.KernelConfigLoad", new Entry(Origin.COMPILED, List.of(
 				new Call("loadEarly", void.class, List.class),
 				new Call("openLate", List.class, List.class))));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeConfigLoad", new Entry(Origin.COMPILED, List.of(
-				new Call("loadEarly", void.class, List.class),
-				new Call("openLate", List.class, List.class))));
 		// Called by game bytecode; its signatures name Minecraft client types, not boot-side seam types.
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeClientInit", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelCompatibilityPrompts", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.soak.ClientSoakController", new Entry(Origin.COMPILED,
 				List.of(new Call("onTick", void.class, Object.class))));
-		CLASSES.put("net.forbric.kernel.runtime.KernelPortalSpawn", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put(KernelTransferInterop.BRIDGE, new Entry(Origin.COMPILED, List.of(new Call("install", void.class, boolean.class))));
+		CLASSES.put(KernelTransferInterop.BRIDGE, new Entry(Origin.COMPILED, List.of(new Call("install", void.class))));
 		CLASSES.put(KernelTransferInterop.ISSUES, new Entry(Origin.COMPILED,
 				List.of(new Call("setReporter", void.class, java.util.function.Consumer.class))));
 		// Only required, loaded and verified when Team Reborn Energy is installed: its signatures stay free of Reborn
 		// types, but its body is the one place that links against them.
 		CLASSES.put(KernelTransferInterop.ENERGY, new Entry(Origin.COMPILED, List.of(new Call("install", void.class))));
-		// Called by the merged HopperBlockEntity's bytecode (HopperFabricStorageInjector); required whenever
+		// Called by NeoForge's HopperBlockEntity's bytecode (HopperFabricStorageInjector); required whenever
 		// fabric-transfer-api and NeoForge's hopper are both present, with or without the bridge.
 		CLASSES.put(KernelTransferInterop.HOPPER, new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put(KernelTransferInterop.TRANSACTIONS, new Entry(Origin.COMPILED, List.of(
 				new Call("beforeOpen", void.class), new Call("beforeClose", void.class, Object.class, boolean.class),
 				new Call("afterClose", void.class, Object.class, Throwable.class),
 				new Call("fabricFinal", void.class, Object.class, Object.class), new Call("neoFinal", void.class, Object.class))));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeReload", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelLootBridge", new Entry(Origin.COMPILED, List.of(
-				new Call("install", void.class))));
+		// The loot-table chain (NeoForge, then Fabric) is routed to by LootTableEventBridgeInjector and named by nothing else.
+		CLASSES.put("net.forbric.kernel.runtime.KernelLootBridge", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelLootModifiers", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelFeatureFlags", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelSnippets", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelWidenedFields", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeIngredients", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeFluids", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeModelData", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeWorldgen", new Entry(Origin.COMPILED, List.of(
-				new Call("declareForgeModifierRegistries", void.class, Object.class))));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeCapabilities", new Entry(Origin.COMPILED, List.of(
-				new Call("injectCapabilities", int.class))));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeBlockColors", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeOptions", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeClientConsumers", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeCreativeTabs", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelCreativeSearch", new Entry(Origin.COMPILED, List.of()));
-		// Also asked by the lifecycle: hold MinecraftForge's half while a client's Forge mods wait for Minecraft.<init>,
-		// then post it once they exist.
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeSpawnPlacements", new Entry(Origin.COMPILED, List.of(
-				new Call("holdForgeHalf", void.class), new Call("postForgeHalf", void.class))));
-		// The NeoForge setup phases. A twin of KernelForgeSetup rather than a merge of it: NeoForge dispatches on
-		// a per-mod IEventBus while EventBus 7 resolves a bus from the EVENT plus that mod's BusGroup, and folding
-		// the two would be the averaging-away ForeignType's javadoc warns about. See KernelNeoSetup.
+		// The NeoForge setup phases: NeoForge dispatches on a per-mod IEventBus. See KernelNeoSetup.
 		CLASSES.put("net.forbric.kernel.runtime.KernelNeoSetup", new Entry(Origin.COMPILED, List.of(
 				new Call("firePhase", int.class, Map.class, net.forbric.api.ForeignType.class, String.class))));
-		// NeoForge's registry phase: NewRegistryEvent, then RegisterEvent for every registry in NeoForge's own
-		// order. The twin of KernelForgeRegistries; which buses and which order stay boot-side, as does the
-		// unfreeze/freeze window it all runs inside. See KernelNeoRegistries.
+		// The client's end of a mod-loading stop after the registry phase: ClientModLoader.finish's handler. See
+		// KernelNeoClientStop and KernelLifecycle.onNeoClientSetup.
+		CLASSES.put("net.forbric.kernel.runtime.KernelNeoClientStop", new Entry(Origin.COMPILED, List.of(
+				new Call("asClientModLoaderFinishDoes", void.class, Throwable.class))));
+		// NeoForge's registry phase: NewRegistryEvent on the mods' buses. RegisterEvent is posted by NeoForge's own
+		// GameData.postRegisterEvents (RegisterEventsSeam); which buses stay boot-side, as does the unfreeze/freeze
+		// window it all runs inside. See KernelNeoRegistries.
 		CLASSES.put("net.forbric.kernel.runtime.KernelNeoRegistries", new Entry(Origin.COMPILED, List.of(
-				new Call("collect", List.class, boolean.class),
-				new Call("fireRegisterEvents", int.class, List.class, List.class),
 				new Call("postNewRegistryEvent", int.class, List.class))));
 		// Materialises the kernel's own annotation scan into NeoForge's ModFileScanData. The scan itself is
 		// boot-side bytecode work; only this last step needs game types. See ModFileScanner.
 		CLASSES.put("net.forbric.kernel.runtime.KernelScanData", new Entry(Origin.COMPILED, List.of(
 				new Call("build", Object.class, List.class, List.class))));
-		// The same scan, materialised into MinecraftForge's own ModFileScanData. A second compiled file rather
-		// than a shared reflective builder: the two SPIs are separate classes with identical shapes, and javac
-		// checking each against the one it targets is the only thing that stops a reorder from going quiet.
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeScanData", new Entry(Origin.COMPILED, List.of(
-				new Call("build", Object.class, List.class, List.class))));
-		// Fills the client ResourceManager with its selected packs before mod setup, because MinecraftForge runs
-		// mod loading inside the first resource reload and the kernel's window is before it. See KernelClientResources.
-		CLASSES.put("net.forbric.kernel.runtime.KernelClientResources", new Entry(Origin.COMPILED, List.of(
-				new Call("preload", int.class))));
-		// The Neo->Forge server-tick re-emission. Two entries rather than one taking the kind, because the two
-		// MinecraftForge hooks share a descriptor and a crossed pairing would compile. See KernelGameTickEvents.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameTickEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installPre", void.class, Object.class),
-				new Call("installPost", void.class, Object.class),
-				new Call("installLevelPre", void.class, Object.class),
-				new Call("installLevelPost", void.class, Object.class),
-				new Call("installPlayerPre", void.class, Object.class),
-				new Call("installPlayerPost", void.class, Object.class))));
-		// Commands and the player lifecycle: the merged base calls only NeoForge's hooks at those sites.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGamePlayerEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installCommands", void.class, Object.class),
-				new Call("installLoggedIn", void.class, Object.class),
-				new Call("installLoggedOut", void.class, Object.class),
-				new Call("installRespawn", void.class, Object.class),
-				new Call("installChangedDimension", void.class, Object.class))));
-		// The cancellable entity events: these carry a MinecraftForge mod's veto back onto the NeoForge event,
-		// so a renamed entry point costs a whole class of mods their ability to say no.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameEntityEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installLivingDeath", void.class, Object.class),
-				new Call("installLivingDrops", void.class, Object.class),
-				new Call("installEntityJoinLevel", void.class, Object.class))));
-		// The client connection lifecycle and client commands, for MinecraftForge mods; client-only (names NeoForge's
-		// client event package).
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameClientNetworkEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installLoggingIn", void.class, Object.class),
-				new Call("installLoggingOut", void.class, Object.class),
-				new Call("installClone", void.class, Object.class),
-				new Call("installClientCommands", void.class, Object.class))));
-		// What a player keeps: respawn copy, experience drop, explosion, brewing registration (MinecraftForge side).
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameServerEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installPlayerClone", void.class, Object.class),
-				new Call("installExperienceDrop", void.class, Object.class),
-				new Call("installExplosionDetonate", void.class, Object.class),
-				new Call("installBrewingRecipes", void.class, Object.class))));
-		// Chat, input, fog, FOV, overlays, boss bar and screen drawing for MinecraftForge mods; client-only.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameClientEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installChatReceived", void.class, Object.class),
-				new Call("installChatSend", void.class, Object.class),
-				new Call("installKey", void.class, Object.class),
-				new Call("installScreenInitPre", void.class, Object.class),
-				new Call("installScreenInitPost", void.class, Object.class),
-				new Call("installScreenKeyPressedPre", void.class, Object.class),
-				new Call("installScreenKeyPressedPost", void.class, Object.class),
-				new Call("installScreenKeyReleasedPre", void.class, Object.class),
-				new Call("installScreenKeyReleasedPost", void.class, Object.class),
-				new Call("installMouseButtonPre", void.class, Object.class),
-				new Call("installInteractionKey", void.class, Object.class),
-				new Call("installRenderFog", void.class, Object.class),
-				new Call("installFogColor", void.class, Object.class),
-				new Call("installFovModifier", void.class, Object.class),
-				new Call("installBlockOverlay", void.class, Object.class),
-				new Call("installBossEventProgress", void.class, Object.class),
-				new Call("installScreenRenderPre", void.class, Object.class),
-				new Call("installScreenRenderPost", void.class, Object.class))));
-		// An atlas stitched and the models baked, on NeoForge's mod bus, for MinecraftForge mods; client-only.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameClientResourceEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installStitched", void.class, Object.class),
-				new Call("installBaked", void.class, Object.class))));
-		// The rest of the world and entity events the merged game posts only NeoForge's version of (MinecraftForge side).
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameWorldEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installChunkLoad", void.class, Object.class),
-				new Call("installChunkUnload", void.class, Object.class),
-				new Call("installEntityLeaveLevel", void.class, Object.class),
-				new Call("installEnteringSection", void.class, Object.class),
-				new Call("installPlayerWakeUp", void.class, Object.class),
-				new Call("installTagsUpdated", void.class, Object.class),
-				new Call("installEffectAdded", void.class, Object.class),
-				new Call("installEffectExpired", void.class, Object.class),
-				new Call("installEffectApplicable", void.class, Object.class),
-				new Call("installConversionPre", void.class, Object.class),
-				new Call("installConversionPost", void.class, Object.class),
-				new Call("installProjectileImpact", void.class, Object.class),
-				new Call("installFarmlandTrample", void.class, Object.class),
-				new Call("installPermissionsChanged", void.class, Object.class),
-				new Call("installCommand", void.class, Object.class),
-				new Call("installEntityInteractSpecific", void.class, Object.class),
-				new Call("installHeal", void.class, Object.class),
-				new Call("installVisibility", void.class, Object.class),
-				new Call("installCriticalHit", void.class, Object.class),
-				new Call("installAnvilUpdate", void.class, Object.class),
-				new Call("installAnvilRepair", void.class, Object.class),
-				new Call("installToolModification", void.class, Object.class))));
-		// MinecraftForge's PlayLevelSoundEvent from NeoForge's, at every place the merged game plays a sound.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameSoundEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installAtEntity", void.class, Object.class),
-				new Call("installAtPosition", void.class, Object.class))));
-		// NeoForge's conversion Post (and MinecraftForge's, through the forward) from the merged Zombie's Forge lambdas.
-		CLASSES.put("net.forbric.kernel.runtime.KernelConversions", new Entry(Origin.COMPILED, List.of()));
 		// A Fabric mod's creative tabs placed by the Fabric pager's rule in NeoForge's order; CreativeTabOrderInjector calls place.
 		CLASSES.put("net.forbric.kernel.runtime.KernelCreativeTabOrder", new Entry(Origin.COMPILED, List.of()));
 		// fabric-content-registries' fuel events on NeoForge's fuel builder; FabricFuelValuesInjector calls apply.
 		CLASSES.put("net.forbric.kernel.runtime.KernelFabricFuel", new Entry(Origin.COMPILED, List.of()));
 		// Fabric's fluid models for NeoForge's completeness check; FabricFluidModelsInjector calls hasModel.
 		CLASSES.put("net.forbric.kernel.runtime.KernelFabricFluidModels", new Entry(Origin.COMPILED, List.of()));
-		// Vanilla's compostables map behind NeoForge's data map: the merged ComposterBlock's bootStrap records vanilla's
+		// Vanilla's compostables map behind NeoForge's data map: NeoForge's ComposterBlock's bootStrap records vanilla's
 		// own entries and its four composter sites ask the rest (CompostablesFallbackInjector); no boot-side call.
 		CLASSES.put("net.forbric.kernel.runtime.KernelCompostables", new Entry(Origin.COMPILED, List.of()));
-		// NeoForge's item tooltip appenders, built once from the kernel's copy of postRegisterEvents' tail; also the
+		// NeoForge's item tooltip appenders, built once from postRegisterEvents' own tail step (RegisterEventsSeam); also the
 		// per-container delivery NeoTooltipAppendersInjector sends ItemTooltipHandler.init's event through.
 		CLASSES.put("net.forbric.kernel.runtime.KernelNeoTooltips", new Entry(Origin.COMPILED, List.of(
 				new Call("init", void.class))));
-		// A MinecraftForge brewing recipe as NeoForge's registry reads it; wrapped in PotionBrewing.Builder.add.
-		CLASSES.put("net.forbric.kernel.runtime.KernelBrewing", new Entry(Origin.COMPILED, List.of()));
 		// NeoForge's recipe-sync payload without the recipes their own serializer cannot encode; CommonHooks.sendRecipes.
 		CLASSES.put("net.forbric.kernel.runtime.KernelRecipeSync", new Entry(Origin.COMPILED, List.of()));
-		// MinecraftForge's attack, shield, knockback and fall events off NeoForge's at the same positions.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameDamageEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installLivingAttack", void.class, Object.class),
-				new Call("installShieldBlock", void.class, Object.class),
-				new Call("installKnockBack", void.class, Object.class),
-				new Call("installFall", void.class, Object.class))));
-		// The cancellable BLOCK events, apart from the entity ones because they name NeoForge's block-event
-		// package; a renamed entry point here is a protection mod that stops protecting, silently.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameBlockEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installBlockBreak", void.class, Object.class),
-				new Call("installRightClickBlock", void.class, Object.class),
-				new Call("installLeftClickBlock", void.class, Object.class),
-				new Call("installRightClickItem", void.class, Object.class),
-				new Call("installEntityPlace", void.class, Object.class))));
-		// MinecraftForge's picture-in-picture renderers. The merged GuiRenderer's constructor and close() call these
+		// Vanilla's plain picture-in-picture map. NeoForge's GuiRenderer's constructor and close() call these
 		// directly, so a renamed entry point here is a NoSuchMethodError inside the game's own constructor. complete()
 		// is not listed: it takes Guava's ImmutableMap.Builder, a game-side type this boot class cannot name.
 		CLASSES.put("net.forbric.kernel.runtime.KernelForgePipRenderers", new Entry(Origin.COMPILED, List.of(
-				new Call("build", java.util.Map.class),
 				new Call("build", java.util.Map.class, List.class),
 				new Call("poolRegistrations", List.class, List.class),
 				new Call("close", void.class, java.util.Map.class))));
-		// MinecraftForge's HUD overlay stack, which the merged base has no reference to at all. Client only, and
-		// a renamed entry point here is a mod's overlay silently not drawing.
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeOverlayLayers", new Entry(Origin.COMPILED, List.of(
-				new Call("install", void.class, Object.class))));
-		// The CLIENT tick, in its own class because it names NeoForge's client event package — a dedicated server
-		// must never be made to resolve those types, and keeping them apart means it never loads the class.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameClientTickEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installPre", void.class, Object.class),
-				new Call("installPost", void.class, Object.class))));
-		// The Neo->Forge RENDER FRAME re-emission. Its own entry for the same reason the client tick has one
-		// separate from the game tick: it names a different NeoForge client event, and a carrier missing that
-		// type must not take the tick bridge down with it.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameRenderFrameEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installPre", void.class, Object.class),
-				new Call("installPost", void.class, Object.class))));
-		// The Neo->Forge SCREEN MOUSE re-emission. Its own entry again: the merged MouseHandler is a third
-		// producer, separate from the client tick and the render frame, and a carrier missing NeoForge's screen
-		// event types must cost only this family rather than the two beside it.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameScreenMouseEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installPressedPre", void.class, Object.class),
-				new Call("installReleasedPre", void.class, Object.class),
-				new Call("installDragPre", void.class, Object.class),
-				new Call("installScrollPost", void.class, Object.class))));
-		// The Neo->Forge LEVEL LIFECYCLE re-emission. Its own entry for the same reason: load/unload/save are
-		// posted from Minecraft, ClientLevel, MinecraftServer and ServerLevel, a producer set shared with none
-		// of the bridges above, so a carrier missing NeoForge's level event types must cost only this family.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameLevelEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installLevelLoad", void.class, Object.class),
-				new Call("installLevelUnload", void.class, Object.class),
-				new Call("installLevelSave", void.class, Object.class))));
-		// The bridges whose MinecraftForge hook returns a value, kept apart from the observing ones because
-		// dropping that value is a different and worse failure than not bridging at all.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameResultBridges", new Entry(Origin.COMPILED, List.of(
-				new Call("installItemUseFinish", void.class, Object.class),
-				new Call("installPortalSpawn", void.class, Object.class))));
-		// Entity tracking, bridged as a pair: start without stop is a leak rather than a silence.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGamePlayerTrackingEvents", new Entry(Origin.COMPILED, List.of(
-				new Call("installStartTracking", void.class, Object.class),
-				new Call("installStopTracking", void.class, Object.class))));
-		// The Neo->Forge server start/stop re-emission, which also opens MinecraftForge's login gate. Separate
-		// from the tick bridge so a carrier missing one pair's types cannot take the other down with it.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameServerLifecycle", new Entry(Origin.COMPILED, List.of(
+		// The kernel's own server duties (KernelServerDutiesInstaller): the game instance, the server-started work, the
+		// experience relay; and the
+		// compatibility tick, an ASM owner the tick return seam calls (ServerCompatibilityTickInjector).
+		CLASSES.put("net.forbric.kernel.runtime.KernelServerDuties", new Entry(Origin.COMPILED, List.of(
 				new Call("onCompatibilityTick", void.class, Object.class),
-				new Call("installStarting", void.class, Object.class),
-				new Call("installStarted", void.class, Object.class),
-				new Call("installStopping", void.class, Object.class),
-				new Call("installStopped", void.class, Object.class))));
-		// MinecraftForge's about-to-start, forwarded in three separately guarded pieces because its middle
-		// piece always throws under the kernel. See KernelGameServerAboutToStart.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameServerAboutToStart", new Entry(Origin.COMPILED, List.of(
-				new Call("install", void.class, Object.class),
-				new Call("forgetCurrentServer", void.class))));
-		// The unified Mods screen. Named by ModsButtonRedirector as an ASM internal name rather than called, so
-		// it has no Call entries — the seam is the class existing and carrying a (Screen) constructor, and a
-		// missing runtime jar would otherwise surface as a NoClassDefFoundError the moment a player opens the
-		// pause menu.
-		CLASSES.put("net.forbric.kernel.runtime.KernelModListScreen", new Entry(Origin.COMPILED, List.of()));
+				new Call("installGameInstance", void.class, Object.class),
+				new Call("installStartedDuties", void.class, Object.class),
+				new Call("installExperienceRelay", void.class, Object.class))));
+		// The unified Mods screen. Named by ModsButtonRedirector as an ASM internal name rather than called — the seam
+		// is the class existing and carrying a (Screen) constructor, and a missing runtime jar would otherwise surface
+		// as a NoClassDefFoundError the moment a player opens the pause menu. Its two calls are the client smoke's.
+		CLASSES.put("net.forbric.kernel.runtime.KernelModListScreen", new Entry(Origin.COMPILED, List.of(
+				// Read back by the client smoke's mods-screen check: frames drawn and rows built.
+				new Call("framesDrawn", int.class),
+				new Call("rowsBuilt", int.class))));
 		// The three config-screen registries behind that screen's Config button. Called by the client smoke,
 		// which is the only thing that can prove a screen belonging to another mod actually opens.
 		CLASSES.put("net.forbric.kernel.runtime.KernelModConfigScreens", new Entry(Origin.COMPILED, List.of(
 				new Call("summary", String.class),
 				new Call("firstWithConfig", net.forbric.api.ModCatalog.Entry.class, String.class),
-				new Call("openById", Object.class, String.class, Object.class))));
-		// The only MOD-bus bridge: Forge's client reload listeners into NeoForge's sorted graph.
-		CLASSES.put("net.forbric.kernel.runtime.KernelGameClientReload", new Entry(Origin.COMPILED, List.of(
-				new Call("install", void.class, Object.class))));
-		// The MinecraftForge face of KeyMapping: the merged class kept both ecosystems' key-conflict fields and
-		// only NeoForge's accessors, and only NeoForge's are read. See ForbricMergedBaseCompatTransformer.
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeKeyBindings", new Entry(Origin.COMPILED, List.of(
-				new Call("toNeoContext", Object.class, Object.class),
-				new Call("toForgeContext", Object.class, Object.class),
-				new Call("toNeoModifier", Object.class, Object.class),
-				new Call("toNeoModifierFor", Object.class, Object.class, Object.class, Object.class),
-				new Call("toForgeModifier", Object.class, Object.class))));
+				new Call("openById", Object.class, String.class, Object.class),
+				// The client smoke's config walk asks it of every row the Mods screen's list widget holds.
+				new Call("has", boolean.class, net.forbric.kernel.ui.ModListRows.Row.class))));
+		// The kernel's own "modmenu" entrypoint, which the fabricloader built-in declares on a client
+		// (KernelFabricEcosystem.loaderEntrypoints); Mod Menu constructs it, nothing calls it by name. PACKED: it
+		// implements Mod Menu's API, which exists only when Mod Menu or the kernel's stand-in does.
+		CLASSES.put("net.forbric.kernel.runtime.modmenu.KernelModMenuPlugin", new Entry(Origin.PACKED, List.of()));
 		// The ABI shim's landing site: ForgeConfigAPIPort's registrations, re-aimed at the real ConfigTracker.
 		// Named by ConfigApiAbiInjector as generated bytecode, so it needs an entry here to stay honest.
 		CLASSES.put("net.forbric.kernel.runtime.KernelConfigApiBridge", new Entry(Origin.COMPILED, List.of()));
-		// The merged base's ParticleResources carries two same-named `providers` fields — vanilla's int-keyed one
-		// and NeoForge's Identifier-keyed one — and only NeoForge's is written. This turns the other into a live
+		// ParticleResources carries two same-named `providers` fields — vanilla's int-keyed one (VanillaMemberTwinInjector's
+		// twin) and NeoForge's Identifier-keyed one — and only NeoForge's is written. This turns the other into a live
 		// view of it, because fabric-api reads that field DIRECTLY.
 		CLASSES.put("net.forbric.kernel.runtime.KernelParticleProviders", new Entry(Origin.COMPILED, List.of(
-				new Call("intKeyedView", Object.class, java.util.Map.class))));
-		// Both ecosystems re-type KeyMapping's vanilla MAP to their own KeyMappingLookup and the merge keeps neither
+				new Call("intKeyedView", Object.class, java.util.Map.class),
+				// Asked at the head of fabric-registry-sync's Int2ObjectMapTracker.register (ParticleViewTrackerInjector):
+				// the view's int keys follow the registry by construction, so its remap tracker is not attached.
+				new Call("followsTheRegistry", boolean.class, Object.class, String.class))));
+		// NeoForge re-types KeyMapping's vanilla MAP to its own KeyMappingLookup and keeps neither
 		// vanilla's descriptor nor a value for it; a mod reading it as a Map died. The transformer adds the field back
 		// and this is its value: a view of vanilla's ALL by key.
 		CLASSES.put("net.forbric.kernel.runtime.KernelKeyMappingMap", new Entry(Origin.COMPILED, List.of(
 				new Call("vanillaView", Object.class, java.util.Map.class))));
-		// NeoForge worldgen the merge left with no driver: its data maps (nothing named DataMapLoader at all),
-		// its biome/structure modifier pass, and the monster-room mob pick that the kernel used to answer by
-		// neutering the whole dungeon feature. Its two entry points are called from REWRITTEN CALL SITES, so
-		// their descriptors are the ones the merged base and the carrier already had — game types, not the JDK
-		// types this registry's own seams use. Listed with no calls for that reason, as KernelConfigApiBridge is.
+		// NeoForge worldgen the kernel drives itself: its biome/structure modifier pass, guarded, and the monster-room
+		// mob pick, which draws vanilla's while NeoForge's data map is its default. Its two entry points are called from
+		// REWRITTEN CALL SITES, so their descriptors are the ones the base and the carrier already had — game types, not
+		// the JDK types this registry's own seams use. Listed with no calls for that reason, as KernelConfigApiBridge is.
 		CLASSES.put("net.forbric.kernel.runtime.KernelNeoWorldgen", new Entry(Origin.COMPILED, List.of()));
-		// Called from an inserted instruction in FuelValues.burnDuration, not from boot code, so there is no
-		// entry point to declare — only that the class has to be here for the redirect to land on something.
-		CLASSES.put("net.forbric.kernel.runtime.KernelFuelValues", new Entry(Origin.COMPILED, List.of()));
-		// Same shape as the one above: reached from a redirected instruction in BaseSpawner, not from boot code.
-		CLASSES.put("net.forbric.kernel.runtime.KernelSpawnerFinalize", new Entry(Origin.COMPILED, List.of()));
+		// ChunkGenerator.refreshFeaturesPerStep's body when a Fabric mod replaced the feature list NeoForge casts to its Lazy;
+		// called from the instruction FeaturesPerStepRefreshInjector writes there, with that method's game-typed descriptor.
+		CLASSES.put("net.forbric.kernel.runtime.KernelFeaturesPerStep", new Entry(Origin.COMPILED, List.of()));
 		// Called from the position check SpawnPositionCallsInjector writes into BaseSpawner.serverTick.
 		CLASSES.put("net.forbric.kernel.runtime.KernelSpawnPosition", new Entry(Origin.COMPILED, List.of()));
-		// NeoForge's coremods, done after Mixin (NativeCoremodParity) and before it (FlowerPotRepairInjector,
-		// BiomeInfoRebaseInjector): the call targets and helpers they route to.
-		CLASSES.put("net.forbric.kernel.runtime.KernelFinalizeSpawn", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelFlowerPots", new Entry(Origin.COMPILED, List.of()));
+		// NeoForge's coremods, done after Mixin (NativeCoremodParity) and before it (BiomeInfoRebaseInjector): the helper
+		// they route to.
 		CLASSES.put("net.forbric.kernel.runtime.KernelBiomeView", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelPackFinders", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelNeoDataMapWatch", new Entry(Origin.COMPILED, List.of(
 				new Call("installDataMapWatch", void.class, Object.class))));
-		// NeoForge's condition evaluator runs over every datapack element from every pack in the merged base, so
+		// NeoForge's condition evaluator runs over every datapack element from every pack in the base, so
 		// a Fabric mod's own condition id failed the whole registry load. This wraps ICondition.CODEC; the call
 		// site is an inserted instruction in that class's <clinit>, in Codec, which no JDK type can stand for.
 		CLASSES.put("net.forbric.kernel.runtime.KernelNeoConditions", new Entry(Origin.COMPILED, List.of()));
-		// The THIRD evaluator, and the one nothing covered: the merged ResourceManagerRegistryLoadTask.load calls
-		// MinecraftForge's ConditionCodec.wrap while its own lambda builds NeoForge's ConditionalOps, and LootPool
-		// names the MinecraftForge one too. Same shape as above, same reason it carries no stand-in descriptor.
-		// poolElementCodec is called from NeoForge's rewritten lootPoolsCodec (ForgeLootPoolConditionsInjector).
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeConditions", new Entry(Origin.COMPILED, List.of()));
+		// Which pack the data file being decoded came from, so that leniency applies to a Fabric mod's pack only (D69);
+		// called from the instruction the compat transformer puts at the head of Resource.open().
+		CLASSES.put("net.forbric.kernel.runtime.KernelConditionSources", new Entry(Origin.COMPILED, List.of()));
+		// A Fabric mod's PoiTypes.registerBlockStates on the states NeoForge's PoiType add-callback already mapped to the same
+		// type; called by the instruction the compat transformer puts at the head of that method. And the PoI table NeoForge's
+		// own writers (the callback, PoiTypeExtender) write when a mod replaced PoiTypes.TYPE_BY_STATE; called after each
+		// read of NeoForge's map there.
+		CLASSES.put("net.forbric.kernel.runtime.KernelPoiStates", new Entry(Origin.COMPILED, List.of(
+				new Call("beforeRegisterBlockStates", void.class, java.util.Map.class, Object.class, java.util.Set.class),
+				new Call("liveTable", java.util.Map.class, java.util.Map.class))));
 		// The reordering Operation a wrapped @WrapOperation handler receives; called from the outer handler
 		// MixinWrapOperationShim writes into a guest mixin, so there is no boot-side entry point.
 		CLASSES.put("net.forbric.kernel.runtime.KernelWrapOperations", new Entry(Origin.COMPILED, List.of()));
@@ -495,60 +289,53 @@ public final class KernelRuntimeClasses {
 		// The vanilla-shaped Operation a Fabric shears wrap is handed at the carrier's canPerformAction; called from the
 		// outer handler MixinShearsRelay writes into the guest mixin.
 		CLASSES.put("net.forbric.kernel.runtime.KernelShears", new Entry(Origin.COMPILED, List.of()));
-		// Asked by the merged Fluid.getFluidType() (ForeignFluidTypeInjector) before NeoForge's throwing lookup, and by
+		// Vanilla's is() and NeoForge's shearing entry for a Fabric shears wrap of a sheep's or snow golem's mobInteract;
+		// called from the HEAD inject MixinShearsRelay writes into the guest mixin.
+		CLASSES.put("net.forbric.kernel.runtime.KernelMobShears", new Entry(Origin.COMPILED, List.of()));
+		// Whether vanilla's shouldSpreadLiquid reaches its lava-meets-water reaction for a cell; asked by the neighbour-change
+		// wrap MixinFluidReactionAdapter writes into a guest mixin of LiquidBlock.
+		CLASSES.put("net.forbric.kernel.runtime.KernelFluidReactions", new Entry(Origin.COMPILED, List.of()));
+		// The vanilla-shaped player and Operation a Fabric damage wrap is handed at NeoForge's LivingEntity overload of
+		// ItemStack.hurtAndBreak; called from the outer handler FabricItemDamageMixinAdapter writes into the guest mixin.
+		CLASSES.put("net.forbric.kernel.runtime.KernelItemDamage", new Entry(Origin.COMPILED, List.of()));
+		// Asked by Fluid.getFluidType() (ForeignFluidTypeInjector) before NeoForge's throwing lookup, and by
 		// EntityFluidInteraction.getFluidTypeByTag before its throw (FabricFluidBehaviorInjector).
 		CLASSES.put("net.forbric.kernel.runtime.KernelFluidTypes", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelFabricTagViews", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelTagFacadeSources", new Entry(Origin.COMPILED, List.of()));
-		// The shared breathe hook preserves the original drowning query and corrects adapter refill before its event.
-		CLASSES.put("net.forbric.kernel.runtime.KernelFluidBreathing", new Entry(Origin.COMPILED, List.of()));
+		// Asked by NeoForge's breathing hook where it would hold the air of a body that breathes in its fluid (VanillaAirRefillInjector),
+		// and by the cross-host predicate island's protected decision: the refill vanilla gives there.
+		CLASSES.put("net.forbric.kernel.runtime.KernelAirRefill", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelFluidPredicateSeams", new Entry(Origin.COMPILED, List.of()));
 		// A class that reads [modproperties] out of a Forge-family ModList calls these instead of that ModList
 		// (DeclarationReaderModListInjector). Rewritten calls with the family's own ModList/IModInfo descriptors.
 		CLASSES.put("net.forbric.kernel.runtime.KernelDeclarationReaders", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeDeclarationReaders", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelSharedPredicateScopes", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelFluidPredicateIslands", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelSourceDecodeScopes", new Entry(Origin.COMPILED, List.of()));
-		// Asked in NeoForge's FluidInteractionRegistry.canInteract at each neighbour its own rules missed, handed
-		// MinecraftForge's map by its initializer and told of each addInteraction (FluidInteractionsInjector). Inserted
-		// calls with game-typed descriptors.
-		CLASSES.put("net.forbric.kernel.runtime.KernelFluidInteractions", new Entry(Origin.COMPILED, List.of()));
-		// Called from NeoForge's ParticleEngine constructor after its group event (ParticleGroupsInjector).
-		CLASSES.put("net.forbric.kernel.runtime.KernelParticleGroups", new Entry(Origin.COMPILED, List.of()));
-		// MinecraftForge's Hurt, Damage and player Attack, from the seams ForgeDamageSeamsInjector writes into the merged
-		// actuallyHurt and Player.hurtServer; Player.<clinit> reports the attack seam in.
+		// The vanilla damage reads VanillaDamageReadInjector routes through it (vanillaRead / absorbedRead).
 		CLASSES.put("net.forbric.kernel.runtime.KernelLivingDamage", new Entry(Origin.COMPILED, List.of()));
 		// NeoForge's CustomPacketPayload.codec calls through(), and vanilla's asks protocol()/flow(): every payload codec
 		// is built through vanilla's overload again (PayloadCodecFunnelInjector). Inserted calls, game-typed descriptors.
 		CLASSES.put("net.forbric.kernel.runtime.KernelPayloadCodecs", new Entry(Origin.COMPILED, List.of()));
-		// NeoForge's ScreenEvent.Opening/Closing from the merged (MinecraftForge) Gui.setScreen; NeoScreenEventsInjector.
-		CLASSES.put("net.forbric.kernel.runtime.KernelScreenEvents", new Entry(Origin.COMPILED, List.of()));
 		// FabricCreativeModeInventoryScreen answered from NeoForge's pager: the bodies CreativePagerBridgeInjector gives
 		// the creative screen call the first, and the screen implements the second. Descriptors name game types only.
 		CLASSES.put("net.forbric.kernel.runtime.KernelCreativePager", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelCreativePagerScreen", new Entry(Origin.COMPILED, List.of()));
-		// Both ecosystems collect mod entity attributes into a map of their own and the merge kept only NeoForge's
-		// reader in DefaultAttributes, so a traditional MinecraftForge mod's entities had no attributes at all.
-		// attributesView() is called from a REWRITTEN CALL SITE and so carries the descriptor that site had.
-		CLASSES.put("net.forbric.kernel.runtime.KernelForgeAttributes", new Entry(Origin.COMPILED, List.of(
-				new Call("fireForgeAttributeEvents", void.class), new Call("holdValidation", void.class),
-				new Call("releaseValidation", void.class))));
 		// NeoForge refuses to NAME a client reload listener a mixin added, and throws inside Minecraft.<init>.
 		// Called from a REWRITTEN CALL SITE, so it carries that site's game-typed descriptor.
 		CLASSES.put("net.forbric.kernel.runtime.KernelClientReloadNames", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelServerReloadNames", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelBlockSoundQuery", new Entry(Origin.COMPILED, List.of()));
 		CLASSES.put("net.forbric.kernel.runtime.KernelHudContextQuery", new Entry(Origin.COMPILED, List.of()));
-		CLASSES.put("net.forbric.kernel.runtime.IdentityValueBiMap", new Entry(Origin.COMPILED, List.of()));
-		// fabric-api's own two mixins for fabric:load_conditions cannot apply on the merged base, so nothing
+		// fabric-api's own two mixins for fabric:load_conditions cannot apply on NeoForge's base, so nothing
 		// evaluated them. Wrapped into ConditionalOps' one codec factory by an inserted instruction, in Codec,
 		// which no JDK type can stand for.
 		CLASSES.put("net.forbric.kernel.runtime.KernelFabricConditions", new Entry(Origin.COMPILED, List.of()));
 		// NeoForge's model deserializer throws on a loader it did not register and never reads fabric:type. Called
 		// from an inserted instruction ahead of its dispatch, with the JsonObject and context NeoForge holds there.
 		CLASSES.put("net.forbric.kernel.runtime.KernelModelFormats", new Entry(Origin.COMPILED, List.of()));
-		// fabric-model-loading replaces the merged block-state codecs outright; FabricBlockStateCodecMixinAdapter makes
+		// fabric-model-loading replaces NeoForge's block-state codecs outright; FabricBlockStateCodecMixinAdapter makes
 		// its two redirect handlers keep NeoForge's and call this with both. Codec-typed, from guest mixin code.
 		CLASSES.put("net.forbric.kernel.runtime.KernelBlockStateModelFormats", new Entry(Origin.COMPILED, List.of()));
 		// Between a NeoForge mod's getContextClassLoader() and its cast to FML's TransformingClassLoader
@@ -578,6 +365,11 @@ public final class KernelRuntimeClasses {
 						|| KernelTransferInterop.optionalRuntimeActive(e.getKey()))
 				.map(Map.Entry::getKey)
 				.toList();
+	}
+
+	/** The names that must be packed in an owned jar but are never loaded by {@link #verify}: see {@link Origin#PACKED}. */
+	public static List<String> packed() {
+		return CLASSES.entrySet().stream().filter(e -> e.getValue().origin() == Origin.PACKED).map(Map.Entry::getKey).toList();
 	}
 
 	/** The calls the boot side makes on {@code binaryName}; empty if it is not registered. */
@@ -662,7 +454,16 @@ public final class KernelRuntimeClasses {
 			ok++;
 		}
 
-		if (ok == names.size()) {
+		boolean allPacked = true;
+		for (String name : packed()) {
+			if (loader.findResource(name.replace('.', '/') + ".class") != null) continue;
+			allPacked = false;
+			ForbricLog.error("[Forbric/Runtime] the kernel's own game-side class %s is in no owned jar. It is not loaded "
+					+ "at boot (it implements a mod's API), so nothing else would notice until that mod asked for it. Fix: "
+					+ "rebuild with ./gradlew jar on a machine with the staged game artifacts", name);
+		}
+
+		if (ok == names.size() && allPacked) {
 			ForbricLog.info("[Forbric/Runtime] game-side kernel classes: %d/%d linked", ok, names.size());
 			return true;
 		}

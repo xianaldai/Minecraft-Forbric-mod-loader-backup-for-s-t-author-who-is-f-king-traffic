@@ -54,6 +54,26 @@ class CrashAttributionTest {
 	private static final String WORLDGEN = "crash-2026-07-12_13.23.39-client.txt";
 	/** Mixin naming the mod that failed to apply, from the old forbric-loader (the repository's crash/ folder). */
 	private static final String MIXIN_APPLY = "crash-report.txt";
+	/**
+	 * NeoForge's mod-loading crash report from a Forbric server whose NeoForge mod's RegisterEvent listener threw
+	 * (gate-m24's register-stop canary): above the divider only "Mod loading has failed"; the mod is named in
+	 * {@code -- Mod loading issue for: forbricregisterstop --}.
+	 */
+	private static final String NEO_ISSUE_SERVER = "crash-2026-11-15_14.36.11-fml.txt";
+	/** The same report for a throw inside NeoForge's registration try: {@code -- Mod loading issue --}, no mod attached. */
+	private static final String NEO_ISSUE_UNATTACHED = "crash-2026-11-15_14.52.06-fml.txt";
+	/** The client's crash report for the same listener: the mod only in the ModLoadingException's issue lines. */
+	private static final String NEO_ISSUE_CLIENT = "crash-2026-11-15_14.57.44-client.txt";
+
+	/** The register-stop canary and the two healthy mods staged beside it in those runs. */
+	private static void publishRegisterStopRun() {
+		ModCatalog.publish(List.of(
+				new ModCatalog.Entry(Ecosystem.NEOFORGE, "forbricregisterstop", "Forbric Register Stop Canary", "1.0.0", "",
+						List.of(), "forbricregisterstop.jar", "", ""),
+				new ModCatalog.Entry(Ecosystem.NEOFORGE, "forbricneolive", "Forbric Neo Live", "1.0.0", "", List.of(),
+						"forbricneolive.jar", "", ""),
+				mod("forbricfabriclive", "Forbric Fabric Live", "forbricfabriclive.jar")));
+	}
 
 	@AfterEach
 	void clearCatalogue() {
@@ -101,7 +121,7 @@ class CrashAttributionTest {
 
 	@Test
 	void everyFixtureKeepsTheSectionsTheAttributionMustIgnore() throws Exception {
-		for (String name : List.of(CORE_LIB, WORLDGEN, MIXIN_APPLY)) {
+		for (String name : List.of(CORE_LIB, WORLDGEN, MIXIN_APPLY, NEO_ISSUE_SERVER, NEO_ISSUE_UNATTACHED, NEO_ISSUE_CLIENT)) {
 			String text = report(name);
 			assertTrue(CrashAttribution.exceptionChain(text).length() < text.length(), name);
 		}
@@ -234,6 +254,98 @@ class CrashAttributionTest {
 		// Everything below the divider is Minecraft's own report -- thread dumps, the mod lists, the graphics
 		// card. A mod named there is named for being installed, not for being involved.
 		assertFalse(chain.contains("Mod List:"), "the mod list is not evidence");
+	}
+
+	@Test
+	void neoForgesModLoadingIssueSectionNamesTheMod() throws Exception {
+		publishRegisterStopRun();
+
+		List<CrashAttribution.Suspect> suspects = CrashAttribution.suspects(report(NEO_ISSUE_SERVER));
+
+		assertEquals(List.of("forbricregisterstop"), suspects.stream().map(CrashAttribution.Suspect::modId).toList(),
+				"NeoForge wrote the failing mod under its issue section, and nothing above the divider: " + suspects);
+		assertEquals(CrashAttribution.NEOFORGE_ISSUE, suspects.get(0).reason());
+		assertEquals("forbricregisterstop.jar", suspects.get(0).jar());
+		assertTrue(CrashAttribution.render(false, NEO_ISSUE_SERVER, suspects).contains("(forbricregisterstop)"));
+		assertTrue(CrashAttribution.render(true, NEO_ISSUE_SERVER, suspects).contains("NeoForge 的模组加载报错里点了它的名字"));
+	}
+
+	@Test
+	void anIssueNoModIsAttachedToIsReadThroughItsOwnTrace() throws Exception {
+		publishRegisterStopRun();
+
+		List<CrashAttribution.Suspect> suspects = CrashAttribution.suspects(report(NEO_ISSUE_UNATTACHED));
+
+		// "-- Mod loading issue --" carries no id; its stack trace is the failure's, and the top frame is the mod's
+		// mixin handler inside NeoForge's GameData.
+		assertEquals(List.of("forbricregisterstop"), suspects.stream().map(CrashAttribution.Suspect::modId).toList(),
+				suspects.toString());
+		assertEquals("its mixin was running", suspects.get(0).reason());
+	}
+
+	@Test
+	void aClientsModLoadingErrorNamesTheModInItsIssueLines() throws Exception {
+		publishRegisterStopRun();
+
+		List<CrashAttribution.Suspect> suspects = CrashAttribution.suspects(report(NEO_ISSUE_CLIENT));
+
+		// "net.neoforged.fml.ModLoadingException: Loading errors encountered:" then "\t- Forbric Register Stop Canary
+		// (forbricregisterstop) encountered an error while dispatching ..." — every frame is NeoForge's or the kernel's.
+		assertEquals(List.of("forbricregisterstop"), suspects.stream().map(CrashAttribution.Suspect::modId).toList(),
+				suspects.toString());
+		assertEquals(CrashAttribution.NEOFORGE_ISSUE, suspects.get(0).reason());
+	}
+
+	/**
+	 * A client stopped by a throw no mod's listener made (here a guest's mixin inside NeoForge's per-registry try): NeoForge's
+	 * issue is "An uncaught parallel processing error has occurred." with the cause's message only, and the client's crash
+	 * report ({@code CrashReport.forThrowable} of the {@code ModLoadingException}, which has no cause) has no trace of it, so
+	 * the report alone names nobody (K3c open item 6). NeoForge keeps the cause in its own loading issues, which is what its
+	 * fatal-error window shows; read with them — rendered as NeoForge renders a cause, here the server's own rendering of
+	 * the same throw — the mod's mixin handler names it.
+	 */
+	@Test
+	void aClientsUncaughtLoadingErrorIsReadThroughNeoForgesOwnRecordOfIt() throws Exception {
+		publishRegisterStopRun();
+		String listener = report(NEO_ISSUE_CLIENT);
+		String issue = listener.substring(listener.indexOf("\t- Forbric Register Stop Canary"), listener.indexOf("\n\n\tat "));
+		String client = listener.replace(issue, "\t- An uncaught parallel processing error has occurred.\n\t  java.lang.IllegalStateException: "
+				+ "forbricregisterstop's GameData.postRegisterEvents mixin fails on purpose after minecraft:item's dispatch");
+		String server = report(NEO_ISSUE_UNATTACHED);
+		String cause = server.substring(server.indexOf("\nStacktrace:", server.indexOf("-- Mod loading issue --")) + "\nStacktrace:".length(),
+				server.indexOf("\n\n\n-- System Details --"));
+
+		assertEquals(List.of(), CrashAttribution.suspects(client), "the premise: the client's report alone names nobody");
+		List<CrashAttribution.Suspect> suspects = CrashAttribution.suspects(client, "\njava.lang.IllegalStateException: "
+				+ "forbricregisterstop's GameData.postRegisterEvents mixin fails on purpose after minecraft:item's dispatch" + cause);
+		assertEquals(List.of("forbricregisterstop"), suspects.stream().map(CrashAttribution.Suspect::modId).toList(),
+				suspects.toString());
+		assertEquals("its mixin was running", suspects.get(0).reason());
+	}
+
+	@Test
+	void ofTheWalkthroughOnlyNeoForgesIssueSectionsAreRead() throws Exception {
+		String whole = report(NEO_ISSUE_SERVER);
+		String issues = CrashAttribution.modLoadingIssues(whole);
+
+		assertTrue(issues.contains("-- Mod loading issue for: forbricregisterstop --"), issues);
+		assertFalse(issues.contains("-- Head --"), "the head section repeats a frame; it is not read: " + issues);
+		assertFalse(issues.contains("-- System Details --") || issues.contains("Mod List:"), issues);
+		// A report Minecraft wrote, without NeoForge's sections, reads exactly as before.
+		assertEquals("", CrashAttribution.modLoadingIssues(report(WORLDGEN)));
+	}
+
+	@Test
+	void parenthesesOutsideNeoForgesIssueLinesNameNobody() {
+		publishRegisterStopRun();
+		String report = "java.lang.IllegalStateException: broke while (forbricregisterstop) was mentioned\n"
+				+ "\tat forbric/net.minecraft.Foo.bar(Foo.java:1) ~[patched-mc-neoforge-26.2.jar:?] {}\n"
+				+ "\n\nA detailed walkthrough of the error, its code path and all known details is as follows:\n"
+				+ "---------------------------------------------------------------------------------------\n\n"
+				+ "-- System Details --\nDetails:\n\tMod List: \n\t\tforbricregisterstop.jar |Forbric Register Stop Canary |forbricregisterstop |1.0.0\n";
+
+		assertEquals(List.of(), CrashAttribution.suspects(report),
+				"an id in parentheses counts only on a NeoForge issue line; the mod list counts never");
 	}
 
 	@Test
@@ -473,5 +585,41 @@ class CrashAttributionTest {
 			if (before == null) System.clearProperty(CrashAttribution.SWITCH);
 			else System.setProperty(CrashAttribution.SWITCH, before);
 		}
+	}
+
+	/**
+	 * The whole path picks its language from the system: the same crash, written once on a Chinese system and once on an
+	 * English one. The two renderings themselves are pinned above with the language named; this pins who names it.
+	 * Red-checked: with {@code CrashAttribution.chinese()} answering false, and with the Chinese rendering's guess line
+	 * changed to English, the zh assertions failed.
+	 */
+	@Test
+	void theWholePathWritesInTheSystemLanguage() throws Exception {
+		ModCatalog.publish(List.of(mod("supermartijn642corelib", "SuperMartijn642's Core Lib",
+				"supermartijn642corelib-1.1.24a-forge-mc26.2.jar")));
+		java.util.Locale before = java.util.Locale.getDefault();
+		String zh, en;
+		try {
+			java.util.Locale.setDefault(java.util.Locale.SIMPLIFIED_CHINESE);
+			zh = analyseIn(tmp.resolve("zh"));
+			java.util.Locale.setDefault(java.util.Locale.ENGLISH);
+			en = analyseIn(tmp.resolve("en"));
+		} finally {
+			java.util.Locale.setDefault(before);
+		}
+		assertTrue(zh.contains("SuperMartijn642's Core Lib") && zh.contains("只是个猜测") && zh.contains("mods 文件夹"), zh);
+		assertFalse(zh.contains("This is a guess"), zh);
+		assertTrue(en.contains("SuperMartijn642's Core Lib") && en.contains("This is a guess") && en.contains("mods folder"), en);
+		assertFalse(en.contains("只是个猜测"), en);
+	}
+
+	/** Stages the core-lib crash report in {@code rundir}, runs the shutdown hook's body, returns what it wrote. */
+	private static String analyseIn(Path rundir) throws Exception {
+		Path dir = Files.createDirectories(rundir.resolve("crash-reports"));
+		Path staged = Files.writeString(dir.resolve(CORE_LIB), report(CORE_LIB));
+		Files.setLastModifiedTime(staged, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis()));
+		CrashAttribution.setRunDir(rundir, 0);
+		CrashAttribution.run();
+		return Files.readString(rundir.resolve(".forbric-kernel").resolve("crash-analysis.txt"), StandardCharsets.UTF_8);
 	}
 }

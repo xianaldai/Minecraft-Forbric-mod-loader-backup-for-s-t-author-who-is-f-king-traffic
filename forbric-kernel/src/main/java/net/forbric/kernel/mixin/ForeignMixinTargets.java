@@ -29,17 +29,18 @@ import java.util.Set;
 import java.util.function.Function;
 
 import com.electronwill.nightconfig.core.UnmodifiableConfig;
+import org.objectweb.asm.tree.ClassNode;
 
 import net.forbric.kernel.util.Caught;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
- * Which merged-base classes a mixin config OTHER than the one being judged also targets.
+ * Which base classes a mixin config OTHER than the one being judged also targets.
  *
- * <p>{@link MixinFit} resolves a guest mixin's anchors against the MERGED BASE, and {@link KernelGuestMixinAdapter}
+ * <p>{@link MixinFit} resolves a guest mixin's anchors against the BASE, and {@link KernelGuestMixinAdapter}
  * drops the mixin when none of them resolve ({@link MixinFit.Verdict#UNFIT}) on the reasoning that it "was going to
  * be dead weight". That reasoning has one blind spot, and it is exactly the inter-mod compatibility layer: a mixin
- * may deliberately target a member that <em>another mod's mixin adds at runtime</em>, which is not in the merged
+ * may deliberately target a member that <em>another mod's mixin adds at runtime</em>, which is not in the game
  * base and never will be.
  *
  * <p>Measured, with Physics Mod on a Sodium + Iris instance — the two mixins it needs to integrate with them are the
@@ -51,7 +52,7 @@ import net.forbric.kernel.util.ForbricLog;
  *   <li>{@code physicsmod.mixins.json:liquid.MixinProgramManager} injects {@code VertexFormat.bindAttributesIris},
  *       which <b>Iris</b> adds via its {@code MixinVertexFormat}.
  * </ul>
- * Neither member exists in the merged base, so every anchor failed to resolve, both were auto-suppressed, and
+ * Neither member exists in the game base, so every anchor failed to resolve, both were auto-suppressed, and
  * Physics Mod lost its Sodium and Iris rendering integration silently — no error, just no effects.
  *
  * <p>So the adapter asks this class first: is some other registered config also mixing into that target? If it is,
@@ -119,38 +120,74 @@ public final class ForeignMixinTargets {
 		}
 	}
 
+	/** A mixin a registered config declares for this side: its class as its jar has it, the config, and its entry there. */
+	public record Registered(ClassNode mixin, String config, String entry) {
+	}
+
+	/**
+	 * Every mixin, as its jar has it, that a registered config declares for this side: what {@link NativeCallInlining}
+	 * reads as the other mixins a call it would put back may belong to, before their configs are planned. Each config is
+	 * read through {@code configJson} — the JSON as Mixin was served it, so a mixin the kernel already dropped is not
+	 * listed — and each mixin class through {@code resource}. Best-effort, as the index: an unreadable config or mixin is
+	 * skipped. Whether a listed mixin is still applied (a config served later may drop it) is the caller's to ask.
+	 */
+	public static List<Registered> registeredMixins(Function<String, byte[]> configJson, Function<String, byte[]> resource) {
+		List<Registered> mixins = new ArrayList<>();
+		for (String config : ForbricMixinService.registeredConfigNames()) {
+			byte[] json = configJson.apply(config);
+			if (json != null) mixinsOf(config, json, resource, (entry, mixin) -> mixins.add(new Registered(mixin, config, entry)));
+		}
+		return mixins;
+	}
+
+	/** The entries one config's JSON declares for this side (empty when it is not a mixin config). */
+	public static Set<String> declaredEntries(String name, byte[] configJson) {
+		UnmodifiableConfig config = parse(name, configJson);
+		return config == null ? Set.of() : KernelGuestMixinAdapter.appliedEntries(config, ForbricMixinService.side());
+	}
+
 	/** Every class the mixins declared by one config's JSON target. Best-effort: an unreadable entry is skipped. */
 	private static List<String> targetsOf(String name, byte[] configJson, Function<String, byte[]> resource) {
-		UnmodifiableConfig config;
+		List<String> targets = new ArrayList<>();
+		mixinsOf(name, configJson, resource, (entry, mixin) -> targets.addAll(MixinFit.mixinTargets(mixin)));
+		return targets;
+	}
+
+	private static UnmodifiableConfig parse(String name, byte[] configJson) {
 		try (Reader reader = new InputStreamReader(new ByteArrayInputStream(configJson), StandardCharsets.UTF_8)) {
-			config = MixinConfigJson.parse(reader);
+			return MixinConfigJson.parse(reader);
 		} catch (RuntimeException | java.io.IOException notAMixinConfig) {
 			Caught.warn(notAMixinConfig, "[Forbric/Mixin] could not parse mixin config %s; its targets are not indexed", name);
-			return List.of();
+			return null;
 		}
+	}
+
+	/** Each mixin one config's JSON declares for this side, parsed, handed to {@code into} with its entry. */
+	private static void mixinsOf(String name, byte[] configJson, Function<String, byte[]> resource,
+			java.util.function.BiConsumer<String, ClassNode> into) {
+		UnmodifiableConfig config = parse(name, configJson);
+		if (config == null) return;
 
 		Object pkg = config.get(List.of("package"));
-		if (pkg == null) return List.of();
+		if (pkg == null) return;
 		String pkgPath = pkg.toString().replace('.', '/');
-		if (pkgPath.isEmpty()) return List.of();
+		if (pkgPath.isEmpty()) return;
 
 		// Only what Mixin prepares on this side: a claim from another config's client array cannot keep a mixin
 		// alive on a dedicated server, where that claimer is never applied either.
 		Set<String> entries = KernelGuestMixinAdapter.appliedEntries(config, ForbricMixinService.side());
 
-		List<String> targets = new ArrayList<>();
 		for (String mixin : entries) {
 			byte[] bytes = resource.apply(pkgPath + "/" + mixin.replace('.', '/') + ".class");
 			if (bytes == null) continue;
 			try {
-				targets.addAll(MixinFit.mixinTargets(MixinFit.parse(bytes)));
+				into.accept(mixin, MixinFit.parse(bytes));
 			} catch (RuntimeException unreadable) {
 				// One unparseable mixin must not cost the whole config's contribution to the index.
 				Caught.warn(unreadable, "[Forbric/Mixin] could not read the targets of mixin %s.%s in %s; it is not indexed",
 						pkg, mixin, name);
 			}
 		}
-		return targets;
 	}
 
 }

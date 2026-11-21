@@ -35,12 +35,12 @@ public final class MixinConfigPolicy {
 	}
 
 	/**
-	 * Whether {@code config} must not be registered: either it is on the built-in merged-base incompatibility list
+	 * Whether {@code config} must not be registered: either it is on the built-in base incompatibility list
 	 * ({@link MergedBaseMixinCompat#DISABLED_CONFIGS}) or {@code -Dforbric.disableMixinConfigs} names it (csv; a
 	 * trailing {@code *} is a prefix glob).
 	 *
 	 * <p>{@code -Dforbric.enableMixinConfigs} (csv) forces a config back ON over the built-in list. That list is a
-	 * record of what was true when each entry was measured, and the merged base keeps changing underneath it — so
+	 * record of what was true when each entry was measured, and the game base keeps changing underneath it — so
 	 * re-testing an entry has to be one flag, not an edit-and-rebuild. It overrides only the built-in list, never an
 	 * explicit {@code -Dforbric.disableMixinConfigs} on the same command line.
 	 */
@@ -75,7 +75,7 @@ public final class MixinConfigPolicy {
 		for (String raw : csv.split(",")) {
 			if (config.equals(raw.trim())) {
 				ForbricLog.warn("[Forbric/Mixin] mixin config %s FORCE-ENABLED by -Dforbric.enableMixinConfigs over "
-						+ "the built-in merged-base incompatibility list — expect the recorded breakage", config);
+						+ "the built-in incompatibility list — expect the recorded breakage", config);
 				return true;
 			}
 		}

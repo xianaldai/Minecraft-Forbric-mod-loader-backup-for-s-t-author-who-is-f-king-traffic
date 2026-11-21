@@ -143,7 +143,7 @@ class GuestInjectorPrunerSpellingTest {
 	// ---------------------------------------------------------------------------------------------------------------
 	// fabric-api's two mixins, respelled
 
-	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED_BASE = TestFixtures.stagedBase();
 	private static final String MODEL_MANAGER_MIXIN = "net/fabricmc/fabric/mixin/client/model/loading/ModelManagerMixin";
 	private static final String ITEM_STACK_MIXIN = "net/fabricmc/fabric/mixin/item/ItemStackMixin";
 	private static final String MODEL_MANAGER = "net/minecraft/client/resources/model/ModelManager";
@@ -354,19 +354,19 @@ class GuestInjectorPrunerSpellingTest {
 	private static byte[] realMixin(String module, String mixin) throws Exception {
 		Path fabricApi = TestFixtures.fabricApi();
 		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(fabricApi), "fabric-api jar absent: " + fabricApi);
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent: " + MERGED_BASE);
+		TestFixtures.requireFile(Fixture.STAGED, MERGED_BASE, "staged base absent: " + MERGED_BASE);
 		byte[] bytes = readFromNestedJar(fabricApi, module, mixin + ".class");
 		TestFixtures.require(Fixture.THIRD_PARTY, bytes != null, mixin + " absent from the nested " + module + " module");
 		net.forbric.kernel.mixin.MixinStubRebind.noteEcosystem(mixin, Ecosystem.FABRIC, module + ".mixins.json");
 		return bytes;
 	}
 
-	/** The pruner over the staged merged base, with the vanilla classes the Fabric mods were compiled against. */
+	/** The pruner over the staged base, with the vanilla classes the Fabric mods were compiled against. */
 	private static GuestInjectorPruner realPruner() {
 		Function<String, ClassNode> classes = owner -> {
 			try {
 				if (owner.equals("net/neoforged/neoforge/common/tooltip/ItemTooltipHandler")) {
-					byte[] bytes = readFromJar(TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar"), owner + ".class");
+					byte[] bytes = readFromJar(TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR), owner + ".class");
 					return bytes == null ? null : read(new NeoTooltipAppendersInjector().transform(owner.replace('/', '.'), bytes, null));
 				}
 				if (owner.equals("net/fabricmc/fabric/impl/item/ItemComponentTooltipProviderRegistryImpl")) {
@@ -385,7 +385,7 @@ class GuestInjectorPrunerSpellingTest {
 			} catch (Exception unavailable) {
 				return null;
 			}
-		});
+		}, null, TestFixtures.launchSources(MERGED_BASE));
 		return new GuestInjectorPruner(classes, (mixin, owner) -> references.get(Ecosystem.FABRIC, owner));
 	}
 

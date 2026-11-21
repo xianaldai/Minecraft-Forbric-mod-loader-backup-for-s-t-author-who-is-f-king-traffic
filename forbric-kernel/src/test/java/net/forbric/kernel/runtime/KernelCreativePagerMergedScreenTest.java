@@ -29,7 +29,7 @@ import org.objectweb.asm.tree.ClassNode;
 
 /**
  * The creative pager on the REAL merged screen, in a real JVM: the merged {@code CreativeModeInventoryScreen}, put
- * through fabric-api's own class tweaker and the bridge, linked — and so verified — against the merged game, NeoForge's
+ * through fabric-api's own class tweaker and the bridge, linked — and so verified — against the patched game, NeoForge's
  * carrier and fabric-api's interface, then called the way owo-lib and a Fabric mod call it, and paged with NeoForge's
  * own button lambdas.
  *
@@ -143,14 +143,13 @@ class KernelCreativePagerMergedScreenTest {
 		return (sun.misc.Unsafe) f.get(null);
 	}
 
-	/** The merged game, both carriers, the libraries they link against, the compiled pager, and the bridged screen. */
+	/** The staged game, the NeoForge carrier, the libraries they link against, the compiled pager, and the bridged screen. */
 	private static URLClassLoader gameLoader() throws Exception {
 		Path compiled = Path.of(System.getProperty("forbric.test.runtimeClasses", "build/classes/java/runtime"));
-		Path merged = RUN.resolve("merged-base/patched-mc-merged-26.2.jar");
-		Path neo = RUN.resolve("neoforge-runtime/neoforge-runtime.jar");
-		Path forge = RUN.resolve("merged-base/forge-runtime-interop.jar");
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(merged) && Files.isRegularFile(neo) && Files.isRegularFile(forge),
-				"the staged game is absent");
+		Path merged = RUN.resolve(TestFixtures.BASE_JAR);
+		Path neo = RUN.resolve(TestFixtures.NEO_CARRIER_JAR);
+		TestFixtures.requireFiles(Fixture.STAGED,
+				"the staged game is absent", merged, neo);
 		TestFixtures.require(Fixture.GAME_SIDE, Files.isRegularFile(compiled.resolve("net/forbric/kernel/runtime/KernelCreativePager.class")),
 				"the compiled runtime set is absent");
 		Map<String, byte[]> defined = new HashMap<>();
@@ -159,7 +158,7 @@ class KernelCreativePagerMergedScreenTest {
 		defined.put(SCREEN, bridgedScreen(merged, api));
 		defined.put(PROBE, owoCall());
 
-		List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), forge.toUri().toURL(), neo.toUri().toURL(),
+		List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), neo.toUri().toURL(),
 				merged.toUri().toURL()));
 		for (String pattern : List.of("com/mojang/datafixerupper", "com/google/code/gson", "com/mojang/brigadier",
 				"com/google/guava/guava", "it/unimi/dsi/fastutil", "org/slf4j/slf4j-api", "org/apache/logging/log4j/log4j-api",
@@ -189,7 +188,7 @@ class KernelCreativePagerMergedScreenTest {
 		byte[] bytes;
 		try (ZipFile zip = new ZipFile(merged.toFile())) {
 			ZipEntry entry = zip.getEntry(SCREEN.replace('.', '/') + ".class");
-			assertNotNull(entry, "the merged base has no creative screen");
+			assertNotNull(entry, "the staged base has no creative screen");
 			bytes = zip.getInputStream(entry).readAllBytes();
 		}
 		byte[] tweaked = CreativePagerFixtures.classTweaked(SCREEN, bytes);

@@ -50,7 +50,7 @@ class DependencyDialogTest {
 	private static final DialogLang EN = DialogLang.EN;
 
 	private static Row absent() {
-		return new Row("biomesoplenty", "Biomes O' Plenty", "FORGE", "terrablender", ">=26.2.0.0.1", null);
+		return new Row("biomesoplenty", "Biomes O' Plenty", "NEOFORGE", "terrablender", ">=26.2.0.0.1", null);
 	}
 
 	private static Row wrongVersion() {
@@ -125,7 +125,7 @@ class DependencyDialogTest {
 		// And what they do NOT need there. Every one of these is true, is in the details, and is a reason the
 		// previous dialog opened looking like a stack trace.
 		assertFalse(text.contains(">=26.2.0.0.1"), "the version range belongs in the details: " + text);
-		assertFalse(text.contains("FORGE"), "the ecosystem belongs in the fixes and the details: " + text);
+		assertFalse(text.contains("NEOFORGE"), "the ecosystem belongs in the fixes and the details: " + text);
 		assertFalse(text.contains("biomesoplenty"), "the id belongs in the details: " + text);
 	}
 
@@ -135,7 +135,7 @@ class DependencyDialogTest {
 
 		// On a merged instance the pack does not tell you whether to fetch the Fabric build or the Forge one,
 		// and downloading the wrong half is the most likely way to "fix" this and still be broken.
-		assertTrue(text.contains("FORGE"), text);
+		assertTrue(text.contains("NEOFORGE"), text);
 		assertTrue(text.contains("terrablender"), text);
 		assertTrue(text.contains(">=26.2.0.0.1"), text);
 		assertTrue(text.contains("NOT INSTALLED"), text);
@@ -158,7 +158,7 @@ class DependencyDialogTest {
 		// already have.
 		String install = DependencyDialogMain.fixes(EN, List.of(absent()), List.of());
 		assertTrue(install.contains("Install terrablender"), install);
-		assertTrue(install.contains("FORGE"), "which build to fetch is the whole value of the suggestion: " + install);
+		assertTrue(install.contains("NEOFORGE"), "which build to fetch is the whole value of the suggestion: " + install);
 
 		String change = DependencyDialogMain.fixes(EN, List.of(wrongVersion()), List.of());
 		assertFalse(change.contains("Install sodium"), "sodium is installed: " + change);
@@ -626,9 +626,9 @@ class DependencyDialogTest {
 		// A Row is one REQUIREMENT. Counting rows told the player to go and fix three mods when there was one,
 		// and put a singular window title over a plural list.
 		List<Row> three = List.of(
-				new Row("biomesoplenty", "Biomes O' Plenty", "FORGE", "terrablender", "*", null),
-				new Row("biomesoplenty", "Biomes O' Plenty", "FORGE", "glitchcore", "*", null),
-				new Row("biomesoplenty", "Biomes O' Plenty", "FORGE", "curios", "*", null));
+				new Row("biomesoplenty", "Biomes O' Plenty", "NEOFORGE", "terrablender", "*", null),
+				new Row("biomesoplenty", "Biomes O' Plenty", "NEOFORGE", "glitchcore", "*", null),
+				new Row("biomesoplenty", "Biomes O' Plenty", "NEOFORGE", "curios", "*", null));
 
 		String summary = DependencyDialogMain.summary(EN, three, List.of());
 		assertTrue(summary.startsWith("One mod is missing something it requires:"), summary);
@@ -817,5 +817,33 @@ class DependencyDialogTest {
 			if (before == null) System.clearProperty(DialogLang.SWITCH);
 			else System.setProperty(DialogLang.SWITCH, before);
 		}
+	}
+
+	/**
+	 * The child's three windows take their table from {@link DependencyDialogMain#language()}, which follows the system
+	 * language when no switch is set: the words a player on a Chinese system reads in the unmet-dependency window.
+	 * Red-checked: with {@code language()} returning {@code DialogLang.EN}, and with the zh_cn table's {@code title.deps}
+	 * replaced by the English text, the zh assertions failed.
+	 */
+	@Test
+	void theChildSpeaksTheSystemLanguage() {
+		String before = System.getProperty(DialogLang.SWITCH);
+		java.util.Locale locale = java.util.Locale.getDefault();
+		DialogLang zh, en;
+		try {
+			System.clearProperty(DialogLang.SWITCH);
+			java.util.Locale.setDefault(java.util.Locale.SIMPLIFIED_CHINESE);
+			zh = DependencyDialogMain.language();
+			java.util.Locale.setDefault(java.util.Locale.ENGLISH);
+			en = DependencyDialogMain.language();
+		} finally {
+			java.util.Locale.setDefault(locale);
+			if (before == null) System.clearProperty(DialogLang.SWITCH);
+			else System.setProperty(DialogLang.SWITCH, before);
+		}
+		assertEquals("Forbric —— 有 mod 缺少它需要的前置", DependencyDialogMain.title(zh, List.of(absent()), List.of()));
+		assertTrue(DependencyDialogMain.blocks(zh, List.of(absent()), List.of()).get(0).startsWith("有 1 个 mod 缺少它需要的前置："),
+				DependencyDialogMain.blocks(zh, List.of(absent()), List.of()).toString());
+		assertEquals("Forbric — a mod is missing something it requires", DependencyDialogMain.title(en, List.of(absent()), List.of()));
 	}
 }

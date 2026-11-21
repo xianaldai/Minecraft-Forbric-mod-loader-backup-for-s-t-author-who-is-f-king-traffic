@@ -3,9 +3,10 @@
 #
 # WHY THIS EXISTS. gate-m12 proved a Forbric client can join a Forbric server; it says nothing about what that
 # client looks like to a server that is WATCHING it. Anti-cheats ban on behaviour — the movement and combat
-# packets a client emits — and the merged base those packets come out of is three patch sets byte-merged into one
-# jar (1045 resolved conflicts, plus the kernel's post-merge fixups). Any place that merge nudged movement physics
-# off vanilla would read to a prediction-based anti-cheat as "this player moves wrong", and nothing measured that.
+# packets a client emits — and the game those packets come out of is NeoForge's patched game plus the kernel's own
+# repairs and every Fabric mod's adaptation onto it (written when the base was three patch sets byte-merged into one
+# jar). Any place that nudged movement physics off vanilla would read to a prediction-based anti-cheat as "this player
+# moves wrong", and nothing measured that.
 #
 # This gate does. It boots Paper 26.2 with GrimAC (the strictest open-source prediction anti-cheat, sensitised so
 # that EVERY violation prints — see the staging step), connects a Forbric client, and drives it through the
@@ -40,9 +41,11 @@ PAPER="$DL/paper-26.2/paper-26.2-121.jar"
 GRIM="$DL/paper-26.2/grimac-bukkit-2.3.74-61caa53.jar"
 PLAYER="ForbricKernel"
 # Same client mod set as gate-m12: the question is what the CLIENT looks like on the wire, with real mods loaded.
+# Since Stage 3 of dropping MinecraftForge, mcw-bridges is its NeoForge build (same version): the MinecraftForge
+# build is refused, and the client would stop on the refusal before it ever reached the wire.
 MODS=(
   "$DL/fabric-26.2/fabric-api-0.154.0+26.2.jar"
-  "$DL/forge-26.2/mcw-bridges-3.1.2-mc26.2forge.jar"
+  "$NEO_BUILDS/mcw-bridges-3.1.2-mc26.2neoforge.jar"
   "$DL/forge-26.2/collective-26.2.0-8.39.jar"
 )
 if [ -n "${M13_MODS:-}" ]; then read -r -a MODS <<< "$M13_MODS"; fi
@@ -118,7 +121,7 @@ sleep 2
 
 step "connect the client and run the movement drill"
 # Disconnect at world tick 1100: ready at 60, the drill runs ~920 ticks after that (~48 s), then it leaves.
-FORBRIC_JVM="-Dforbric.clientSmoke=true -Dforbric.clientSmokeWorld=127.0.0.1:$PORT -Dforbric.clientSmokeReadyTicks=60 -Dforbric.clientSmokeDisconnectTicks=1100 -Dforbric.clientSmokeDrill=true -Dforbric.clientSmokeDrillControl=true ${M13_EXTRA_JVM:-}" \
+FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.clientSmoke=true -Dforbric.clientSmokeWorld=127.0.0.1:$PORT -Dforbric.clientSmokeReadyTicks=60 -Dforbric.clientSmokeDisconnectTicks=1100 -Dforbric.clientSmokeDrill=true -Dforbric.clientSmokeDrillControl=true ${M13_EXTRA_JVM:-}" \
 RUNDIR="$CLI" "$KERNEL/run/launch-kernel-client.sh" \
   --quickPlayPath "$CLI/quickPlay/log.json" --quickPlayMultiplayer "127.0.0.1:$PORT" > "$CLOG" 2>&1 &
 CLIENT_PID=$!
@@ -145,9 +148,8 @@ done
 
 step "let vanilla's post-main watchdog speak before killing anything"
 for i in $(seq 1 25); do kill -0 "$CLIENT_PID" 2>/dev/null || break; sleep 1; done
-for pid in $(pgrep -P "$CLIENT_PID" 2>/dev/null) "$CLIENT_PID"; do kill "$pid" 2>/dev/null; done
-sleep 2
-for pid in $(pgrep -P "$CLIENT_PID" 2>/dev/null) "$CLIENT_PID"; do kill -9 "$pid" 2>/dev/null; done
+stop_tree "$CLIENT_PID"   # the whole tree: lib.sh says why children-only orphans a JVM
+wait "$CLIENT_PID" 2>/dev/null
 cat "$CGAME" >> "$CLOG" 2>/dev/null || true
 
 step "stop the server"
@@ -200,8 +202,8 @@ if awk -v a="${Z0:-0}" -v b="${Z1:-0}" 'BEGIN{exit !(b - a > 5)}'; then echo "[k
 check "the pool was dug"              "Successfully filled"                               "$SLOG"
 check "the land phases were on land"  "drill phase (sprint|sprint-jump|turn|strafe|backpedal|sneak-walk|mine|place) at .*inWater=false" "$CGAME" 8
 # Holding the button down is what puts a block into the level's break-progress map, and that map is what the render
-# frame turns into a breaking overlay — the one path on the merged base where the game asked MinecraftForge for a
-# model-data manager the merge had left it without. Zero here means the frame that used to crash was never drawn.
+# frame turns into a breaking overlay — on the merged base the one path where the game asked MinecraftForge for a
+# model-data manager the merge had left it without. Zero here means that frame was never drawn.
 check "the drill actually broke ground" "ClientSmoke\] mining: [1-9][0-9]* block\(s\) showing break progress" "$CGAME"
 check "the swim phase was in water"   "drill phase swim at .*inWater=true"                "$CGAME"
 # The arena's premise, read back from the world the server saved: it generated without structures.

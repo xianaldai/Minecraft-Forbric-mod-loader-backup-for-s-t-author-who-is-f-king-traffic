@@ -18,6 +18,7 @@ forbric.blockStateIdRefill
 forbric.blockStateModelFormats
 forbric.bootJarPreload
 forbric.branding
+forbric.builderStubRebind
 forbric.c2meBlockUpdates
 forbric.carpetMixins
 forbric.carrierLanguages
@@ -259,6 +260,7 @@ forbric.modifyRegistriesEvent
 forbric.multiLoaderEntrypoints
 forbric.multiLoaderPreference
 forbric.nativeConstructorFacades
+forbric.nativeEntryRelay
 forbric.nativePredicateSeams
 forbric.nativeTagSourceFacades
 forbric.nativeTagTrackerSource

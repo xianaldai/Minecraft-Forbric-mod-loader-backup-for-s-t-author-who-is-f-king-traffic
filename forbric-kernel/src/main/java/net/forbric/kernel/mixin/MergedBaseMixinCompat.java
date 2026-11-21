@@ -34,7 +34,7 @@ public final class MergedBaseMixinCompat {
         if(configName==null||configBytes==null||resources==null)return;
         SUPPRESSED_MIXINS.removeIf(entry->entry.startsWith(configName+":"));
         FabricRegistryInitializationMixinAdapter.forgetDeferredFreezes(configName);
-        net.forbric.kernel.transform.RegistrySyncParityInjector.forgetMixins(configName);
+        net.forbric.kernel.transform.RegistryRemapContracts.forgetMixins(configName);
         PINNED_CONTRACTS.removeIf(row->row.pin().startsWith(configName+":"));
         REASONS.keySet().removeIf(entry->entry.startsWith(configName+":"));
         SOURCES.keySet().removeIf(entry->entry.startsWith(configName+":"));
@@ -53,7 +53,7 @@ public final class MergedBaseMixinCompat {
                     ClassNode node=new ClassNode();new org.objectweb.asm.ClassReader(bytes).accept(node,org.objectweb.asm.ClassReader.EXPAND_FRAMES);
                     String identity=configName+":"+entry;SOURCES.put(identity,node.name.replace('/','.'));
                     FabricRegistryInitializationMixinAdapter.noteDeferredFreeze(configName,node,family,natives);
-                    net.forbric.kernel.transform.RegistrySyncParityInjector.noteMixin(configName,node,resources);
+                    net.forbric.kernel.transform.RegistryRemapContracts.noteMixin(configName,node,resources);
                     FabricCreativePagerMixinAdapter.noteSelectionHooks(node);
                     if(FabricCreativePagerMixinAdapter.matches(node))FabricCreativePagerMixinAdapter.noteGuestControls(node,
                             withCode(resources.apply(FabricCreativePagerMixinAdapter.TARGET+".class")),
@@ -104,7 +104,7 @@ public final class MergedBaseMixinCompat {
      * A source that fires the loot reload's public events itself, from the class whose reload the kernel's loot bridge
      * fires them for, and whose callback group was not proved for the generated helper (another build, a fork, a
      * recompile). The bridge then asks fabric-loot-api's public events itself, so they still fire once: a source left in
-     * would fire them a second time, or half-apply on the reordered merged lambdas. Decided by what the source dispatches,
+     * would fire them a second time, or half-apply on the reordered current lambdas. Decided by what the source dispatches,
      * never by which build of which module it is; the injectors that neither dispatch nor share the dispatchers' state
      * are named in the reason, since they go with it.
      */

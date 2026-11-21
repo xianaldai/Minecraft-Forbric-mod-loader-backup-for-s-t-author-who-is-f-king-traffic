@@ -17,8 +17,8 @@ java {
 	targetCompatibility = JavaVersion.VERSION_21
 }
 
-// Staged local artifacts the GAME-side (runtime) source set links against, compileOnly. Produced by the shared
-// forbric-loader pipeline (kept as-is): run/build-merged-base.sh + run/assemble-{minecraftforge,neoforge}-runtime.sh.
+// Staged local artifacts the GAME-side (runtime) source set links against, compileOnly: NeoForge's patched game (NFRT's
+// gameJarNoRecomp output) and the NeoForge carrier, staged by prepareDev / `python3 tools/dev.py prepare` (DevPrepare).
 // These are LGPL / Mojang-derived and are NEVER bundled — compileOnly linkage only, runtime-supplied by the user
 // or installer, exactly as the old system does. The kernel stays base-jar-parametric at launch (--gameJar).
 //
@@ -31,12 +31,13 @@ java {
 def devStage = file('.dev/staged/run')
 def stagedRoot         = file(project.findProperty('forbric.stagedRoot')
 		?: (System.getenv('FORBRIC_OLD') ? System.getenv('FORBRIC_OLD') + '/run'
-				: (new File(devStage, 'merged-base/patched-mc-merged-26.2.jar').isFile() ? devStage : '../forbric-loader/run')))
-def stagedMergedBase   = new File(stagedRoot, 'merged-base/patched-mc-merged-26.2.jar')
-def stagedForgeRuntime = new File(stagedRoot, 'forge-runtime/forge-runtime.jar')
+				: (new File(devStage, 'neoforge-patched/patched-mc-neoforge-26.2.jar').isFile() ? devStage : '../forbric-loader/run')))
+def stagedBase         = new File(stagedRoot, 'neoforge-patched/patched-mc-neoforge-26.2.jar')
 def stagedNeoRuntime   = new File(stagedRoot, 'neoforge-runtime/neoforge-runtime.jar')
-def stagedGameJars = [stagedMergedBase, stagedForgeRuntime, stagedNeoRuntime].findAll { it.isFile() }
-
+// A staged root is complete with the base and the NeoForge carrier, the two jars the game side links against and the
+// kernel launches (--gameJar, --runtimeJar). There is no third: Forbric no longer has a MinecraftForge carrier.
+def stagedGameJars = [stagedBase, stagedNeoRuntime].findAll { it.isFile() }
+def stagedGameComplete = stagedBase.isFile() && stagedNeoRuntime.isFile()
 // Compile the transfer bridge against the exact API staged for the compatibility pack. These modules remain
 // supplied by the installed Fabric API mod; none is bundled in either kernel jar.
 //
@@ -145,7 +146,7 @@ def stagedMcLibraries = lastByNameUnder('com/mojang/brigadier/**/*.jar') +
 		lastByNameUnder('io/netty/netty-buffer/**/*.jar') +
 		lastByNameUnder('io/netty/netty-common/**/*.jar')
 
-// LazyOptional's real carrier implementation uses Commons Lang's Mutable types, and every Team Reborn Energy store
+// The transfer engines load game classes that link Minecraft's own libraries, and every Team Reborn Energy store
 // initialises Reborn's EnergyStorage interface, whose static fields build an Identifier and a DataComponentType
 // (netty, joml, ...). Resolve Minecraft 26.2's OWN library set from its version JSON (the one launch-kernel-server.sh
 // puts on the game's classpath), rather than a stub or whichever cached jar happens to sort last. This is test
@@ -197,7 +198,25 @@ sourceSets {
 		java { srcDir 'src/modmenuApi/java' }
 		compileClasspath += sourceSets.runtime.output + sourceSets.main.output + files(stagedGameJars) + files(stagedMcLibraries)
 	}
+	// The kernel's own "modmenu" entrypoint (KernelModMenuPlugin): game-side code that IMPLEMENTS Mod Menu's API, so it
+	// compiles against the stand-in above and links at run time against whichever ModMenuApi the game loader defines --
+	// a real Mod Menu's, or the stand-in. Its own set, because the stand-in's must hold the API package and nothing else.
+	// Shipped as ordinary classes in the game-side jar: they are net.forbric names, and nothing of Mod Menu's.
+	modMenuPlugin {
+		java { srcDir 'src/modmenuPlugin/java' }
+		compileClasspath += sourceSets.modMenuApi.output + sourceSets.runtime.output + sourceSets.main.output + files(stagedGameJars) + files(stagedMcLibraries)
+	}
 }
+
+// The vanilla-reference sidecar is WRITTEN by the installer, on the player's machine, and READ here
+// (NativeReferenceSources). Its writer is one self-contained, JDK-only file, and the tests compile that very file: the
+// tests build the staged base's sidecar with the writer the installer ships (TestFixtures.vanillaReference), because a
+// read-only staged root has no sidecar of its own that is known to match it.
+def installerSidecarSource = tasks.register('installerSidecarSource', Sync) {
+	from('../forbric-kernel-installer/src/main/java') { include 'net/forbric/installer/kernel/VanillaReference.java' }
+	into layout.buildDirectory.dir('generated/installer-sidecar')
+}
+sourceSets.test.java.srcDir(installerSidecarSource)
 
 repositories {
 	maven {
@@ -260,10 +279,6 @@ dependencies {
 	// javac's need to READ the class files, which is all this is for, so the pin is about reproducibility.
 	runtimeCompileOnly 'com.google.guava:guava:33.6.0-jre'
 
-	// JOML, GAME side only, on the same terms: fog data carries its colour as a Vector4f, and the MinecraftForge fog
-	// event KernelGameClientEvents posts takes it. Pinned to the version Minecraft 26.2 lists.
-	runtimeCompileOnly('org.joml:joml:1.10.8') { transitive = false }
-
 	testImplementation "org.junit.jupiter:junit-jupiter:${project.junit_version}"
 	// Compiled against too: FixturePolicyExtensionTest launches a nested run to prove the suite loads its extension.
 	testImplementation 'org.junit.platform:junit-platform-launcher'
@@ -286,8 +301,9 @@ tasks.named('compileRuntimeJava') {
 	}
 	// Here rather than in extractTransferApis: with no jar that task has no source, and Gradle skips it unrun.
 	doFirst {
-		if (stagedGameJars.size() != 3) throw new GradleException("Incomplete staged game inputs: "
-				+ stagedGameJars.size() + "/3 under ${stagedRoot}. Run prepareDev before building the game side.")
+		if (!stagedGameComplete) throw new GradleException("Incomplete staged game inputs: "
+				+ stagedGameJars*.name + " under ${stagedRoot}, which needs at least the base and the NeoForge carrier. "
+				+ "Run prepareDev before building the game side.")
 		if (!stagedFabricApi.isFile()) throw new GradleException("The kernel game side includes its transfer " +
 				"component and compiles it against Fabric API's transfer modules, but ${stagedFabricApi} does not " +
 				"exist. Pass -Pforbric.fabricApi=<a fabric-api jar for 26.2> (the compatibility pack's is the default).")
@@ -315,19 +331,27 @@ tasks.named('compileRuntimeJava') { dependsOn verifyRebornEnergy }
 tasks.named('compileModMenuApiJava') {
 	onlyIf { !stagedGameJars.isEmpty() }
 }
+tasks.named('compileModMenuPluginJava') {
+	onlyIf { !stagedGameJars.isEmpty() }
+}
 
 test {
 	useJUnitPlatform()
-	// Gradle's default test-worker heap is 512 MB. Several staged tests hold the whole merged base in memory
-	// (ForgeCapabilityProtocolTest, ModifiableDataViewsTransformerTest, ForgeCapabilityTokenInjectorExecutionTest,
-	// FurnaceTickCallsInjectorTest: 480-509 MB live, measured with -Xlog:gc), so the default left a few MB of headroom
-	// and a G1 humongous allocation after an unrelated test could end the worker with OutOfMemoryError.
+	// Gradle's default test-worker heap is 512 MB. Several staged tests held the whole merged base in memory (the
+	// MinecraftForge capability tests and FurnaceTickCallsInjectorTest: 480-509 MB live, measured with -Xlog:gc), so the
+	// default left a few MB of headroom and a G1 humongous allocation after an unrelated test could end the worker with
+	// OutOfMemoryError. Kept at 1g on the genuine base until the remaining staged tests are re-measured (C5).
 	maxHeapSize = '1g'
+	// Test classes are spread over several worker JVMs. In one fork the suite took 838 s of wall time for 496 s of
+	// summed class time on a 10-core machine (gate-m0, 2026-11-15), and it runs several times per development round.
+	// -Pforbric.testForks=1 is the old single-JVM run, for a test suspected of depending on another class's state.
+	maxParallelForks = (project.findProperty('forbric.testForks') ?: Math.max(1, Math.min(4, Runtime.runtime.availableProcessors().intdiv(2)))) as int
 	// A gate that runs this suite (m0) exports FORBRIC_CAUGHT_FILE for the game JVMs it starts. The failures these tests
 	// cause on purpose are not the game's, and CaughtErrorsExtension already judges every one of them per test.
 	environment 'FORBRIC_CAUGHT_FILE', ''
-	// Transport proofs need the new hash-indexed base; an old base is an explicit negative control.
-	def predicateBase = file(project.findProperty('forbric.predicateBase') ?: stagedMergedBase)
+	// The base the transport proofs read native references over: the staged genuine base, whose FABRIC answers come
+	// from the vanilla-reference sidecar (TestFixtures.launchSources). Another base passed here is an explicit control.
+	def predicateBase = file(project.findProperty('forbric.predicateBase') ?: stagedBase)
 	inputs.files(predicateBase).withPropertyName('predicateNativeBase').optional()
 	systemProperty 'forbric.predicateBase', predicateBase.absolutePath
 	// Optional final-definition evidence lets the staged source-continuation test replay a real weave.
@@ -355,8 +379,9 @@ test {
 		systemProperty 'forbric.fabricLoaderJar', file(fabricLoaderFixture).absolutePath
 	}
 	inputs.files(fabricLoaderCandidates).withPropertyName('fabricLoaderCandidates').optional()
-	// Only EventChainAuditTest's own loader gets log4j (the real buses need it); the test classpath keeps none,
-	// because several tests assert ForbricLog's fallback when log4j is absent.
+	// Only the loaders of the tests that run the real event buses get log4j (KernelModLoaderClasslessTest,
+	// FmlTransformerViewTest); the test classpath keeps none, because several tests assert ForbricLog's fallback when
+	// log4j is absent.
 	doFirst { systemProperty 'forbric.log4jApiForTests', configurations.compileClasspath.files.find { it.name.startsWith('log4j-api-') }?.absolutePath ?: '' }
 	// Game-side tests that name MixinExtras (KernelWrapOperationsTest) load it beside build/classes/java/runtime.
 	doFirst { systemProperty 'forbric.mixinExtrasForTests', configurations.nestedMods.files.find { it.name.startsWith('mixinextras-') }?.absolutePath ?: '' }
@@ -380,6 +405,8 @@ test {
 	// The same for the Mod Menu API stand-in, which ModMenuApiStandInShapeTest reads off build/classes/java/modMenuApi.
 	dependsOn tasks.named('compileModMenuApiJava')
 	inputs.files(sourceSets.modMenuApi.output).withPropertyName('modMenuApiStandIn').optional()
+	dependsOn tasks.named('compileModMenuPluginJava')
+	inputs.files(sourceSets.modMenuPlugin.output).withPropertyName('modMenuPlugin').optional()
 	// NoRawAssumptionsTest reads the test sources and its allowlist as TEXT. An allowlist edit changes no class, so
 	// without these the task stayed UP-TO-DATE and kept the verdict on the previous list.
 	inputs.file('src/test/raw-assumption-allowlist.txt').withPropertyName('rawAssumptionAllowlist')
@@ -390,29 +417,26 @@ test {
 	inputs.files(fileTree('run') { include 'gate-m*.sh', 'lib.sh' })
 			.withPropertyName('gateContracts').optional()
 	inputs.files(fileTree(stagedRoot) {
-		include 'build-testmods.sh', 'livemod-src/**', 'livemod-src-neoforge/**',
-				'forge-runtime/forbriclive.jar', 'neoforge-runtime/forbricneolive.jar'
+		include 'build-testmods.sh', 'livemod-src/**', 'livemod-src-neoforge/**', 'neoforge-runtime/forbricneolive.jar'
 	}).withPropertyName('compatibilityCanaries').optional()
 	inputs.files(fileTree('build/compat-inputs') { include '**/mods/*.jar' })
 			.withPropertyName('compatibilityModFixtures').optional()
-	// The merged game the real-bytecode tests read. Without this, rebuilding it leaves the test task UP-TO-DATE
+	// The game base the real-bytecode tests read. Without this, rebuilding it leaves the test task UP-TO-DATE
 	// and every one of those tests silently keeps its previous verdict — which is exactly what happened the
 	// first time the base was rebuilt: a green run that had not looked at the new jar at all.
 	//
 	// Through stagedRoot, NOT the literal path: these three lines hardcoded '../forbric-loader/run/...' while
 	// the variable that honours FORBRIC_OLD was declared thirty lines up and already used by the canary inputs.
 	// On a second worktree -- the one configuration FORBRIC_OLD exists for -- the declared input was a file that
-	// does not exist, so rebuilding the real merged base left `test` UP-TO-DATE and every bytecode test kept its
+	// does not exist, so rebuilding the real base left `test` UP-TO-DATE and every bytecode test kept its
 	// previous verdict. That is the exact failure these lines were added to prevent, reintroduced by the knob
 	// meant to support the case.
-	inputs.files(files(stagedMergedBase))
-			.withPropertyName('mergedBase').optional()
-	// The two carriers, for exactly the same reason, one artifact over. About twenty test classes read them --
-	// ForeignTypeCarrierTest checks every ForeignType name against them, CarrierAccessTransformerTest reads the
-	// real AT out of them -- and none of that was declared. So a carrier upgrade, which is the single event those
+	inputs.files(files(stagedBase))
+			.withPropertyName('gameBase').optional()
+	// The carrier, for exactly the same reason, one artifact over. About twenty test classes read it --
+	// ForeignTypeCarrierTest checks every NeoForge ForeignType name against it, ModsButtonRedirectorTest finds
+	// NeoForge's ModsButton in it -- and none of that was declared. So a carrier upgrade, which is the single event those
 	// tests exist to catch, left `test` UP-TO-DATE and every one of them silently kept its previous verdict.
-	inputs.files(files(stagedForgeRuntime))
-			.withPropertyName('forgeCarrier').optional()
 	inputs.files(files(stagedNeoRuntime))
 			.withPropertyName('neoforgeCarrier').optional()
 	// The bytecode tests find the staged jars themselves, through FORBRIC_OLD, so hand them the root this build
@@ -441,16 +465,16 @@ test {
 // The engine tests need the whole game side. Without staged game jars they are skipped and say so, except in an
 // integration run, where -Pforbric.requireTransfer=true turns that skip into a failure.
 def transferSuiteRuns = { String task ->
-	if (stagedGameJars.size() == 3 || requireTransfer) return true
-	logger.lifecycle("${task}: SKIPPED — staged game jars absent (${stagedGameJars.size()}/3 under ${stagedRoot})")
+	if (stagedGameComplete || requireTransfer) return true
+	logger.lifecycle("${task}: SKIPPED — staged game jars absent (${stagedGameJars*.name} under ${stagedRoot})")
 	return false
 }
 tasks.named('compileTransferTestJava') {
 	onlyIf { transferSuiteRuns('compileTransferTestJava') }
 	// Thrown from an action, not from onlyIf, where Gradle would bury the message under "could not evaluate spec".
 	doFirst {
-		if (stagedGameJars.size() != 3) throw new GradleException("The staged game jars are absent (" +
-				"${stagedGameJars.size()}/3 under ${stagedRoot}), and -Pforbric.requireTransfer=true forbids skipping " +
+		if (!stagedGameComplete) throw new GradleException("The staged game jars are absent (" +
+				"${stagedGameJars*.name} under ${stagedRoot}), and -Pforbric.requireTransfer=true forbids skipping " +
 				"the transfer engine tests")
 	}
 }
@@ -517,6 +541,8 @@ tasks.register('runtimeJar', Jar) {
 		into 'META-INF/forbric/modmenu-api'
 		rename { String file -> file + '.bin' }
 	}
+	// The kernel's own Mod Menu entrypoint, as classes: see the modMenuPlugin source set.
+	from sourceSets.modMenuPlugin.output.classesDirs
 	// The boot seam requires exactly these three when the transfer APIs are installed; a jar without them is a
 	// release that turns every fabric-api pack into a required loss. Checked on the artifact itself.
 	doLast {
@@ -530,8 +556,10 @@ tasks.register('runtimeJar', Jar) {
 				.collect { "META-INF/forbric/modmenu-api/com/terraformersmc/modmenu/${it}.class.bin".toString() }
 				.findAll { !entries.contains(it) }
 		if (standIn) throw new GradleException("forbric-kernel-runtime.jar was built without its Mod Menu API stand-in: ${standIn}")
+		if (!entries.contains('net/forbric/kernel/runtime/modmenu/KernelModMenuPlugin.class'))
+			throw new GradleException("forbric-kernel-runtime.jar was built without the kernel's Mod Menu entrypoint (KernelModMenuPlugin)")
 		def missing = ['BlockTransferBridge', 'TransferIssues', 'PairedTransactions', 'RebornEnergyBridge',
-				'RebornEnergyAdapters', 'ForgeEnergyAdapters', 'EnergyUnits']
+				'RebornEnergyAdapters', 'EnergyUnits']
 				.collect { "net/forbric/kernel/runtime/transfer/${it}.class".toString() }.findAll { !entries.contains(it) }
 		if (missing) throw new GradleException("forbric-kernel-runtime.jar was built without its transfer component: ${missing}")
 		// Team Reborn Energy is the player's mod, compiled against and never shipped.
@@ -550,7 +578,7 @@ tasks.register('runtimeJar', Jar) {
 // far from the cause). With the wiring itself absent, `gradlew jar` on such a machine is byte-identical to what
 // it was before this block existed, and the boot-side gate is untouched.
 //
-// Nothing is lost there either: this jar links against Mojang/Forge/Neo types, so a machine that cannot build
+// Nothing is lost there either: this jar links against Mojang/NeoForge types, so a machine that cannot build
 // it also cannot run the game that would load it. Its prerequisites ARE the game's prerequisites.
 //
 // This is a SIBLING of the MixinExtras block on purpose. `rename` is a property of the CopySpec it sits in, so
@@ -597,13 +625,65 @@ tasks.register('toolTest', Exec) {
 	doFirst { environment 'FORBRIC_KERNEL_CLASSPATH', sourceSets.main.runtimeClasspath.asPath }
 }
 tasks.named('check') { dependsOn 'toolTest' }
-tasks.register('linkToolTest', Exec) {
-	group = 'verification'
-	description = 'Run the installer packaged-link-gate tests on synthetic jars, without game inputs or bootstrap.'
-	workingDir file('../forbric-kernel-installer')
-	commandLine(osName.contains('windows') ? ['cmd', '/d', '/c', 'gradlew.bat', 'linkGateTest'] : ['./gradlew', 'linkGateTest'])
+// The static link check (net.forbric.kernel.linkcheck.LinkCheck) as one standalone jar: its own classes and ASM's core,
+// which is all it needs (LinkCheckTest pins that). The installer carries it (its :bundleLinkCheck) and runs it on every
+// install before it has staged any of Forbric's jars, a slim installer included. The game check beside it
+// (linkcheck.game.GameLinkCheck) reads the kernel's transformers, so it stays in the kernel jar and is not in this one.
+// The jar names the sources it was built from (Forbric-LinkCheck-Sources: a digest of linkcheck/*.java and the ASM version,
+// computed the same way by the installer's :bundleLinkCheck), so the installer can refuse to bundle a checker that is not
+// this tree's -- the hazard of every `-x buildLinkCheck` run after a source change that nothing rebuilt.
+def linkCheckSourceDir = file('src/main/java/net/forbric/kernel/linkcheck')
+def linkCheckSourceDigest = {
+	def md = java.security.MessageDigest.getInstance('SHA-256')
+	md.update("asm ${project.asm_version}\n".getBytes('UTF-8'))
+	(linkCheckSourceDir.listFiles().findAll { it.isFile() && it.name.endsWith('.java') }).sort { it.name }.each { f ->
+		md.update("${f.name}\n".getBytes('UTF-8'))
+		md.update(f.bytes)
+		md.update((byte) 0)
+	}
+	md.digest().encodeHex().toString()
 }
-tasks.named('check') { dependsOn 'linkToolTest' }
+tasks.register('linkCheckJar', Jar) {
+	group = 'build'
+	description = 'Build forbric-link-check.jar: the link checker the installer ships, with ASM shaded in.'
+	archiveFileName = 'forbric-link-check.jar'
+	destinationDirectory = layout.buildDirectory.dir('link-check')
+	from(sourceSets.main.output.classesDirs) { include 'net/forbric/kernel/linkcheck/*.class' }
+	from({ configurations.runtimeClasspath.files.findAll { it.name == "asm-${project.asm_version}.jar" }.collect { zipTree(it) } }) {
+		exclude 'META-INF/MANIFEST.MF', 'META-INF/versions/**', 'module-info.class'
+	}
+	// A source change that compiles to the same classes (a comment) still changes the digest the manifest carries.
+	inputs.files(fileTree(linkCheckSourceDir) { include '*.java' }).withPropertyName('linkCheckSources')
+	manifest { attributes 'Main-Class': 'net.forbric.kernel.linkcheck.LinkCheck' }
+	doFirst { manifest.attributes('Forbric-LinkCheck-Sources': linkCheckSourceDigest()) }
+	// Reproducible: the installer's own build compares nothing, but two builds of one tree should ship one jar.
+	preserveFileTimestamps = false
+	reproducibleFileOrder = true
+	doLast {
+		def entries = new java.util.zip.ZipFile(archiveFile.get().asFile).withCloseable { zip -> Collections.list(zip.entries())*.name }
+		if (!entries.contains('net/forbric/kernel/linkcheck/LinkCheck.class') || !entries.contains('org/objectweb/asm/ClassReader.class'))
+			throw new GradleException("forbric-link-check.jar lacks the checker or ASM: ${entries.take(5)}")
+		def foreign = entries.findAll { it.endsWith('.class') && !it.startsWith('org/objectweb/asm/')
+				&& !(it ==~ /net\/forbric\/kernel\/linkcheck\/[^\/]+\.class/) }
+		if (foreign) throw new GradleException("forbric-link-check.jar carries classes that are neither the checker's nor ASM's: ${foreign.take(5)}")
+	}
+}
+// The installer's tests (its packaged link check on synthetic jars, and every other installer *Test main), run from the
+// kernel's `check` without game inputs or bootstrap. The checker jar is built
+// here and handed over (-x buildLinkCheck): the installer's own way to it is a nested build of this project, which must
+// not run inside this one.
+// --no-daemon: a nested wrapper call otherwise joins the daemon pool, so a --no-daemon build (CI's, a lane's) left an idle
+// daemon behind, or ran its nested half inside another checkout's idle daemon.
+tasks.register('installerTest', Exec) {
+	group = 'verification'
+	description = "Run the installer's tests: its packaged link check on synthetic jars and its other *Test mains."
+	dependsOn 'linkCheckJar'
+	workingDir file('../forbric-kernel-installer')
+	// Offline when this build is: the installer's build resolves nothing for its tests, and a pinned run must not go online.
+	commandLine((osName.contains('windows') ? ['cmd', '/d', '/c', 'gradlew.bat'] : ['./gradlew'])
+			+ ['--no-daemon'] + (gradle.startParameter.offline ? ['--offline'] : []) + ['installerTest', '-x', 'buildLinkCheck'])
+}
+tasks.named('check') { dependsOn 'installerTest' }
 // The suites whose tests ran in THIS invocation. Results left by an earlier invocation are not evidence.
 def executedSuites = Collections.synchronizedSet(new HashSet<String>())
 // Fixture file names are Unicode ("[钠] sodium-fabric-….jar"). A JVM started under the C/POSIX locale cannot encode
@@ -644,9 +724,9 @@ tasks.withType(Test).configureEach {
 tasks.register('integrationTest') {
 	group = 'verification'
 	description = 'Run unit, transfer and tool tests strictly: missing game inputs or skipped assertions fail.'
-	dependsOn 'test', 'transferTest', 'toolTest', 'linkToolTest'
+	dependsOn 'test', 'transferTest', 'toolTest', 'installerTest'
 	doFirst {
-		if (stagedGameJars.size() != 3) throw new GradleException('integrationTest needs prepareDev first')
+		if (!stagedGameComplete) throw new GradleException('integrationTest needs prepareDev first')
 	}
 	doLast {
 		// Test callbacks are not invoked for NO-SOURCE tasks. Require concrete, nonempty results from both suites.
@@ -704,7 +784,7 @@ tasks.register('writeDevClasspath') {
 		workingDir projectDir.parentFile
 		standardInput = System.in
 		doFirst {
-			if (stagedGameJars.size() != 3) throw new GradleException('Run prepareDev first, then runClient/runServer in a second invocation')
+			if (!stagedGameComplete) throw new GradleException('Run prepareDev first, then runClient/runServer in a second invocation')
 			def arguments = [devPython, devDriver, side.toLowerCase(), '--no-build',
 					'--java', System.getProperty('java.home'), '--staged', stagedRoot.parentFile.absolutePath,
 					'--mc-dir', mcLibraries.parentFile.absolutePath]

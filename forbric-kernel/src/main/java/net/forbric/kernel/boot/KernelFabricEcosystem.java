@@ -69,7 +69,7 @@ import net.forbric.api.ModCatalog;
  * registries that do not exist yet, and after the freeze would throw.
  *
  * <p>The {@code main} entrypoints are guarded to run at most once per process, mirroring the old weld's shared
- * {@code ForbricFabricMains} guard: once the tri-in-one client/server paths both open registration windows, only
+ * {@code ForbricFabricMains} guard: once the client and server paths both open registration windows, only
  * the first may run them.
  */
 public final class KernelFabricEcosystem {
@@ -152,7 +152,9 @@ public final class KernelFabricEcosystem {
 			String gameVersion, List<net.forbric.kernel.fabric.NestedFabricRequirements.Requirement> requiredElsewhere) {
 		Path cacheDir = gameDir.resolve(".forbric-kernel").resolve("jij");
 		FabricModDiscovery discovery = new FabricModDiscovery(envType, cacheDir);
-		discovery.setSkip(dupes::suppressed);
+		// A refused MinecraftForge build never enters the plan; with arbitration switched off there is no plan, and the
+		// walk lists mods/ itself, so the refusal has to be applied here too or its classes would reach the classpath.
+		discovery.setSkip(jar -> dupes.suppressed(jar) || MultiLoaderArbiter.refused(jar));
 		discovery.setPlatform(net.forbric.kernel.fabric.NestedFabricRequirements.Platform.running(gameVersion));
 		discovery.setRequiredElsewhere(requiredElsewhere);
 		discovery.discover(gameDir.resolve("mods"));
@@ -195,7 +197,8 @@ public final class KernelFabricEcosystem {
 		fabric.register(new KernelModContainer(
 				KernelModMetadata.builtin("java", String.valueOf(Runtime.version().feature()), "Java"), null, null));
 		KernelModContainer fabricLoader = new KernelModContainer(
-				KernelModMetadata.builtin("fabricloader", FABRIC_LOADER_API_LEVEL, "Fabric Loader (Forbric kernel)"),
+				KernelModMetadata.builtin("fabricloader", FABRIC_LOADER_API_LEVEL, "Fabric Loader (Forbric kernel)", Map.of(),
+						loaderEntrypoints(envType)),
 				null, null);
 		fabric.register(fabricLoader);
 		List<KernelModContainer> inLoader = registerLoaderNested(fabric, fabricLoader, platformJars, envType,
@@ -277,9 +280,13 @@ public final class KernelFabricEcosystem {
 				Caught.warn(t, "[Forbric/DupeId] could not work out which entrypoints %s's losing Fabric build offered other "
 						+ "mods — none of them is declared", alias.modId());
 			}
-			fabric.register(KernelModContainer.presence(KernelModMetadata.builtin(alias.modId(), alias.version(),
-					alias.modId(), foreignCustomValues(alias.modId()), entrypoints),
-					presenceSource(alias.modId(), dupes)));
+			// Shown as its own Fabric build shows itself: that build's fabric.mod.json is how the mod presents itself to
+			// a Fabric mod list, and the bare id made it a nameless, iconless row on Mod Menu.
+			LosingBuild shown = losingBuildOf(discovery, dupes, alias.modId());
+			fabric.register(KernelModContainer.presence(KernelModMetadata.presenceShownAs(
+					shown == null ? null : shown.metadata(), alias.modId(), alias.version(),
+					foreignCustomValues(alias.modId()), entrypoints),
+					presenceSource(alias.modId(), dupes), shown == null ? null : shown.jar()));
 			ForbricLog.info("[Forbric/Fabric] presence alias '%s' %s — its Fabric jar lost arbitration, but the "
 					+ "winning jar supplies the classes; isModLoaded now answers", alias.modId(), alias.version());
 		}
@@ -328,7 +335,7 @@ public final class KernelFabricEcosystem {
 		// In registration order, not getAllMods() order. KernelModLoader orders the Forge-family @Mod classes over
 		// a graph that includes these (a NeoForge mod can require a Fabric one), and where a Fabric mod sits in that
 		// graph's input decides where a Forge-family mod waiting on it lands. Handing it the Fabric order would
-		// reorder NeoForge and MinecraftForge mods as a side effect.
+		// reorder the NeoForge mods as a side effect.
 		List<DiscoveredMod> fabricMods = new ArrayList<>();
 		Map<String, Map<String, Object>> entrypointNames = new LinkedHashMap<>();
 		int declaringFabric = 0;
@@ -835,7 +842,7 @@ public final class KernelFabricEcosystem {
 	/**
 	 * The physical side this boot is running on, or {@code null} while the Fabric side has not been brought up.
 	 *
-	 * <p>There is no other authority for this in the kernel: the merged base carries the client classes even on a
+	 * <p>There is no other authority for this in the kernel: the game base carries the client classes even on a
 	 * dedicated server, so "can I load Minecraft.class" answers the wrong question. Callers that would have to
 	 * guess should treat {@code null} as "do not judge side-scoped things" rather than picking a side.
 	 */
@@ -1022,6 +1029,7 @@ public final class KernelFabricEcosystem {
 			for (int j = 0; j < due.size(); j++) places.add(new ArbitratedAwayDispatchers.Place(containers.size(), "unplaced"));
 		}
 		int count = 0;
+		RuntimeException failure = null;
 		for (int i = 0; i <= containers.size(); i++) {
 			for (int j = 0; j < due.size(); j++) {
 				if (places.get(j).before() != i) continue;
@@ -1031,13 +1039,24 @@ public final class KernelFabricEcosystem {
 				try {
 					dispatchOrphan(current, due.get(j), " " + where);
 				} catch (Throwable t) {
-					Caught.warn(t, "[Forbric/Fabric] could not dispatch the '%s' entrypoints of %s's losing build",
-							due.get(j).key(), due.get(j).library());
+					// What the losing build's own dispatch would have thrown from inside its entrypoint of this stage: natively
+					// that entrypoint fails, and with it the stage (gathered, as Fabric Loader gathers it).
+					Caught.expected(t);
+					ForbricLog.error("[Forbric/Fabric] the '%s' entrypoints of %s's losing build failed: %s", due.get(j).key(),
+							due.get(j).library(), t);
+					// Natively it is the losing build's own entrypoint of this stage that threw, so the stage's error names
+					// that library and where its dispatch is.
+					failure = gatherStageFailure(key, due.get(j).library(), due.get(j).dispatch().site(), t, failure);
 				}
 			}
-			if (i < containers.size() && invokeOne(key, containers.get(i), action)) count++;
+			if (i < containers.size()) {
+				Throwable failed = invokeOne(key, containers.get(i), action);
+				if (failed == null) count++;
+				else failure = gatherStageFailure(key, containers.get(i), failed, failure);
+			}
 		}
 		KernelForeignShimContext.report();
+		if (failure != null) throw failure;
 		return count;
 	}
 
@@ -1085,8 +1104,11 @@ public final class KernelFabricEcosystem {
 	}
 
 	/**
-	 * Invokes one entrypoint key, isolating failures per mod: a mod whose {@code onInitialize} throws is reported
-	 * and skipped rather than aborting the remaining mods' initialization (and with them the whole server boot).
+	 * Invokes one entrypoint key as Fabric Loader's {@code FabricLoaderImpl.invokeEntrypoints} does: every entrypoint runs
+	 * even when an earlier one threw, then the stage throws {@code RuntimeException("Could not execute entrypoint stage '<key>'
+	 * due to errors, provided by '<mod>' at '<definition>'!")} with the first failure as its cause and every later one
+	 * suppressed (fabric-loader 0.18/0.19). Natively that takes the game down (D87, "stop like native"); the kernel used to
+	 * report each failure and carry on.
 	 */
 	public static <T> int invokeEntrypoints(String key, Class<T> type, java.util.function.Consumer<T> action) {
 		if (loader == null) return 0;
@@ -1096,15 +1118,51 @@ public final class KernelFabricEcosystem {
 	private static <T> int invokeEntrypoints(String key, List<EntrypointContainer<T>> containers,
 			java.util.function.Consumer<T> action) {
 		int count = 0;
-		for (EntrypointContainer<T> c : containers) if (invokeOne(key, c, action)) count++;
+		RuntimeException failure = null;
+		for (EntrypointContainer<T> c : containers) {
+			Throwable failed = invokeOne(key, c, action);
+			if (failed == null) count++;
+			else failure = gatherStageFailure(key, c, failed, failure);
+		}
 		KernelForeignShimContext.report();
+		if (failure != null) throw failure;
 		return count;
 	}
 
-	/** One entrypoint, its failure reported and kept to its mod. True when it ran to completion. */
-	private static <T> boolean invokeOne(String key, EntrypointContainer<T> c, java.util.function.Consumer<T> action) {
+	/**
+	 * Fabric Loader's {@code ExceptionUtil.gatherExceptions} for one failed entrypoint of stage {@code key}: the first failure
+	 * becomes the cause of the stage's {@code RuntimeException} (worded as {@code FabricLoaderImpl.invokeEntrypoints} words it,
+	 * naming the entrypoint's mod and definition), every later one is added to it as suppressed, once.
+	 */
+	public static RuntimeException gatherStageFailure(String key, EntrypointContainer<?> c, Throwable failed, RuntimeException previous) {
+		return gatherStageFailure(key, c == null ? "?" : c.getProvider().getMetadata().getId(), c == null ? "" : c.getDefinition(),
+				failed, previous);
+	}
+
+	/**
+	 * The same for an entrypoint known by its mod id and definition rather than its container: a losing library build's,
+	 * whose dispatch the kernel runs in its place ({@link #invokePhase}).
+	 */
+	static RuntimeException gatherStageFailure(String key, String id, String definition, Throwable failed, RuntimeException previous) {
+		Throwable cause = failed;
+		while ((cause instanceof java.lang.reflect.InvocationTargetException || cause instanceof java.util.concurrent.ExecutionException
+				|| cause instanceof java.util.concurrent.CompletionException) && cause.getCause() != null) {
+			cause = cause.getCause();
+		}
+		if (previous == null) {
+			return new RuntimeException(String.format("Could not execute entrypoint stage '%s' due to errors, provided by '%s' at '%s'!",
+					key, id, definition), cause);
+		}
+		if (cause != previous) {
+			for (Throwable already : previous.getSuppressed()) if (cause.equals(already)) return previous;
+			previous.addSuppressed(cause);
+		}
+		return previous;
+	}
+
+	/** One entrypoint, its failure reported against its mod and handed back; null when it ran to completion. */
+	private static <T> Throwable invokeOne(String key, EntrypointContainer<T> c, java.util.function.Consumer<T> action) {
 		String id = c.getProvider().getMetadata().getId();
-		boolean ran = false;
 		try {
 			T entrypoint = c.getEntrypoint();
 			// With a NeoForge ModContainer active for THIS mod, because a Fabric mod can be holding the
@@ -1117,14 +1175,18 @@ public final class KernelFabricEcosystem {
 			// and the kernel's own boot classloader cannot see either of them.
 			KernelForeignShimContext.with(entrypoint.getClass().getClassLoader(), id,
 					() -> action.accept(entrypoint));
-			ran = true;
 			ForbricLog.info("[Forbric/Fabric] invoked %s entrypoint of %s", key, id);
 			reportSwallowedFailure(key, id, entrypoint);
+			return null;
 		} catch (Throwable t) {
-			Caught.error(t, "[Forbric/Fabric] %s entrypoint of %s failed", key, id);
+			// Handed back to the stage, which throws Fabric Loader's stage error once every entrypoint has run, and that
+			// stops the boot (D82): not a failure the kernel carries on from, so not a Caught failure site.
+			Caught.expected(t);
+			ForbricLog.error("[Forbric/Fabric] %s entrypoint of %s failed: %s — the '%s' stage stops the boot once its "
+					+ "entrypoints have run", key, id, t, key);
 			ModCatalog.mark(id, ModCatalog.Status.FAILED, "its " + key + " entrypoint threw");
+			return t;
 		}
-		return ran;
 	}
 
 	/**
@@ -1219,6 +1281,67 @@ public final class KernelFabricEcosystem {
 		ForbricLog.warn("[Forbric/Fabric] %s declares %s, but the build that loaded never registers a Fabric renderer "
 				+ "— not forwarding it, so Indigo takes the slot instead of leaving it empty", mod.getId(), CONTAINS_RENDERER);
 		return false;
+	}
+
+	/**
+	 * The class the kernel's own {@code "modmenu"} entrypoint is: it offers Mod Menu the config screens of the mods Fabric
+	 * knows only by their id (see {@code KernelModMenuPlugin}). Game-side, in the kernel's runtime jar.
+	 */
+	public static final String MOD_MENU_PLUGIN = "net.forbric.kernel.runtime.modmenu.KernelModMenuPlugin";
+
+	/**
+	 * What the {@code fabricloader} built-in declares: on a client, the kernel's Mod Menu entrypoint. Fabric Loader is
+	 * where the kernel registers the identities of mods another family loads, so it is the one to answer for them in a
+	 * Fabric mod list. Mod Menu is a client mod and reads its entrypoints on the client only; a server declares nothing.
+	 */
+	static Map<String, List<KernelModMetadata.EntrypointDecl>> loaderEntrypoints(EnvType envType) {
+		if (envType != EnvType.CLIENT) return Map.of();
+		return Map.of(net.forbric.kernel.interop.protocol.modmenu.ModMenuConfigFactories.KEY,
+				List.of(new KernelModMetadata.EntrypointDecl("default", MOD_MENU_PLUGIN)));
+	}
+
+	/** A Fabric build of a mod that did not win its id: what its {@code fabric.mod.json} says, and the jar it is in. */
+	record LosingBuild(KernelModMetadata metadata, Path jar) {
+	}
+
+	/**
+	 * {@code id}'s Fabric build that lost its id, as it shows itself: null when there is none to read.
+	 *
+	 * <p>Two places, because a losing build reaches one of two: discovery read and did not register the Fabric half of a
+	 * universal jar a Forge family owns and a nested jar whose id another jar won; a top-level Fabric jar that lost to
+	 * another jar (its NeoForge build beside it in {@code mods/}) is never read at all -- discovery skips a suppressed jar
+	 * -- so its {@code fabric.mod.json} is read here, from the jar, which is still there.
+	 */
+	static LosingBuild losingBuildOf(FabricModDiscovery discovery, DuplicateModArbiter.Decision dupes, String id) {
+		if (id == null) return null;
+		if (discovery != null) {
+			for (KernelModContainer container : discovery.getContainers()) {
+				if (id.equals(container.getMetadata().getId())) return new LosingBuild(container.getMetadata(), container.getJar());
+			}
+		}
+		if (dupes == null) return null;
+		List<Path> suppressed = new ArrayList<>(dupes.suppressedJars());
+		suppressed.sort(java.util.Comparator.comparing(Path::toString));
+		for (Path jar : suppressed) {
+			KernelModMetadata metadata = fabricManifestOf(jar);
+			if (metadata != null && id.equals(metadata.getId())) return new LosingBuild(metadata, jar);
+		}
+		return null;
+	}
+
+	/** {@code jar}'s own {@code fabric.mod.json}, or null when it has none or it will not parse. */
+	private static KernelModMetadata fabricManifestOf(Path jar) {
+		if (jar == null || !Files.isRegularFile(jar)) return null;
+		try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(jar.toFile())) {
+			java.util.zip.ZipEntry manifest = zip.getEntry(FabricModDiscovery.MANIFEST);
+			if (manifest == null) return null;
+			try (java.io.InputStream in = zip.getInputStream(manifest)) {
+				return net.forbric.kernel.fabric.FabricModMetadataParser.read(in);
+			}
+		} catch (java.io.IOException | RuntimeException unreadable) {
+			Caught.expected(unreadable);
+			return null;
+		}
 	}
 
 	/**

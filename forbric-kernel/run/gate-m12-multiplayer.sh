@@ -32,21 +32,28 @@
 #  3. ClientNetworkRegistry.setup() ran on the server too and, once NeoForge's payloads existed, correctly failed
 #     "missing client-side handlers". Fix: client-only, as genuine NeoForge has it.
 #  4. The client died applying NeoForge's frozen-registry snapshot: NullPointerException "holder is null" in
-#     MappedRegistry.registerIdMapping. Seventeen builtin registries are MinecraftForge NamespacedWrappers whose
-#     inherited MappedRegistry fields stay empty; NeoForge remaps through exactly those fields. Fix:
-#     RegistrySyncParityInjector gives the wrapper NeoForge's clear/registerIdMapping contract and applies the staged
-#     ids through Forge's own GameData.injectSnapshot (KernelForgeWrapperSync).
+#     MappedRegistry.registerIdMapping. On the merged base seventeen builtin registries were MinecraftForge
+#     NamespacedWrappers whose inherited MappedRegistry fields stayed empty, and NeoForge remaps through exactly those
+#     fields (fixed then by KernelForgeWrapperSync). Since Stage 4 they are NeoForge's own registries and the wrappers,
+#     the sync and its check are gone; what is asserted is that the client took its pre-connection ids before the
+#     server's replaced them (KernelRegistryRevert, which the disconnect needs) and that every sync applied.
 #
 # Each is pinned below by an assertion that fails on the log line it used to produce. Both ends Forbric is what this
-# gate exercises; a Forbric client against a PURE Fabric server is gate-m14's job, and the wrappers follow that
-# server's ids there too.
-# GATE-PARALLEL: rundirs=mp-server,mp-client mem=3500
+# gate exercises; a Forbric client against a PURE Fabric server is gate-m14's job.
+# Rundirs: M12_SERVER_RUNDIR / M12_CLIENT_RUNDIR (default run/mp-server, run/mp-client, which the gate wipes).
+# `alone`: the tick-lateness ceiling below is a timing verdict, and a neighbouring gate's CPU shows up in it as the server
+# falling behind. VERIFY run 1 of C5 had this gate red at -j 4 beside gate-m0's unit suite and four server boots (11 of 220
+# late, ceiling 7), green alone 5 of 5, and red alone in one of two runs under ten `yes` CPU hogs. So gates-all runs it
+# with no other gate, and the ceiling stays where it is (stage4-c5-harn.md).
+# GATE-PARALLEL: rundirs=mp-server,mp-client mem=3500 alone
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 PORT="${M12_PORT:-25599}"
-SRV="$KERNEL/run/mp-server"
-CLI="$KERNEL/run/mp-client"
+SRV="${M12_SERVER_RUNDIR:-$KERNEL/run/mp-server}"
+CLI="${M12_CLIENT_RUNDIR:-$KERNEL/run/mp-client}"
+refuse_shared_rundir "$SRV"
+refuse_shared_rundir "$CLI"
 SLOG="$BUILD/gate-m12-server.log"
 CLOG="$BUILD/gate-m12-client.log"
 mkdir -p "$BUILD"
@@ -54,14 +61,22 @@ mkdir -p "$BUILD"
 DL="$RUN_OLD/downloads"
 # One mod per family, all side=BOTH, chosen so the sync has real work to do: fabric-api carries the registry-sync
 # module under test, mcw-bridges registers 303 blocks/items (a registry payload worth syncing), and collective is
-# a universal jar so multi-loader arbitration runs on both ends.
+# a universal jar so multi-loader arbitration runs on both ends. Since Stage 3 of dropping MinecraftForge mcw-bridges
+# is its NeoForge build, same version ($NEO_BUILDS): the MinecraftForge build is refused, and a refusal stops the
+# dedicated server. sophisticatedcore (NeoForge) registers a particle type (jukebox_note), which puts a modded entry in
+# minecraft:particle_type, so fabric-registry-sync's client remap runs over that registry on the join and again on the
+# disconnect. Without one no remap reaches the particle registry and this gate cannot see what it does to the particle
+# provider map: with fabric-registry-sync's Int2ObjectMapTracker attached to the kernel's view of NeoForge's
+# Identifier-keyed providers, the remap threw from the view's clear() and no client joined a server whose mods register
+# particle types (Stage 4 lane K2; -Dforbric.particleViewDetach=off puts that back).
 MODS=(
   "$DL/fabric-26.2/fabric-api-0.154.0+26.2.jar"
-  "$DL/forge-26.2/mcw-bridges-3.1.2-mc26.2forge.jar"
+  "$NEO_BUILDS/mcw-bridges-3.1.2-mc26.2neoforge.jar"
   "$DL/forge-26.2/collective-26.2.0-8.39.jar"
+  "$KERNEL/run/client-merged-pack/mods/sophisticatedcore-26.2-1.5.0.2337.jar"
 )
 # M12_MODS replaces that set wholesale (space-separated paths). The reason it exists: when this gate goes red the
-# first question is always "is it the tri-ecosystem combination or the plumbing?", and the only way to answer it
+# first question is always "is it the Fabric + NeoForge combination or the plumbing?", and the only way to answer it
 # is to run the same gate with one ecosystem's jars and compare.
 if [ -n "${M12_MODS:-}" ]; then read -r -a MODS <<< "$M12_MODS"; fi
 for m in "${MODS[@]}"; do
@@ -96,7 +111,9 @@ FIFO="$SRV/.stdin"; rm -f "$FIFO"; mkfifo "$FIFO"
 # the server's networking path, the run produced zero lines, and "zero" was indistinguishable from "the code
 # never ran" when the truth was that the flag had only ever been passed to the client. A knob that silently
 # covers half the system under test is worse than no knob.
-FORBRIC_JVM="${M12_EXTRA_JVM:-}" \
+# The tick sampler prints its running totals every 20 ticks (one second) instead of every 600, so the lateness check below
+# can read them at the client's dial, the player's join and the leave.
+FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.tickSamplerEvery=20 ${M12_EXTRA_JVM:-}" \
 RUNDIR="$SRV" "$KERNEL/run/launch-kernel-server.sh" < "$FIFO" > "$SLOG" 2>&1 &
 SRVPID=$!
 record_server_pid "$SRV" "$SRVPID"
@@ -116,8 +133,29 @@ if [ "$READY" -ne 1 ]; then
   step "M12 result"; echo "[kernel] ❌ M12 GATE RED — see $SLOG"; exit 1
 fi
 
+# Block-state ids over the wire (Stage 4 C5 lane K1). Before anyone joins, the server places a vanilla block, and a
+# NeoForge mod's block when mcw-bridges is in the set (the default's), at world spawn, so the client receives them in
+# CHUNK data, numbered by the server's blockstate->id map and decoded by the client's -- a block_update after the join
+# would hide nothing a chunk shows. A dedicated server with fabric-api numbered the states its registration window
+# registered twice (fabric-registry-sync's tracker as each block was registered, then NeoForge's bake of the whole
+# registry after them), so every id it sent was its native id plus that count: the pier went out as 35212 against the
+# client's 34392 states and the client died on "No value with id"; a vanilla block decoded, silently, as a different
+# one. That is why the vanilla read-back is asked of every M12_MODS set, with or without a mod block in it.
+PROBE_NEO=""; PROBE_VANILLA="minecraft:diamond_block"; PROBE_AT="2,300,0"; PROBE_PLACED=1
+case " ${MODS[*]} " in *mcw-bridges*) PROBE_NEO="mcwbridges:acacia_bridge_pier"; PROBE_AT="0,300,0;2,300,0"; PROBE_PLACED=2 ;; esac
+# The spawn chunk is loaded for the placement only (forceload), and let go again, so the session ticks what it did.
+echo "setworldspawn 0 100 0" >&9; echo "forceload add -1 -1 1 1" >&9
+for i in $(seq 1 30); do grep -aq 'Marked .* to be force loaded\|already marked' "$SLOG" && break; sleep 0.5; done
+for i in $(seq 1 10); do
+  [ "$(grep -ac 'Changed the block' "$SLOG")" -ge "$PROBE_PLACED" ] && break
+  [ -n "$PROBE_NEO" ] && echo "setblock 0 300 0 $PROBE_NEO" >&9
+  echo "setblock 2 300 0 $PROBE_VANILLA" >&9; sleep 1
+done
+echo "forceload remove -1 -1 1 1" >&9
+PROBE_JVM="-Dforbric.clientSmokeProbe=$PROBE_AT -Dforbric.clientSmokeProbeTicks=100"
+
 step "connect a real client to 127.0.0.1:$PORT"
-FORBRIC_JVM="-Dforbric.clientSmoke=true -Dforbric.clientSmokeWorld=127.0.0.1:$PORT -Dforbric.clientSmokeReadyTicks=60 -Dforbric.clientSmokeDisconnectTicks=140 ${M12_EXTRA_JVM:-}" \
+FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.clientSmoke=true -Dforbric.clientSmokeWorld=127.0.0.1:$PORT -Dforbric.clientSmokeReadyTicks=60 -Dforbric.clientSmokeDisconnectTicks=140 $PROBE_JVM ${M12_EXTRA_JVM:-}" \
 RUNDIR="$CLI" "$KERNEL/run/launch-kernel-client.sh" \
   --quickPlayPath "$CLI/quickPlay/log.json" --quickPlayMultiplayer "127.0.0.1:$PORT" > "$CLOG" 2>&1 &
 CLIENT_PID=$!
@@ -135,9 +173,8 @@ done
 
 step "let vanilla's post-main watchdog speak before killing anything"
 for i in $(seq 1 25); do kill -0 "$CLIENT_PID" 2>/dev/null || break; sleep 1; done
-for pid in $(pgrep -P "$CLIENT_PID" 2>/dev/null) "$CLIENT_PID"; do kill "$pid" 2>/dev/null; done
-sleep 2
-for pid in $(pgrep -P "$CLIENT_PID" 2>/dev/null) "$CLIENT_PID"; do kill -9 "$pid" 2>/dev/null; done
+stop_tree "$CLIENT_PID"   # the whole tree: lib.sh says why children-only orphans a JVM
+wait "$CLIENT_PID" 2>/dev/null
 cat "$CGAME" >> "$CLOG" 2>/dev/null || true
 
 step "stop the server"
@@ -153,12 +190,22 @@ check "server accepted the login"    "logged in with entity id"                 
 check "player joined on the server"  "joined the game"                                 "$SLOG"
 # The tree's only performance assertion. Safe to make here and nowhere generic: the login check one line up
 # is the denominator — vanilla pauses an empty server, so "no overload warnings" means nothing without it.
-check_kept_up "server kept up while the player was on" "$SLOG"
+check_kept_up "server kept up from the client's dial on" "$SLOG" "$CLOG"
 
 step "the configuration phase and registry sync completed (must PASS)"
 # This is the surface no other gate reaches: known-pack negotiation, then registry + tag sync over the wire.
 check "client finished configuring"  "ClientSmoke\] joined world via quick-play"        "$CLOG"
 check_absent "no registry mismatch"  "Registry (mismatch|remapping failed)|Received unknown|Missing registry"  "$CLOG"
+# The particle registry was in that sync (a mod registered a particle type, the denominator for the line above), and the
+# particle provider map came through it as NeoForge keeps it: by name, with no int-keyed tracker re-keying the kernel's
+# view of it (the absence above is the remap itself not failing). Asked of the default set only: an M12_MODS set chosen
+# to split one ecosystem from the other need not carry a particle type, and that is not what such a run is asking.
+if [ -z "${M12_MODS:-}" ]; then
+  check "a mod registered a particle type, so the remap reaches the particle registry" \
+    "Forbric/Lifecycle\] registered content: .*particle_type=[1-9]" "$CLOG"
+  check "the remap tracker is not attached to the particle provider view" \
+    "Forbric/Particles\] fabric-registry-sync's remap tracker for ParticleEngine.providers is not attached" "$CLOG"
+fi
 check_absent "no unknown payload"    "Unknown custom packet|Unregistered payload|Payload may not be sent"      "$CLOG"
 check_absent "no protocol error"     "Network Protocol Error|Incompatible client|Outdated (client|server)"     "$CLOG"
 # The second bug this gate found: the server could not ENCODE neoforge:recipe_content, because NeoForge's own
@@ -167,10 +214,13 @@ check_absent "no protocol error"     "Network Protocol Error|Incompatible client
 check_absent "every payload encodes"  "Failed to encode packet"                          "$SLOG"
 check_absent "every payload decodes"  "Failed to decode packet|Failed decoding custom payload" "$CLOG"
 check "NeoForge's own payloads registered on the server" "NeoForge's own included: yes" "$SLOG"
-# The third: seventeen builtin registries are MinecraftForge wrappers, and NeoForge's registry sync remapped them
-# through MappedRegistry fields the wrapper never fills — NPE, "Failed to sync registries from the server". The
-# server's ids now reach them through Forge's own injectSnapshot; this line is that path reporting in.
-check "Forge-wrapped registries followed the server's ids" "Forge-wrapped registr.* followed the server's ids" "$CLOG"
+# The fourth (the header's): NeoForge's registry sync applies the server's ids on the client. The kernel takes the
+# client's own ids first, because it owns the freeze and NeoForge's snapshot of them is never taken, so the disconnect
+# can put them back; the capture line is that path reporting in, and the absence is the sync itself not failing.
+# (The check that stood here read "Forge-wrapped registries followed the server's ids", KernelForgeWrapperSync's line,
+# deleted with the MinecraftForge wrappers in Stage 4.)
+check "the client's pre-connection ids were captured before the sync" \
+  "Forbric/RegistrySync\] captured the pre-connection ids of [1-9][0-9]* synced registr\(ies\)" "$CLOG"
 check_absent "client applied every registry sync" "Failed to sync registries|Failed to handle registry sync"  "$CLOG"
 
 # Fabric declares a client's PLAY receivers during CONFIGURATION, through c:register — not through
@@ -197,7 +247,7 @@ check "no channel has a payload type and nothing declaring it" "registered-but-n
 # nothing could notice the number moving.
 #
 # A ceiling, not an equality: what is healthy depends on the mod set, and this number is supposed to go DOWN.
-check "the partial-application census ran" "guest mixin\(s\) apply only partially on the merged base" "$SLOG"
+check "the partial-application census ran" "guest mixin\(s\) apply only partially on this base" "$SLOG"
 PARTIAL_MIXINS="$(grep -aoE 'Forbric/Mixin\] [0-9]+ guest mixin\(s\) apply only partially' "$SLOG" | grep -oE '[0-9]+' | tail -1)"
 if [ -n "${PARTIAL_MIXINS:-}" ] && [ "$PARTIAL_MIXINS" -le "${M12_PARTIAL_CEILING:-30}" ]; then
   echo "[kernel] PASS partially applied guest mixins within the ceiling ($PARTIAL_MIXINS <= ${M12_PARTIAL_CEILING:-30})"
@@ -211,18 +261,120 @@ fi
 # loader is slow had nothing to agree or disagree with.
 #
 # The MEAN is not the assertion — a server keeping up holds 50ms exactly, by sleeping off what the tick did not
-# use. The tail is: an interval at twice the budget means there was no sleep left to give back. Live baseline on
-# this machine is 1 in 1800.
+# use. The tail is: an interval at twice the budget means there was no sleep left to give back.
+#
+# COUNTED FROM THE CLIENT'S DIAL TO THE LEAVE, not from the server's start (C5 wave 2b). Until then the ceiling of 20
+# applied to the sampler's 700-tick line, and C5 wave 2 measured 21, 10, 4, 16, 3 and 16 there in six runs alone on
+# NeoForge's base, with nothing late in the first 100 ticks: ticks 100-700 held both this gate's own client JVM booting on
+# the same machine and the player's connection, and the sampler could not tell them apart. The sampler now prints its
+# totals every 20 ticks (one second), so the window is the difference between the last line stamped in an earlier second
+# than the client's "Connecting to" (vanilla prints it before the first packet; the client has finished booting by then)
+# and the first line after "left the game" -- up to two seconds of slack before the dial and one after the leave, counted
+# in. It holds the whole handshake this gate exists for (the login, then the configuration phase: known packs, registry
+# and tag sync, channel declarations, all on the server thread) and the session. Wave 2b's first cut opened the window at
+# the join, which comes after the configuration phase, so nothing bounded the handshake (review A-1). What came before the
+# dial -- the client's boot competing with the server for the machine, which says nothing about the server -- is printed,
+# not asserted.
+# The CEILING keeps the old one's density, not its number: 20 late in 700 ticks, so ceil(window x 20 / 700), 7 for the
+# usual 220-tick window (review B-2: 20 over a 160-tick session would have been 12.5%, four times as loose). Measured
+# alone on the tip of the review fixes (c5/g-c/w2b/rf/gates): 3, 1 and 1 late in windows of 220, 220 and 260 ticks, none
+# of them in the handshake. RED: /tick rate 8 from the dial to the join only, 43 PASS / 1 FAIL, exactly the ceiling (31 of
+# 200, 30 of them in the handshake; join to leave 1 of 160, which the join-opened window passed). GREEN: /tick rate 8 from
+# before the client starts until its "Setting user", 191 late before the dial, not counted (44 / 0). Record:
+# stage4-c5-g-c.md. M12_LATE_CEILING, when set, replaces the derived ceiling with a number.
 check "the tick sampler reported" "Forbric/Tick\] [0-9]+ tick\(s\): mean " "$SLOG"
-LATE_TICKS="$(grep -aoE 'at twice the budget or worse [0-9]+' "$SLOG" | grep -oE '[0-9]+' | tail -1)"
-if [ -n "${LATE_TICKS:-}" ] && [ "$LATE_TICKS" -le "${M12_LATE_CEILING:-20}" ]; then
-  echo "[kernel] PASS server ticks within the lateness ceiling ($LATE_TICKS <= ${M12_LATE_CEILING:-20})"
+# M12_TICK_WINDOW_BEGIN — M12TickWindowContractTest runs this block against synthetic SLOG/CLOG pairs.
+TICK_WINDOW="$(python3 - "$SLOG" "$CLOG" <<'PY_TICKS'
+import math, re, sys
+# Sampler lines carry running totals (ticks, late ticks); a window is the difference between two of them.
+# (No apostrophe in this block: bash 3.2 parses a heredoc inside a command substitution for quotes.)
+SAMPLER = re.compile(r"\[Forbric/Tick\] (\d+) tick\(s\): .* at twice the budget or worse (\d+) ")
+STAMP = re.compile(r"^\[(\d\d):(\d\d):(\d\d)\]")
+def stamp(line):
+    m = STAMP.match(line)
+    return None if m is None else int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+dial = None
+for line in open(sys.argv[2], encoding="utf-8", errors="replace"):
+    if "Connecting to 127.0.0.1" in line and stamp(line) is not None:
+        dial = stamp(line)
+        break
+totals, first, prev, wrap = (0, 0), None, None, 0
+before_dial, at_join, after_leave, joined, left = (0, 0), None, None, False, False
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    t = stamp(line)
+    if t is not None:
+        if prev is not None and t < prev - 43200:
+            wrap += 86400  # the run crossed midnight
+        prev = t
+        t += wrap
+        if first is None:
+            first = t
+    m = SAMPLER.search(line)
+    if m:
+        totals = (int(m.group(1)), int(m.group(2)))
+        # Stamped in an earlier second than the dial, so printed before it: the last such line opens the window.
+        if dial is not None and t is not None and t < dial + (86400 if dial < first else 0):
+            before_dial = totals
+        if left and after_leave is None:
+            after_leave = totals
+    elif not joined and " joined the game" in line:
+        joined, at_join = True, totals
+    elif joined and not left and " left the game" in line:
+        left = True
+# A server stopped before it printed a line after the leave (at a slow tick rate it prints one every 20 of its own
+# ticks) closes the window at its last line, which can only leave the last ticks out, never add any.
+if left and after_leave is None:
+    after_leave = totals
+if dial is None or at_join is None or after_leave is None:
+    print("? ? ? ? ? ? ? ? ?")
+else:
+    print(before_dial[0], before_dial[1], at_join[0] - before_dial[0], at_join[1] - before_dial[1],
+          after_leave[0] - at_join[0], after_leave[1] - at_join[1], after_leave[0] - before_dial[0],
+          after_leave[1] - before_dial[1], math.ceil((after_leave[0] - before_dial[0]) * 20 / 700))
+PY_TICKS
+)"
+read -r PRE_TICKS PRE_LATE HS_TICKS HS_LATE SESSION_TICKS SESSION_LATE WINDOW_TICKS WINDOW_LATE DERIVED_CEILING <<< "$TICK_WINDOW"
+LATE_CEILING="${M12_LATE_CEILING:-${DERIVED_CEILING:-?}}"
+echo "[kernel] tick lateness: ${PRE_LATE:-?} of ${PRE_TICKS:-?} tick(s) before the client dialled (its boot beside the server; not asserted), ${HS_LATE:-?} of ${HS_TICKS:-?} from the dial to the join (the handshake), ${SESSION_LATE:-?} of ${SESSION_TICKS:-?} while the player was on"
+if [[ "${SESSION_TICKS:-}" =~ ^[0-9]+$ ]] && [ "$SESSION_TICKS" -ge 100 ]; then
+  echo "[kernel] PASS the tick sampler covered the session ($SESSION_TICKS ticks between the join and the leave)"
 else
-  echo "[kernel] FAIL server ticks late: ${LATE_TICKS:-none found} at twice the budget (ceiling ${M12_LATE_CEILING:-20})"
+  echo "[kernel] FAIL the tick sampler covered the session (got ${SESSION_TICKS:-none}; a dial, a join and a leave with sampler lines around them, 100 ticks at least from the join)"
   FAIL=1
 fi
+if [[ "${WINDOW_LATE:-}" =~ ^[0-9]+$ ]] && [[ "$LATE_CEILING" =~ ^[0-9]+$ ]] && [ "$WINDOW_LATE" -le "$LATE_CEILING" ]; then
+  echo "[kernel] PASS server ticks within the lateness ceiling from the client's dial to the leave ($WINDOW_LATE of $WINDOW_TICKS <= $LATE_CEILING)"
+else
+  echo "[kernel] FAIL server ticks late from the client's dial to the leave: ${WINDOW_LATE:-none found} of ${WINDOW_TICKS:-?} at twice the budget (ceiling $LATE_CEILING)"
+  FAIL=1
+fi
+# M12_TICK_WINDOW_END
 check_absent "nobody was told the server requires a mod they have" \
   "This server requires" "$SLOG"
+
+step "each end numbers every block state once, and the blocks placed before the join decode as themselves (must PASS)"
+# RED, measured 2026-11-11 (c5/k1/gates): 28 PASS / 9 FAIL at the stage tip 7aaebbec, before lane K1's fix, and the same
+# 28 / 9 with only the fix's clear taken out of KernelLifecycle.closeRegistrationWindow: the client dies on the chunk
+# ("No value with id 35212", Network Protocol Error), so the read-back and the protocol, play-on, clean-leave, watcher and
+# crash checks go red; with the fix 37 / 0. The two "numbered once" lines are the kernel's own check after each freeze it
+# drives (KernelLifecycle.verifyBlockStateIds, K1's review A-3): they hold for every M12_MODS set, block in view or not,
+# and a server that numbered twice prints a CAUGHT "is not one id per block state" instead (red control in
+# c5/k1/review-fixes).
+check "the server numbered every block state once" \
+  "Forbric/Lifecycle\] block-state ids after the registration window freeze: [0-9]+ states, each numbered once" "$SLOG"
+check "the client numbered every block state once" \
+  "Forbric/Lifecycle\] block-state ids after the client entrypoint window freeze: [0-9]+ states, each numbered once" "$CLOG"
+check_absent "no blockstate->id map off by a numbering on the server" "blockstate->id map is not one id per block state" "$SLOG"
+check_absent "no blockstate->id map off by a numbering on the client" "blockstate->id map is not one id per block state" "$CLOG"
+check "the server placed the blocks before the join" "Changed the block" "$SLOG" "$PROBE_PLACED"
+check "the client read them back" "ClientSmoke\] block at \([02] 300 0\)" "$CLOG" "$PROBE_PLACED"
+check_absent "no block-state id the client cannot map" "No value with id" "$CLOG"
+if [ -n "$PROBE_NEO" ]; then
+  check "the NeoForge mod's block reads back as itself" "block at \(0 300 0\) is $PROBE_NEO " "$CLOG"
+else
+  echo "[kernel] (no mcw-bridges in this M12_MODS set: the vanilla block is read back alone)"
+fi
+check "the vanilla control reads back as itself" "block at \(2 300 0\) is $PROBE_VANILLA " "$CLOG"
 
 step "it played and left cleanly (must PASS)"
 check "survived real simulation"     "ClientSmoke\] client-ready after"                 "$CLOG"

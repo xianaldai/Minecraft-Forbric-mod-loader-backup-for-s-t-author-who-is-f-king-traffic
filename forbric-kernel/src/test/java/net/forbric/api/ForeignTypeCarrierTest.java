@@ -47,11 +47,10 @@ import org.junit.jupiter.api.Test;
  * <p>Skips when the carriers are not staged, so a fresh clone still builds.
  */
 class ForeignTypeCarrierTest {
-	private static final Path NEOFORGE = staged("neoforge-runtime", "neoforge-runtime.jar");
-	private static final Path FORGE = staged("forge-runtime", "forge-runtime.jar");
+	private static final Path NEOFORGE = staged(TestFixtures.NEO_CARRIER_JAR);
 
-	private static Path staged(String dir, String jar) {
-		return TestFixtures.stagedRoot().resolve(dir).resolve(jar);
+	private static Path staged(String jar) {
+		return TestFixtures.stagedRoot().resolve(jar);
 	}
 
 	@Test
@@ -59,13 +58,8 @@ class ForeignTypeCarrierTest {
 		assertNamesResolve(Ecosystem.NEOFORGE, NEOFORGE);
 	}
 
-	@Test
-	void everyMinecraftForgeNameIsInTheStagedForgeCarrier() throws IOException {
-		assertNamesResolve(Ecosystem.FORGE, FORGE);
-	}
-
 	private static void assertNamesResolve(Ecosystem eco, Path carrier) throws IOException {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "staged carrier absent: " + carrier);
+		TestFixtures.requireFile(Fixture.STAGED, carrier, "staged carrier absent: " + carrier);
 
 		Set<String> classes = classesIn(carrier);
 		List<String> missing = new ArrayList<>();

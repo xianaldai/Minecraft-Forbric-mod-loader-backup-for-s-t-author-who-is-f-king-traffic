@@ -81,16 +81,24 @@ public final class KernelClientSmoke {
 	public static final String MODS_SCREEN = "forbric.clientSmokeModsScreen";
 	/**
 	 * {@code modid[,modid…]}: open each of these mods' config screens the way a player does — select the mod's row in
-	 * the unified Mods screen and press its Config button — then log the class of the screen in front and save a
-	 * screenshot named {@code forbric-config-<modid>.png}.
+	 * the unified Mods screen with the keyboard and with the mouse, click its Config button, and double-click its row,
+	 * all through the game's own input handlers — then log the class of the screen in front and save a screenshot named
+	 * {@code forbric-config-<modid>.png}; the Mods screen itself is saved first as {@code forbric-config-mods-screen.png}.
 	 *
 	 * <p>The class name says whose screen it is; the picture says it is that mod's settings and not an empty frame
 	 * or a crash screen. Neither is a claim the resolver can make about itself: it can only say it returned an
-	 * object. Starts at {@link #CONFIG_SCREENS_AT}; give the run about {@link #CONFIG_SCREEN_HOLD} + 4 ticks per mod.
+	 * object. Starts at {@link #CONFIG_SCREENS_AT}; give the run about {@link #CONFIG_SCREEN_HOLD} + 6 ticks per mod.
 	 */
 	public static final String CONFIG_SCREENS = "forbric.clientSmokeConfigScreens";
 	/** World tick at which {@link #CONFIG_SCREENS} starts (default 100). */
 	public static final String CONFIG_SCREENS_AT = "forbric.clientSmokeConfigScreensAt";
+	/**
+	 * {@code modid[,modid…]}: when {@link #CONFIG_SCREENS} starts, ask an installed Mod Menu about each of these mods
+	 * the way its own list does -- {@code ModMenu.hasConfigScreen}, the name and description its list shows, the icon
+	 * it reads, and the class of the screen {@code ModMenu.getConfigScreen} builds -- and log the answers. Mod Menu's list is a second Mods screen on an
+	 * instance that has it, and only Mod Menu can say what it shows.
+	 */
+	public static final String MOD_MENU_ASK = "forbric.clientSmokeModMenuAsk";
 	/** Ticks a config screen is left up before its screenshot: long enough for its own init and a few frames. */
 	private static final int CONFIG_SCREEN_HOLD = 12;
 	/** World tick at which vanilla's key binds screen is opened, to see which screen the game ends up showing. */
@@ -101,12 +109,13 @@ public final class KernelClientSmoke {
 	 * World tick at which to open a container screen and drive one press, one drag, one release and one wheel
 	 * notch through the game's OWN {@code MouseHandler}. 0 (the default) leaves it alone.
 	 *
-	 * <p>It exists because the screen-mouse bridges cannot be judged from anything the kernel says. A forward
-	 * counter proves the kernel forwarded; what was in doubt is whether a traditional-Forge mod's listener runs,
-	 * and the only witness to that is the mod itself. Driving {@code MouseHandler.onButton},
-	 * {@code handleAccumulatedMovement} and {@code onScroll} — the three private methods the merged base's own
-	 * GLFW callbacks call, and the three that hold NeoForge's hooks — makes a mod that listens on the
-	 * MinecraftForge side speak, or stay silent, with nothing in between.
+	 * <p>It exists because whether a mod's screen-mouse listener runs cannot be judged from anything the kernel says;
+	 * the only witness to that is the mod itself. Driving {@code MouseHandler.onButton}, {@code handleAccumulatedMovement}
+	 * and {@code onScroll} — the three private methods the base's own GLFW callbacks call, and the three that hold
+	 * NeoForge's screen-mouse hooks — makes a listening mod speak, or stay silent, with nothing in between. No gate arms
+	 * it since gate-m41 (the one that did, for the MinecraftForge screen-mouse forwards) was deleted with those forwards;
+	 * the drill itself names no ecosystem, and a NeoForge or Fabric mod that logs its own mouse handling (MouseTweaks,
+	 * in client-merged-pack and client-neo-pack) is the witness a gate re-arming it would read.
 	 */
 	public static final String SCREEN_MOUSE = "forbric.clientSmokeScreenMouse";
 
@@ -127,6 +136,27 @@ public final class KernelClientSmoke {
 	public static final String ELYTRA = "forbric.clientSmokeElytra";
 	/** Altitude to drop from. Absolute, because the world keeps whatever the last run left behind. */
 	public static final String ELYTRA_ALTITUDE = "forbric.clientSmokeElytraAltitude";
+	/**
+	 * {@code off} withholds the tooltip probe's own NeoForge {@code ItemTooltipEvent} listener, so the line gate-m9 reads
+	 * for "a NeoForge mod can add a line to an item's tooltip" goes red: the control that shows the check measures the
+	 * listener, not the log.
+	 */
+	public static final String TOOLTIP_EVENT = "forbric.clientSmokeTooltipEvent";
+	/**
+	 * World tick at which to summon each entity type of {@link #MULTIPART_TYPES} beside the player (on the integrated
+	 * server, without AI) and, {@link #MULTIPART_HOLD} ticks later, read on the CLIENT whether each one is there with
+	 * every part its {@code getParts()} answers in the level's part list. 0 (the default) leaves it alone.
+	 *
+	 * <p>A multipart entity is where the client once disconnected: the merged base's tracking callback (Forbric 0.3.x and earlier) read the other
+	 * family's part array, which is null for a NeoForge mod's entity. A client that tracks one says so here, part by
+	 * part; a client that disconnected never gets to say anything, and the gate's clean-disconnect line goes missing.
+	 */
+	public static final String MULTIPART = "forbric.clientSmokeMultipart";
+	/** {@code namespace:path[,…]}: the entity types {@link #MULTIPART} summons (default {@code minecraft:ender_dragon}). */
+	public static final String MULTIPART_TYPES = "forbric.clientSmokeMultipartTypes";
+	/** Ticks between the summons and the client-side read: long enough for the spawn packets to arrive. */
+	private static final int MULTIPART_HOLD = 40;
+	private static int multipartStage;
 	/** Ticks to leave it open. Long enough for frames to be drawn, short enough not to move the disconnect. */
 	private static final int MODS_SCREEN_HOLD = 20;
 
@@ -181,15 +211,6 @@ public final class KernelClientSmoke {
 				disconnectRequested = false;
 				stopRequested = true;
 				probeIds(minecraft, "after disconnect");
-				if (connectionProbesArmed) {
-					ForbricLog.info("[Forbric/ClientSmoke] MinecraftForge connection events: LoggingIn %d, LoggingOut %d",
-							forgeLogins[0], forgeLogins[1]);
-					StringBuilder census = new StringBuilder();
-					for (String[] heard : FORGE_CLIENT_CENSUS) {
-						census.append(' ').append(heard[0]).append('=').append(forgeHeard.getOrDefault(heard[0], 0));
-					}
-					ForbricLog.info("[Forbric/ClientSmoke] MinecraftForge client events heard:%s", census);
-				}
 				ForbricLog.info("[Forbric/ClientSmoke] clean disconnect observed; stopping client");
 				invokeNoArg(minecraft, "stop");
 			}
@@ -226,6 +247,7 @@ public final class KernelClientSmoke {
 		if (ready) modsScreenIfDue(minecraft);
 		if (ready) configScreensIfDue(minecraft);
 		if (ready) creativeSearchIfDue(minecraft, player);
+		if (ready) multipartIfDue(minecraft, level);
 		if (ready && !tooltipProbed) probeTooltip(level, player);
 		if (ready && !probed && worldTicks >= Integer.getInteger(PROBE_TICKS, 160)) {
 			probed = true;
@@ -241,26 +263,16 @@ public final class KernelClientSmoke {
 
 	private static boolean keyBindsTried;
 
-	/** LoggingIn, LoggingOut as MinecraftForge listeners saw them. */
-	private static final int[] forgeLogins = new int[2];
-	/** MinecraftForge client events a smoke run produces on its own, each heard by a listener as a mod's would be. */
-	private static final String[][] FORGE_CLIENT_CENSUS = {
-			{"RenderFog", "net.minecraftforge.client.event.ViewportEvent$RenderFog"},
-			{"FogColor", "net.minecraftforge.client.event.ViewportEvent$ComputeFogColor"},
-			{"FovModifier", "net.minecraftforge.client.event.ComputeFovModifierEvent"},
-			{"ScreenRenderPre", "net.minecraftforge.client.event.ScreenEvent$Render$Pre"},
-			{"ScreenRenderPost", "net.minecraftforge.client.event.ScreenEvent$Render$Post"},
-			{"SystemMessage", "net.minecraftforge.client.event.SystemMessageReceivedEvent"},
-			{"TextureStitched", "net.minecraftforge.client.event.TextureStitchEvent$Post"},
-			{"ModelsBaked", "net.minecraftforge.client.event.ModelEvent$BakingCompleted"}};
-	private static final java.util.Map<String, Integer> forgeHeard = new java.util.concurrent.ConcurrentHashMap<>();
 	private static boolean connectionProbesArmed;
 
 	/**
-	 * Listens the way a MinecraftForge mod does for the client joining and leaving, and registers one client command
-	 * through each family's registration event, before any world is joined. What the game's command tree holds after
-	 * joining says whether both registrations reached the dispatcher the game runs — and whether MinecraftForge's own
-	 * handler replaced it with a tree of its own (the NeoForge command would then be gone).
+	 * Registers one client command through NeoForge's client-command registration event, before any world is joined.
+	 * Whether the game's command tree holds it after joining says whether the registration reached the dispatcher the
+	 * game runs.
+	 *
+	 * <p>NeoForge's listener stands alone in its own try. It used to share one with the MinecraftForge listeners, and on
+	 * a base without MinecraftForge the first {@code Class.forName} of a MinecraftForge event threw, disarmed the probes
+	 * and left the NeoForge command unregistered and {@link #reportClientCommands} silent.
 	 */
 	@SuppressWarnings({"unchecked", "rawtypes"})
 	private static void armConnectionProbes(Object minecraft) {
@@ -276,44 +288,18 @@ public final class KernelClientSmoke {
 					throw new IllegalStateException(e);
 				}
 			};
-			String forgeNet = "net.minecraftforge.client.event.ClientPlayerNetworkEvent$";
-			for (String[] heard : FORGE_CLIENT_CENSUS) {
-				forgeListen(cl, heard[1], e -> forgeHeard.merge(heard[0], 1, Integer::sum));
-			}
-			forgeListen(cl, forgeNet + "LoggingIn", e -> forgeLogins[0]++);
-			forgeListen(cl, forgeNet + "LoggingOut", e -> forgeLogins[1]++);
-			forgeListen(cl, net.forbric.api.ForeignType.CLIENT_COMMANDS_EVENT.binary(net.forbric.api.Ecosystem.FORGE),
-					e -> register.accept(invoke(e, "getDispatcher"), "forbricsmokeforge"));
 			Object neoBus = Class.forName("net.neoforged.neoforge.common.NeoForge", true, cl).getField("EVENT_BUS").get(null);
 			Class<?> neoEvent = Class.forName(net.forbric.api.ForeignType.CLIENT_COMMANDS_EVENT.binary(net.forbric.api.Ecosystem.NEOFORGE), true, cl);
 			neoBus.getClass().getMethod("addListener", Class.class, java.util.function.Consumer.class).invoke(neoBus, neoEvent,
 					(java.util.function.Consumer) e -> register.accept(invoke(e, "getDispatcher"), "forbricsmokeneo"));
 		} catch (ClassNotFoundException absent) {
 			Caught.expected(absent);
-			ForbricLog.debug("[Forbric/ClientSmoke] not both families on this client — no connection probes");
+			ForbricLog.debug("[Forbric/ClientSmoke] no NeoForge client-command event on this client — no connection probe");
 			connectionProbesArmed = false;
 		} catch (Throwable t) {
 			Caught.warn(t, "[Forbric/ClientSmoke] could not arm the connection probes");
 			connectionProbesArmed = false;
 		}
-	}
-
-	@SuppressWarnings({"unchecked", "rawtypes"})
-	private static void forgeListen(ClassLoader cl, String event, java.util.function.Consumer<Object> listener) throws Exception {
-		Object bus = Class.forName(event, true, cl).getField("BUS").get(null);
-		// The bus's public interface, not its class: the implementation is not public.
-		for (Class<?> type = bus.getClass(); type != null; type = type.getSuperclass()) {
-			for (Class<?> api : type.getInterfaces()) {
-				try {
-					api.getMethod("addListener", java.util.function.Consumer.class).invoke(bus, (java.util.function.Consumer) listener);
-					return;
-				} catch (NoSuchMethodException elsewhere) {
-					Caught.expected(elsewhere);
-					continue;
-				}
-			}
-		}
-		throw new NoSuchMethodException(event + ".BUS.addListener(Consumer)");
 	}
 
 	private static Object invoke(Object target, String method) {
@@ -324,14 +310,14 @@ public final class KernelClientSmoke {
 		}
 	}
 
-	/** Which of the two probe commands the joined connection's command tree has. */
+	/** Whether the joined connection's command tree has the probe command. */
 	private static void reportClientCommands(Object minecraft) {
 		try {
 			Object connection = invoke(minecraft, "getConnection");
 			Object root = invoke(invoke(connection, "getCommands"), "getRoot");
 			java.lang.reflect.Method child = root.getClass().getMethod("getChild", String.class);
-			ForbricLog.info("[Forbric/ClientSmoke] client command tree after joining: forge=%s neo=%s",
-					child.invoke(root, "forbricsmokeforge") != null, child.invoke(root, "forbricsmokeneo") != null);
+			ForbricLog.info("[Forbric/ClientSmoke] client command tree after joining: neo=%s",
+					child.invoke(root, "forbricsmokeneo") != null);
 		} catch (Throwable t) {
 			Caught.warn(t, "[Forbric/ClientSmoke] could not read the client command tree");
 		}
@@ -480,9 +466,9 @@ public final class KernelClientSmoke {
 	 * Opens the player's inventory and produces real mouse input inside it.
 	 *
 	 * <p>Everything goes through {@code MouseHandler}'s own methods — the ones GLFW calls — rather than through
-	 * either family's hook. That is the whole point: calling a hook would prove only that the hook posts, which
-	 * was never in doubt. What is being asked is whether the merged base, on its real input path, reaches a
-	 * traditional-Forge mod's listener; so the drill starts where a mouse starts and lets the game do the rest.
+	 * a hook. That is the whole point: calling a hook would prove only that the hook posts, which was never in
+	 * doubt. What is being asked is whether the base, on its real input path, reaches a mod's screen-mouse
+	 * listener; so the drill starts where a mouse starts and lets the game do the rest.
 	 *
 	 * <p>One step per {@link #STEP_TICKS} ticks, never several in a tick. A screen opened and clicked in the same
 	 * tick is clicked before {@code init()} has laid out a single slot, so the click lands on nothing and a
@@ -600,7 +586,7 @@ public final class KernelClientSmoke {
 	/**
 	 * Every non-empty slot of the open container menu, as {@code index=item*count}.
 	 *
-	 * <p>Read twice, side by side, because the question the drill is really asking is whether a MinecraftForge
+	 * <p>Read twice, side by side, because the question the drill is really asking is whether a listening
 	 * mod MOVED something — and a mod that is never called and a mod that was called and declined produce the
 	 * same silence. Two censuses that differ do not.
 	 */
@@ -709,7 +695,7 @@ public final class KernelClientSmoke {
 	/**
 	 * One press, one drag and one release, at the same place.
 	 *
-	 * <p>These three are here for the log, not for the census: their MinecraftForge listeners are what the run is
+	 * <p>These three are here for the log, not for the census: a mod's listeners on them are what the run is
 	 * asking about, and a mod that is called prints that it was called. What they do to the container is not a
 	 * differential, for the reason {@link #driveTheWheel} gives.
 	 *
@@ -740,7 +726,7 @@ public final class KernelClientSmoke {
 
 		onButton.invoke(mouse, handle, left, 0);
 		ForbricLog.info("[Forbric/ClientSmoke] drove press, drag and release through MouseHandler; whether a "
-				+ "MinecraftForge mod heard them is that mod's own log");
+				+ "mod heard them is that mod's own log");
 	}
 
 	/** Writes one field anywhere up the hierarchy. Same search as {@link #fieldValue}, the other way round. */
@@ -1082,7 +1068,7 @@ public final class KernelClientSmoke {
 			Object block = accessible(state.getClass(), "getBlock").invoke(state);
 			Object blockRegistry = Class.forName("net.minecraft.core.registries.BuiltInRegistries", true, cl)
 					.getField("BLOCK").get(null);
-			// Through the Registry interface, not the implementation: the merged registry class names Fabric
+			// Through the Registry interface, not the implementation: the registry class names Fabric
 			// registry-sync types in its signatures, and listing its declared methods links them.
 			Object name = Class.forName("net.minecraft.core.Registry", true, cl).getMethod("getKey", Object.class)
 					.invoke(blockRegistry, block);
@@ -1190,7 +1176,7 @@ public final class KernelClientSmoke {
 	/**
 	 * Equips an elytra, drops the player into the air and asks whether they can glide.
 	 *
-	 * <p>{@code canGlide()} is the exact predicate that was false: the merge took NeoForge's version, which
+	 * <p>{@code canGlide()} is the exact predicate that was false: the base has NeoForge's version, which
 	 * decides gliding from the {@code neoforge:gliding_flight} attribute alone, and vanilla's
 	 * {@code forEachModifier}, which never posts the event that sets it. So this reports THREE things, because
 	 * they fail separately and only the last one is the player's complaint: the attribute reaching the entity,
@@ -1432,7 +1418,7 @@ public final class KernelClientSmoke {
 		return out.toString();
 	}
 
-	/** The NeoForge attribute the merged base's canGlide reads, or -1 if it cannot be asked. */
+	/** The NeoForge attribute the base's canGlide reads, or -1 if it cannot be asked. */
 	private static double glidingAttribute(Object player, ClassLoader cl) {
 		try {
 			Class<?> neoMod = Class.forName("net.neoforged.neoforge.common.NeoForgeMod", true, cl);
@@ -1483,7 +1469,7 @@ public final class KernelClientSmoke {
 	 *
 	 * <p>A mod's own assets are served into the repository as required packs, and required is what keeps them
 	 * applied. They are also marked hidden, and hidden is what is supposed to keep them off this screen — but the
-	 * byte merge kept the flag and dropped every reader of it, so ten rows a player did not add and cannot remove
+	 * merged base of Forbric 0.3.x and earlier kept the flag and dropped every reader of it, so ten rows a player did not add and cannot remove
 	 * appeared in their resource-pack list.
 	 *
 	 * <p>Counted from the SCREEN's own row widgets rather than from the repository, because the repository's id
@@ -1703,7 +1689,7 @@ public final class KernelClientSmoke {
 			}
 			Class<?> configs = Class.forName("net.forbric.kernel.runtime.KernelModConfigScreens", true, cl);
 			Object wanted = null;
-			for (String ecosystem : new String[] {"NEOFORGE", "FORGE", "FABRIC"}) {
+			for (String ecosystem : new String[] {"NEOFORGE", "FABRIC"}) {
 				wanted = configs.getMethod("firstWithConfig", String.class).invoke(null, ecosystem);
 				if (wanted != null) break;
 			}
@@ -1780,7 +1766,7 @@ public final class KernelClientSmoke {
 					configs.getMethod("summary").invoke(null));
 			Object entry = null;
 			String from = null;
-			for (String ecosystem : new String[] {"NEOFORGE", "FORGE", "FABRIC"}) {
+			for (String ecosystem : new String[] {"NEOFORGE", "FABRIC"}) {
 				entry = configs.getMethod("firstWithConfig", String.class).invoke(null, ecosystem);
 				if (entry != null) {
 					from = ecosystem;
@@ -1814,16 +1800,25 @@ public final class KernelClientSmoke {
 	private static int configNextTick;
 	private static Object configModsScreen;
 	private static String configShotFor;
+	/** The mod whose row is double-clicked next, after its Config button was pressed (and its screen photographed). */
+	private static String configDoubleFor;
+	private static boolean configRowsRead;
 	private static boolean configScreensDone;
 	private static final java.util.List<String> configOpened = new java.util.ArrayList<>();
+	private static final int GLFW_KEY_DOWN = 264;
+	private static final int GLFW_KEY_UP = 265;
 
 	/**
-	 * Walks {@link #CONFIG_SCREENS}, one mod per step, through the Mods screen's own Config button.
+	 * Walks {@link #CONFIG_SCREENS}, one mod per step, through the Mods screen's own widgets and the game's own input.
 	 *
-	 * <p>A step selects the row with the row's own click handler (which is what asks the resolver whether to show the
-	 * button), reads whether the button is visible — a hidden button is the answer "no config" as the player sees it
-	 * — and presses it. The screen is then left up for {@link #CONFIG_SCREEN_HOLD} ticks and photographed, and the
-	 * next step starts from the same list again, as a player coming back from a mod's settings would.
+	 * <p>Every selection and press goes through the game's input handlers -- {@code KeyboardHandler.keyPress} and
+	 * {@code MouseHandler.onButton}, the methods GLFW calls -- with the cursor put where the row or button is drawn, so
+	 * what is measured is what a player's keyboard and mouse reach. The rows are the ones the open screen's list widget
+	 * holds, found by the id in each row, not a model recomputed beside the screen. A step selects the mod's row with the
+	 * keyboard from the nearest row whose answer is the opposite one and goes back, selects it with a click after that
+	 * row, reads the Config button after each, and clicks the button. The screen in front is then left up for
+	 * {@link #CONFIG_SCREEN_HOLD} ticks and photographed, and the row is double-clicked on a fresh Mods screen. The next
+	 * step starts from the same list again, as a player coming back from a mod's settings would.
 	 */
 	private static void configScreensIfDue(Object minecraft) {
 		String wanted = System.getProperty(CONFIG_SCREENS, "");
@@ -1838,15 +1833,33 @@ public final class KernelClientSmoke {
 				configModsScreen = Class.forName("net.forbric.kernel.runtime.KernelModListScreen", true, cl)
 						.getConstructor(screenType).newInstance((Object) null);
 				setScreen(minecraft, configModsScreen);
+				Class<?> configs = Class.forName("net.forbric.kernel.runtime.KernelModConfigScreens", true, cl);
 				ForbricLog.info("[Forbric/ClientSmoke] config screens: mods with a config screen, by ecosystem: %s",
-						Class.forName("net.forbric.kernel.runtime.KernelModConfigScreens", true, cl)
-								.getMethod("summary").invoke(null));
+						configs.getMethod("summary").invoke(null));
+				logModMenuClasses(cl);
+				askModMenu(minecraft, cl);
+				configNextTick = worldTicks + 2;
+				return;
+			}
+			if (!configRowsRead) {
+				// A tick after the screen was set, so the screenshot is of a frame that drew it.
+				configRowsRead = true;
+				logScreenRows(currentScreen(minecraft));
+				shootNamed(minecraft, "forbric-config-mods-screen.png");
 				configNextTick = worldTicks + 2;
 				return;
 			}
 			if (configShotFor != null) {
 				shootNamed(minecraft, "forbric-config-" + configShotFor + ".png");
+				configDoubleFor = configShotFor;
 				configShotFor = null;
+				configNextTick = worldTicks + 2;
+				return;
+			}
+			if (configDoubleFor != null) {
+				String modId = configDoubleFor;
+				configDoubleFor = null;
+				doubleClickRow(minecraft, cl, modId);
 				configNextTick = worldTicks + 2;
 				return;
 			}
@@ -1859,12 +1872,18 @@ public final class KernelClientSmoke {
 			}
 			String modId = configIds.get(configIndex++);
 			setScreen(minecraft, configModsScreen);
-			if (pressConfigFor(minecraft, cl, modId)) {
-				configOpened.add(modId);
-				configShotFor = modId;
-				configNextTick = worldTicks + CONFIG_SCREEN_HOLD;
-			} else {
-				configNextTick = worldTicks + 1;
+			switch (pressConfigFor(minecraft, cl, modId)) {
+				case OPENED -> {
+					configOpened.add(modId);
+					configShotFor = modId;
+					configNextTick = worldTicks + CONFIG_SCREEN_HOLD;
+				}
+				case NOTHING_OPENED -> {
+					// A row with no config screen: its double click must leave the Mods screen in front.
+					configDoubleFor = modId;
+					configNextTick = worldTicks + 1;
+				}
+				case NO_ROW -> configNextTick = worldTicks + 1;
 			}
 		} catch (Throwable t) {
 			configScreensDone = true;
@@ -1872,75 +1891,433 @@ public final class KernelClientSmoke {
 		}
 	}
 
-	/** One step of {@link #configScreensIfDue}: select {@code modId}'s row, press Config. True when a screen opened. */
-	private static boolean pressConfigFor(Object minecraft, ClassLoader cl, String modId) throws Exception {
-		net.forbric.api.ModCatalog.Entry entry = null;
-		for (net.forbric.api.ModCatalog.Entry e : net.forbric.api.ModCatalog.all()) {
-			if (e.modId().equals(modId)) entry = e;
+	/** What one step of the walk came to. */
+	private enum Pressed { OPENED, NOTHING_OPENED, NO_ROW }
+
+	/** The Mods screen's list widget: the screen's own {@code list} field. */
+	private static Object listWidget(Object screen) {
+		Object list = screen == null ? null : fieldValue(screen, "list");
+		if (list == null) throw new IllegalStateException("the screen in front has no list widget: " + screen);
+		return list;
+	}
+
+	/** The rows the list widget holds, in the order it draws them. */
+	private static java.util.List<?> widgetRows(Object list) throws Exception {
+		return (java.util.List<?>) list.getClass().getMethod("children").invoke(list);
+	}
+
+	/** What a widget row shows: the {@code ModListRows.Row} it was built from (its {@code row} field). */
+	private static net.forbric.kernel.ui.ModListRows.Row modelOf(Object widgetRow) {
+		return (net.forbric.kernel.ui.ModListRows.Row) fieldValue(widgetRow, "row");
+	}
+
+	private static int indexOf(java.util.List<?> widgets, String modId) {
+		for (int i = 0; i < widgets.size(); i++) {
+			net.forbric.kernel.ui.ModListRows.Row row = modelOf(widgets.get(i));
+			if (row != null && row.id().equals(modId)) return i;
 		}
-		if (entry == null) {
-			ForbricLog.warn("[Forbric/ClientSmoke] config screen of %s: no such mod in the catalog", modId);
-			return false;
-		}
-		Object screen = currentScreen(minecraft);
-		Object row = rowNamed(screen, entry.name());
-		if (row == null) {
-			ForbricLog.warn("[Forbric/ClientSmoke] config screen of %s: no row named \"%s\" in the Mods screen", modId,
-					entry.name());
-			return false;
-		}
-		Class<?> eventCls = Class.forName("net.minecraft.client.input.MouseButtonEvent", true, cl);
-		java.lang.reflect.Method click = row.getClass().getMethod("mouseClicked", eventCls, boolean.class);
-		click.setAccessible(true);
-		click.invoke(row, null, false);
-		Object button = buttonLabelled(screen, cl, "Config");
-		if (button == null) {
-			ForbricLog.warn("[Forbric/ClientSmoke] config screen of %s: the Mods screen has no Config button", modId);
-			return false;
-		}
-		if (!button.getClass().getField("visible").getBoolean(button)) {
-			ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s): the Config button is hidden — no config "
-					+ "screen to open", modId, entry.ecosystem());
-			return false;
-		}
-		Class<?> input = Class.forName("net.minecraft.client.input.InputWithModifiers", true, cl);
-		Class.forName("net.minecraft.client.gui.components.AbstractButton", true, cl).getMethod("onPress", input)
-				.invoke(button, (Object) null);
-		Object now = currentScreen(minecraft);
-		if (now == null || now == screen) {
-			ForbricLog.warn("[Forbric/ClientSmoke] config screen of %s (%s): pressing Config left %s in front", modId,
-					entry.ecosystem(), now == null ? "no screen" : "the Mods screen");
-			return false;
-		}
-		ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s) through the Config button: %s", modId,
-				entry.ecosystem(), now.getClass().getName());
-		return true;
+		return -1;
+	}
+
+	private static String kindOf(net.forbric.kernel.ui.ModListRows.Row row) {
+		return row.game() ? "GAME" : row.family() == null ? "GROUP" : row.family().name();
 	}
 
 	/**
-	 * The list row for the mod named exactly {@code name}. A row narrates itself as {@code "<name>, <ecosystem>"}, and
-	 * the separator is part of the match: "Sodium" must not find "Sodium Extra".
+	 * Every row the open Mods screen's list widget holds, in order, each as {@code KIND:id} -- a row drawn indented under
+	 * a parent prefixed {@code >} -- so a gate can see where a row is in what the screen draws, not only that it opens.
 	 */
-	private static Object rowNamed(Object screen, String name) throws Exception {
-		for (Object child : (java.util.List<?>) screen.getClass().getMethod("children").invoke(screen)) {
-			if (child == null) continue;
-			java.lang.reflect.Method children;
-			try {
-				children = child.getClass().getMethod("children");
-			} catch (NoSuchMethodException leaf) {
-				Caught.expected(leaf);
-				continue;
+	private static void logScreenRows(Object screen) {
+		try {
+			java.util.List<String> spelled = new java.util.ArrayList<>();
+			for (Object widget : widgetRows(listWidget(screen))) {
+				net.forbric.kernel.ui.ModListRows.Row row = modelOf(widget);
+				spelled.add(row == null ? "?" : (row.depth() > 0 ? ">" : "") + (row.game() ? "GAME" : row.kind().name())
+						+ ":" + row.id());
 			}
-			for (Object row : (java.util.List<?>) children.invoke(child)) {
-				if (row == null || !row.getClass().getName().contains("KernelModListScreen")) continue;
-				java.lang.reflect.Method narrate = row.getClass().getMethod("getNarration");
-				narrate.setAccessible(true);
-				Object narration = narrate.invoke(row);
-				String text = (String) narration.getClass().getMethod("getString").invoke(narration);
-				if (text.startsWith(name + ", ")) return row;
+			ForbricLog.info("[Forbric/ClientSmoke] config screens: the Mods screen (%s) holds %d row(s): %s",
+					screen.getClass().getName(), spelled.size(), spelled);
+		} catch (Throwable t) {
+			Caught.warn(t, "[Forbric/ClientSmoke] config screens: could not read the Mods screen's rows");
+		}
+	}
+
+	/**
+	 * Where Mod Menu's two classes come from in the game loader, as observed on the classes themselves: its API
+	 * ({@code ModMenuApi}) and its main class ({@code ModMenu}), each loaded and asked for the code source it was defined
+	 * with -- a jar, or none -- or not resolving at all; and whether Fabric has the mod {@code modmenu}.
+	 */
+	private static void logModMenuClasses(ClassLoader cl) {
+		boolean loaded;
+		try {
+			loaded = net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("modmenu");
+		} catch (Throwable t) {
+			Caught.expected(t);
+			loaded = false;
+		}
+		ForbricLog.info("[Forbric/ClientSmoke] Mod Menu's classes: its API com.terraformersmc.modmenu.api.ModMenuApi %s; its "
+				+ "main class com.terraformersmc.modmenu.ModMenu %s; Fabric %s the mod modmenu",
+				classOrigin(cl, "com.terraformersmc.modmenu.api.ModMenuApi"),
+				classOrigin(cl, "com.terraformersmc.modmenu.ModMenu"), loaded ? "has" : "does not have");
+	}
+
+	/**
+	 * {@code does not resolve}; {@code is defined from <jar>}, the code source the loaded class carries; or
+	 * {@code is defined from no jar (no code source)}, followed by what else is true of the name: whether any jar the
+	 * game loader reads has it as a class file (one that does, while the class in use came from none, is a stand-in that
+	 * shadowed a jar), and where the kernel's stand-in bytes for it are. The first half is the class's own; the rest
+	 * describes the loader's resources, and says so.
+	 */
+	private static String classOrigin(ClassLoader cl, String binaryName) {
+		Class<?> type;
+		try {
+			type = Class.forName(binaryName, false, cl);
+		} catch (ClassNotFoundException | LinkageError absent) {
+			Caught.expected(absent);
+			return "does not resolve";
+		}
+		java.security.CodeSource source = type.getProtectionDomain() == null ? null : type.getProtectionDomain().getCodeSource();
+		java.net.URL location = source == null ? null : source.getLocation();
+		if (location != null) return "is defined from " + jarName(location);
+		String internal = binaryName.replace('.', '/');
+		java.net.URL file = cl.getResource(internal + ".class");
+		java.net.URL standIn = cl.getResource(net.forbric.kernel.interop.protocol.modmenu.ModMenuApiStandIn.RESOURCES
+				+ internal + ".class.bin");
+		return "is defined from no jar (no code source); "
+				+ (file == null ? "no jar the game loader reads has it" : "yet " + jarName(file) + " has it")
+				+ (standIn == null ? "; the kernel carries no stand-in bytes for it"
+						: "; the kernel's stand-in bytes for it are in " + jarName(standIn));
+	}
+
+	/** {@code jar:file:/x/y.jar!/a/B.class} → {@code y.jar}. */
+	private static String jarName(java.net.URL resource) {
+		String spelled = resource.toString();
+		int bang = spelled.indexOf("!/");
+		String jar = bang < 0 ? spelled : spelled.substring(0, bang);
+		return jar.substring(jar.lastIndexOf('/') + 1);
+	}
+
+	/**
+	 * {@link #MOD_MENU_ASK}: Mod Menu's API's answers, when it is installed -- {@code ModMenu.hasConfigScreen} for each id
+	 * (what its list's Config button reads), the name and description of its {@code ModMenu.MODS} entry, and the class of
+	 * the screen {@code ModMenu.getConfigScreen} builds -- plus the icon, which is NOT Mod Menu's answer: the probe looks
+	 * it up itself the way Mod Menu's icon code does (the path Fabric's metadata names, found in the mod's container).
+	 * Mod Menu's list screen is never opened.
+	 */
+	@SuppressWarnings("unchecked")
+	private static void askModMenu(Object minecraft, ClassLoader cl) {
+		String wanted = System.getProperty(MOD_MENU_ASK, "");
+		if (wanted.isBlank()) return;
+		Class<?> modMenu;
+		try {
+			modMenu = Class.forName("com.terraformersmc.modmenu.ModMenu", true, cl);
+		} catch (ClassNotFoundException absent) {
+			Caught.expected(absent);
+			ForbricLog.info("[Forbric/ClientSmoke] Mod Menu: not installed — nothing to ask");
+			return;
+		}
+		Class<?> screenType;
+		java.util.Map<String, Object> mods;
+		try {
+			screenType = Class.forName("net.minecraft.client.gui.screens.Screen", false, cl);
+			mods = (java.util.Map<String, Object>) modMenu.getField("MODS").get(null);
+		} catch (Throwable t) {
+			Caught.warn(t, "[Forbric/ClientSmoke] Mod Menu: its API is not the shape this probe reads");
+			return;
+		}
+		for (String id : wanted.split(",")) {
+			id = id.trim();
+			if (id.isEmpty()) continue;
+			try {
+				boolean has = (Boolean) modMenu.getMethod("hasConfigScreen", String.class).invoke(null, id);
+				Object listed = mods.get(id);
+				String name = listed == null ? "<not in its list>"
+						: String.valueOf(listed.getClass().getMethod("getName").invoke(listed));
+				String description = listed == null ? "" : String.valueOf(listed.getClass().getMethod("getDescription").invoke(listed));
+				Object screen = has ? modMenu.getMethod("getConfigScreen", String.class, screenType)
+						.invoke(null, id, currentScreen(minecraft)) : null;
+				ForbricLog.info("[Forbric/ClientSmoke] Mod Menu: %s hasConfigScreen=%s, its list names it \"%s\", describes it "
+						+ "\"%s\", icon %s, getConfigScreen builds %s", id, has, name, description, iconOf(id),
+						screen == null ? "nothing" : screen.getClass().getName());
+			} catch (Throwable t) {
+				Caught.warn(t, "[Forbric/ClientSmoke] Mod Menu: asking about %s failed", id);
 			}
 		}
-		return null;
+	}
+
+	/** The icon Fabric's metadata names for {@code id} and whether its container finds that file. */
+	private static String iconOf(String id) {
+		try {
+			var container = net.fabricmc.loader.api.FabricLoader.getInstance().getModContainer(id);
+			if (container.isEmpty()) return "<no Fabric container>";
+			java.util.Optional<String> icon = container.get().getMetadata().getIconPath(64);
+			if (icon.isEmpty()) return "<none named>";
+			return icon.get() + " (found in its container=" + container.get().findPath(icon.get()).isPresent() + ")";
+		} catch (Throwable t) {
+			Caught.expected(t);
+			return "<unreadable: " + t + ">";
+		}
+	}
+
+	/**
+	 * One step of {@link #configScreensIfDue}: select {@code modId}'s row, press Config.
+	 *
+	 * <p>The row is selected twice, the two ways a player moves the selection, and the Config button read after each.
+	 * With the keyboard: a click on the nearest row whose answer is the opposite one, then the arrow key toward this row
+	 * as many times as it takes, through {@code KeyboardHandler.keyPress}; then back the same way, so the button is seen
+	 * to turn both ways. With the mouse: a click on that row, then on this one. A button left showing the previous row's
+	 * answer is then a wrong answer, not a lucky one.
+	 */
+	private static Pressed pressConfigFor(Object minecraft, ClassLoader cl, String modId) throws Exception {
+		Class<?> configs = Class.forName("net.forbric.kernel.runtime.KernelModConfigScreens", true, cl);
+		Object screen = currentScreen(minecraft);
+		Object list = listWidget(screen);
+		java.util.List<?> widgets = widgetRows(list);
+		int at = indexOf(widgets, modId);
+		if (at < 0) {
+			ForbricLog.warn("[Forbric/ClientSmoke] config screen of %s: the Mods screen has no row for it", modId);
+			return Pressed.NO_ROW;
+		}
+		net.forbric.kernel.ui.ModListRows.Row listed = modelOf(widgets.get(at));
+		String kind = kindOf(listed);
+		// The name the row is built to draw (KernelModListScreen draws row.name()), as the list widget holds it.
+		ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s): its row is named \"%s\"", modId, kind, listed.name());
+		java.lang.reflect.Method has = configs.getMethod("has", net.forbric.kernel.ui.ModListRows.Row.class);
+		boolean[] answers = new boolean[widgets.size()];
+		for (int i = 0; i < widgets.size(); i++) answers[i] = (Boolean) has.invoke(null, modelOf(widgets.get(i)));
+		int from = -1;
+		for (int distance = 1; distance < widgets.size() && from < 0; distance++) {
+			if (at - distance >= 0 && answers[at - distance] != answers[at]) from = at - distance;
+			else if (at + distance < widgets.size() && answers[at + distance] != answers[at]) from = at + distance;
+		}
+		Object button = buttonLabelled(screen, cl, "Config");
+		if (button == null) {
+			ForbricLog.warn("[Forbric/ClientSmoke] config screen of %s: the Mods screen has no Config button", modId);
+			return Pressed.NO_ROW;
+		}
+		java.lang.reflect.Field visible = button.getClass().getField("visible");
+		java.lang.reflect.Method selected = list.getClass().getMethod("getSelected");
+		Object target = widgets.get(at);
+		if (from < 0) {
+			ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s): selected with the keyboard after nothing else — "
+					+ "no row's answer is the opposite one", modId, kind);
+		} else {
+			Object contrast = widgets.get(from);
+			String contrastId = modelOf(contrast).id();
+			clickWidget(minecraft, cl, list, contrast, false);
+			String there = visible.getBoolean(button) ? "shown" : "hidden";
+			int steps = Math.abs(at - from);
+			int toward = from < at ? GLFW_KEY_DOWN : GLFW_KEY_UP;
+			int away = from < at ? GLFW_KEY_UP : GLFW_KEY_DOWN;
+			for (int i = 0; i < steps; i++) keyThroughKeyboardHandler(minecraft, cl, toward);
+			Object now = selected.invoke(list);
+			if (now != target) {
+				ForbricLog.warn("[Forbric/ClientSmoke] config screen of %s (%s): %d x %s from %s left %s selected", modId, kind,
+						steps, keyName(toward), contrastId, now == null ? "nothing" : modelOf(now).id());
+			} else {
+				ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s): selected with the keyboard, %d x %s from %s "
+						+ "(where the Config button was %s), the Config button is %s", modId, kind, steps, keyName(toward),
+						contrastId, there, visible.getBoolean(button) ? "shown" : "hidden");
+			}
+			for (int i = 0; i < steps; i++) keyThroughKeyboardHandler(minecraft, cl, away);
+			now = selected.invoke(list);
+			if (now != contrast) {
+				ForbricLog.warn("[Forbric/ClientSmoke] config screen of %s (%s): %d x %s back toward %s left %s selected", modId,
+						kind, steps, keyName(away), contrastId, now == null ? "nothing" : modelOf(now).id());
+			} else {
+				ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s): back with the keyboard, %d x %s to %s, the "
+						+ "Config button is %s", modId, kind, steps, keyName(away), contrastId,
+						visible.getBoolean(button) ? "shown" : "hidden");
+			}
+			// The mouse's way, from the same contrasting row.
+			clickWidget(minecraft, cl, list, contrast, false);
+		}
+		clickWidget(minecraft, cl, list, target, false);
+		boolean shown = visible.getBoolean(button);
+		ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s): selected with a click after %s, the Config button "
+				+ "is %s", modId, kind, from < 0 ? "nothing else" : modelOf(widgets.get(from)).id(), shown ? "shown" : "hidden");
+		if (!shown) {
+			ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s): the Config button is hidden — no config "
+					+ "screen to open", modId, kind);
+			return Pressed.NOTHING_OPENED;
+		}
+		ModMenuSpy spy = ModMenuSpy.on(cl, modId);
+		try {
+			clickWidget(minecraft, cl, null, button, false);
+		} finally {
+			// Put back even when the press threw: the counting stand-in must not stay in Mod Menu's map for the rest of
+			// the run, where every later lookup of this id would go through it.
+			if (spy != null) spy.restore();
+		}
+		Object now = currentScreen(minecraft);
+		if (spy != null) spy.report(modId, kind);
+		if (now == null || now == screen) {
+			ForbricLog.warn("[Forbric/ClientSmoke] config screen of %s (%s): pressing Config left %s in front", modId,
+					kind, now == null ? "no screen" : "the Mods screen");
+			return Pressed.NOTHING_OPENED;
+		}
+		ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s) through the Config button: %s", modId,
+				kind, now.getClass().getName());
+		return Pressed.OPENED;
+	}
+
+	/**
+	 * Double-clicks {@code modId}'s row on a fresh Mods screen through {@code MouseHandler.onButton}: two presses inside
+	 * the game's own double-click window, so the {@code doubled} flag a row sees is the one the game computed.
+	 */
+	private static void doubleClickRow(Object minecraft, ClassLoader cl, String modId) throws Exception {
+		setScreen(minecraft, configModsScreen);
+		Object screen = currentScreen(minecraft);
+		Object list = listWidget(screen);
+		java.util.List<?> widgets = widgetRows(list);
+		int at = indexOf(widgets, modId);
+		if (at < 0) {
+			ForbricLog.warn("[Forbric/ClientSmoke] config screen of %s: no row to double-click", modId);
+			return;
+		}
+		String kind = kindOf(modelOf(widgets.get(at)));
+		clickWidget(minecraft, cl, list, widgets.get(at), true);
+		Object now = currentScreen(minecraft);
+		if (now != null && now != screen) {
+			ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s) through a double click on its row: %s", modId,
+					kind, now.getClass().getName());
+		} else {
+			ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s): a double click on its row left %s in front",
+					modId, kind, now == null ? "no screen" : "the Mods screen");
+		}
+		setScreen(minecraft, configModsScreen);
+	}
+
+	private static String keyName(int key) {
+		return key == GLFW_KEY_DOWN ? "DOWN" : key == GLFW_KEY_UP ? "UP" : String.valueOf(key);
+	}
+
+	/** One key pressed and released through {@code KeyboardHandler.keyPress}, the method GLFW's key callback calls. */
+	private static void keyThroughKeyboardHandler(Object minecraft, ClassLoader cl, int key) throws Exception {
+		Object keyboard = fieldValue(minecraft, "keyboardHandler");
+		Object window = minecraft.getClass().getMethod("getWindow").invoke(minecraft);
+		long handle = (long) window.getClass().getMethod("handle").invoke(window);
+		Class<?> eventCls = Class.forName("net.minecraft.client.input.KeyEvent", true, cl);
+		Object event = eventCls.getConstructor(int.class, int.class, int.class).newInstance(key, 0, 0);
+		Method keyPress = keyboard.getClass().getDeclaredMethod("keyPress", long.class, int.class, eventCls);
+		keyPress.setAccessible(true);
+		keyPress.invoke(keyboard, handle, 1, event);
+		keyPress.invoke(keyboard, handle, 0, event);
+	}
+
+	/**
+	 * A left click -- or two, inside the double-click window -- on {@code widget} where it is drawn, through
+	 * {@code MouseHandler.onButton} with the cursor put on its centre. A row of {@code list} is scrolled into view first,
+	 * as a player scrolls before clicking. A single click forgets the previous one first, as time passing would: two
+	 * single clicks in one tick are otherwise a double click to the game.
+	 */
+	private static void clickWidget(Object minecraft, ClassLoader cl, Object list, Object widget, boolean doubled)
+			throws Exception {
+		if (list != null) {
+			int top = (Integer) list.getClass().getMethod("getY").invoke(list);
+			int bottom = top + (Integer) list.getClass().getMethod("getHeight").invoke(list);
+			int y = (Integer) widget.getClass().getMethod("getY").invoke(widget);
+			int h = (Integer) widget.getClass().getMethod("getHeight").invoke(widget);
+			if (y < top || y + h > bottom) accessible(list.getClass(), "scrollToEntry", widget.getClass()).invoke(list, widget);
+		}
+		double guiX = (Integer) widget.getClass().getMethod("getX").invoke(widget)
+				+ (Integer) widget.getClass().getMethod("getWidth").invoke(widget) / 2.0;
+		double guiY = (Integer) widget.getClass().getMethod("getY").invoke(widget)
+				+ (Integer) widget.getClass().getMethod("getHeight").invoke(widget) / 2.0;
+		Object mouse = fieldValue(minecraft, "mouseHandler");
+		Object window = minecraft.getClass().getMethod("getWindow").invoke(minecraft);
+		double wide = ((Number) window.getClass().getMethod("getScreenWidth").invoke(window)).doubleValue()
+				/ ((Number) window.getClass().getMethod("getGuiScaledWidth").invoke(window)).doubleValue();
+		double high = ((Number) window.getClass().getMethod("getScreenHeight").invoke(window)).doubleValue()
+				/ ((Number) window.getClass().getMethod("getGuiScaledHeight").invoke(window)).doubleValue();
+		setField(mouse, "xpos", guiX * wide);
+		setField(mouse, "ypos", guiY * high);
+		long handle = (long) window.getClass().getMethod("handle").invoke(window);
+		Class<?> infoCls = Class.forName("net.minecraft.client.input.MouseButtonInfo", true, cl);
+		Object left = infoCls.getConstructor(int.class, int.class).newInstance(0, 0);
+		Method onButton = mouse.getClass().getDeclaredMethod("onButton", long.class, infoCls, int.class);
+		onButton.setAccessible(true);
+		setField(mouse, "lastClick", null);
+		for (int i = 0; i < (doubled ? 2 : 1); i++) {
+			onButton.invoke(mouse, handle, left, 1);
+			onButton.invoke(mouse, handle, left, 0);
+		}
+	}
+
+	/**
+	 * Which factory answered a Config button, when Mod Menu is installed: a counting stand-in put in Mod Menu's own map
+	 * of config screen factories in place of its factory for one id, around one press, and put back after. A screen of
+	 * the same class can come from Mod Menu's factory or from the kernel's own fallback (the game's options screen is
+	 * built by both); whether Mod Menu's factory was called is the difference.
+	 */
+	private static final class ModMenuSpy {
+		private final java.util.Map<String, Object> factories;
+		private final String modId;
+		private final Object original;
+		private final int[] calls = {0};
+
+		private ModMenuSpy(java.util.Map<String, Object> factories, String modId, Object original) {
+			this.factories = factories;
+			this.modId = modId;
+			this.original = original;
+		}
+
+		/** Null when Mod Menu is not installed; a spy reporting "none" when it has no factory of its own for the id. */
+		@SuppressWarnings("unchecked")
+		static ModMenuSpy on(ClassLoader cl, String modId) {
+			Class<?> modMenu;
+			try {
+				modMenu = Class.forName("com.terraformersmc.modmenu.ModMenu", false, cl);
+			} catch (ClassNotFoundException | LinkageError absent) {
+				Caught.expected(absent);
+				return null;
+			}
+			try {
+				// Asked first so Mod Menu merges every entrypoint's provided factories into its map, as its list does.
+				modMenu.getMethod("hasConfigScreen", String.class).invoke(null, modId);
+				Field field = modMenu.getDeclaredField("configScreenFactories");
+				field.setAccessible(true);
+				java.util.Map<String, Object> factories = (java.util.Map<String, Object>) field.get(null);
+				Object original = factories.get(modId);
+				ModMenuSpy spy = new ModMenuSpy(factories, modId, original);
+				if (original == null) return spy;
+				Class<?> factoryType = Class.forName("com.terraformersmc.modmenu.api.ConfigScreenFactory", false, cl);
+				Object counting = java.lang.reflect.Proxy.newProxyInstance(cl, new Class<?>[] {factoryType}, (proxy, m, args) -> {
+					if (m.getDeclaringClass() == Object.class) {
+						return switch (m.getName()) {
+							case "equals" -> proxy == args[0];
+							case "hashCode" -> System.identityHashCode(proxy);
+							default -> "counting " + original;
+						};
+					}
+					if (m.getName().equals("create")) spy.calls[0]++;
+					try {
+						return m.invoke(original, args);
+					} catch (java.lang.reflect.InvocationTargetException thrown) {
+						throw thrown.getCause();
+					}
+				});
+				factories.put(modId, counting);
+				return spy;
+			} catch (Throwable t) {
+				Caught.warn(t, "[Forbric/ClientSmoke] Mod Menu: could not watch its factory for %s", modId);
+				return null;
+			}
+		}
+
+		/** Puts Mod Menu's own factory back in its map; harmless when there was none to replace, or twice. */
+		void restore() {
+			if (original != null) factories.put(modId, original);
+		}
+
+		void report(String id, String kind) {
+			if (original == null) {
+				ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s): Mod Menu holds no factory for it", id, kind);
+				return;
+			}
+			ForbricLog.info("[Forbric/ClientSmoke] config screen of %s (%s): the factory Mod Menu holds for it (%s) answered %d "
+					+ "time(s)", id, kind, original.getClass().getName(), calls[0]);
+		}
 	}
 
 	/** The screen's button whose label reads {@code label}, found as a player finds it: by what it says. */
@@ -2255,6 +2632,12 @@ public final class KernelClientSmoke {
 	 * One advanced tooltip, drawn the way the inventory screen draws it, for a damaged iron sword carrying lore: its
 	 * lore, attribute and durability lines come from NeoForge's appenders, with every installed mod's tooltip listeners
 	 * in the path. Keys are read from the components, not their text, so the client's language does not matter.
+	 *
+	 * <p>The probe is also a NeoForge mod for one tooltip: it adds a listener for NeoForge's {@code ItemTooltipEvent}
+	 * that appends one line to this sword's tooltip and counts how often it was asked, which is what a NeoForge mod that
+	 * adds a tooltip line (Architectury, RarityCore) relies on. Heard once and drawn once is the native answer: the game
+	 * posts the event itself from {@code getTooltipLines}; never heard is a body that does not post it, twice is a second
+	 * post beside the game's. {@code -Dforbric.clientSmokeTooltipEvent=off} withholds the listener.
 	 */
 	private static void probeTooltip(Object level, Object player) {
 		tooltipProbed = true;
@@ -2276,11 +2659,18 @@ public final class KernelClientSmoke {
 			Object context = contextCls.getMethod("of", Class.forName("net.minecraft.world.level.Level", false, cl)).invoke(null, level);
 			Class<?> flagCls = Class.forName("net.minecraft.world.item.TooltipFlag", false, cl);
 			Object advanced = flagCls.getField("ADVANCED").get(null);
+			String eventLine = "forbric-smoke-neoforge-tooltip-event";
+			int[] heard = new int[1];
+			boolean listening = !"off".equalsIgnoreCase(System.getProperty(TOOLTIP_EVENT, "on"));
+			if (listening) listenForTooltipEvent(cl, stack, componentCls.getMethod("literal", String.class).invoke(null, eventLine), heard);
 			java.util.List<?> lines = (java.util.List<?>) stackCls.getMethod("getTooltipLines", contextCls,
 					Class.forName("net.minecraft.world.entity.player.Player", false, cl), flagCls).invoke(stack, context, player, advanced);
 			boolean loreShown = false, durability = false, attributes = false;
+			int eventLines = 0;
 			for (Object drawn : lines) {
-				if (String.valueOf(componentCls.getMethod("getString").invoke(drawn)).contains("forbric-smoke-lore")) loreShown = true;
+				String text = String.valueOf(componentCls.getMethod("getString").invoke(drawn));
+				if (text.contains("forbric-smoke-lore")) loreShown = true;
+				if (text.equals(eventLine)) eventLines++;
 				Object contents = componentCls.getMethod("getContents").invoke(drawn);
 				if (!contents.getClass().getSimpleName().equals("TranslatableContents")) continue;
 				String key = String.valueOf(contents.getClass().getMethod("getKey").invoke(contents));
@@ -2289,9 +2679,34 @@ public final class KernelClientSmoke {
 			}
 			ForbricLog.info("[Forbric/ClientSmoke] advanced tooltip of a damaged iron sword with lore: %d line(s), lore %s, "
 					+ "attributes %s, durability %s", lines.size(), loreShown, attributes, durability);
+			ForbricLog.info("[Forbric/ClientSmoke] a NeoForge ItemTooltipEvent listener on that tooltip%s: heard %d time(s), "
+					+ "its line drawn %d time(s)", listening ? "" : " (withheld by -D" + TOOLTIP_EVENT + "=off)", heard[0], eventLines);
 		} catch (Throwable t) {
 			Caught.warn(t, "[Forbric/ClientSmoke] tooltip probe failed");
 		}
+	}
+
+	/**
+	 * Registers, on NeoForge's game bus, a listener for {@code ItemTooltipEvent} that adds {@code line} to the tooltip of
+	 * {@code stack} (that exact stack, so no other tooltip in the session changes) and counts the posts in {@code heard}.
+	 */
+	@SuppressWarnings("unchecked")
+	private static void listenForTooltipEvent(ClassLoader cl, Object stack, Object line, int[] heard) throws ReflectiveOperationException {
+		Class<?> eventCls = Class.forName("net.neoforged.neoforge.event.entity.player.ItemTooltipEvent", false, cl);
+		Class<?> busCls = Class.forName("net.neoforged.bus.api.IEventBus", false, cl);
+		Object bus = Class.forName("net.neoforged.neoforge.common.NeoForge", false, cl).getField("EVENT_BUS").get(null);
+		Method getStack = eventCls.getMethod("getItemStack");
+		Method getToolTip = eventCls.getMethod("getToolTip");
+		java.util.function.Consumer<Object> listener = event -> {
+			try {
+				if (getStack.invoke(event) != stack) return;
+				heard[0]++;
+				((java.util.List<Object>) getToolTip.invoke(event)).add(line);
+			} catch (ReflectiveOperationException e) {
+				throw new IllegalStateException(e);
+			}
+		};
+		busCls.getMethod("addListener", Class.class, java.util.function.Consumer.class).invoke(bus, eventCls, listener);
 	}
 
 	private static void probeHotbar(Object level) {
@@ -2434,6 +2849,70 @@ public final class KernelClientSmoke {
 	private static final int CREATIVE_STEP_TICKS = 10;
 	private static int creativeStage;
 	private static int creativeStageAt;
+
+	/** See {@link #MULTIPART}: summon on the server at the due tick, read the client's level {@link #MULTIPART_HOLD} later. */
+	private static void multipartIfDue(Object minecraft, Object level) {
+		int due = Integer.getInteger(MULTIPART, 0);
+		if (due <= 0 || multipartStage > 1 || worldTicks < due + (multipartStage == 0 ? 0 : MULTIPART_HOLD)) return;
+		String[] types = System.getProperty(MULTIPART_TYPES, "minecraft:ender_dragon").split(",");
+		try {
+			ClassLoader cl = minecraft.getClass().getClassLoader();
+			if (multipartStage++ == 0) {
+				Object server = accessible(minecraft.getClass(), "getSingleplayerServer").invoke(minecraft);
+				if (server == null) {
+					multipartStage = 2;
+					ForbricLog.info("[Forbric/ClientSmoke] multipart: no integrated server to summon on");
+					return;
+				}
+				Class<?> sourceCls = Class.forName("net.minecraft.commands.CommandSourceStack", true, cl);
+				onServer(server, () -> {
+					Object commands = accessible(server.getClass(), "getCommands").invoke(server);
+					Object source = accessible(server.getClass(), "createCommandSourceStack").invoke(server);
+					Method perform = accessible(commands.getClass(), "performPrefixedCommand", sourceCls, String.class);
+					int offset = 4;
+					for (String type : types) {
+						String command = "execute at @p run summon " + type.trim() + " ~" + offset + " ~ ~4 {NoAI:1b}";
+						offset += 6;
+						perform.invoke(commands, source, command);
+						ForbricLog.info("[Forbric/ClientSmoke] multipart: asked the integrated server to %s", command);
+					}
+				});
+				return;
+			}
+			Class<?> entityCls = Class.forName("net.minecraft.world.entity.Entity", true, cl);
+			Class<?> typeCls = Class.forName("net.minecraft.world.entity.EntityType", true, cl);
+			Method key = accessible(typeCls, "getKey", typeCls);
+			java.util.Collection<?> partList = (java.util.Collection<?>) accessible(level.getClass(), "dragonParts").invoke(level);
+			for (String type : types) {
+				String wanted = type.trim();
+				int found = 0;
+				for (Object entity : (Iterable<?>) accessible(level.getClass(), "entitiesForRendering").invoke(level)) {
+					if (!wanted.equals(String.valueOf(key.invoke(null, accessible(entityCls, "getType").invoke(entity))))) continue;
+					found++;
+					Object multipart = accessible(entityCls, "isMultipartEntity").invoke(entity);
+					Object[] parts = (Object[]) accessible(entityCls, "getParts").invoke(entity);
+					int listed = 0;
+					if (parts != null) {
+						for (Object part : parts) {
+							for (Object known : partList) {
+								if (known == part) {
+									listed++;
+									break;
+								}
+							}
+						}
+					}
+					ForbricLog.info("[Forbric/ClientSmoke] multipart: %s tracked on the client: multipart=%s, %d part(s) from "
+							+ "its getParts(), %d of them in the level's part list", wanted, multipart,
+							parts == null ? -1 : parts.length, listed);
+				}
+				if (found == 0) ForbricLog.info("[Forbric/ClientSmoke] multipart: no %s in the client's level", wanted);
+			}
+		} catch (Throwable t) {
+			multipartStage = 2;
+			Caught.warn(t, "[Forbric/ClientSmoke] multipart probe failed");
+		}
+	}
 
 	/**
 	 * The creative-search probe, one step per {@link #CREATIVE_STEP_TICKS}: game mode, open, search (pass 1),
@@ -2610,8 +3089,7 @@ public final class KernelClientSmoke {
 
 	/**
 	 * Where the trees are, said as data: how many name and tag trees NeoForge's registry holds and whether the
-	 * search tab's own keys are among them, and how many the merged class's private MinecraftForge map holds. The
-	 * screen reads the first; a producer that wrote the second fed nothing the player sees.
+	 * search tab's own keys are among them. The screen reads them.
 	 */
 	private static String searchTreeCensus(Object connection, ClassLoader cl) {
 		StringBuilder out = new StringBuilder();
@@ -2626,9 +3104,6 @@ public final class KernelClientSmoke {
 			out.append("neoforge name trees=").append(neoNames.size()).append(" (search tab: ")
 					.append(neoNames.containsKey(names)).append("), tag trees=").append(neoTags.size())
 					.append(" (search tab: ").append(neoTags.containsKey(tags)).append(')');
-			Object session = accessible(connection.getClass(), "searchTrees").invoke(connection);
-			Object forge = fieldValue(session, "creativeSearch");
-			if (forge instanceof java.util.Map<?, ?> map) out.append("; minecraftforge map=").append(map.size());
 		} catch (Throwable t) {
 			Caught.expected(t);
 			out.append("<census unreadable: ").append(t).append('>');
@@ -2654,7 +3129,7 @@ public final class KernelClientSmoke {
 
 	/**
 	 * What the game would put on its window. Read from {@code createTitle} itself rather than from the window, which
-	 * only has a setter — and that method is the one the merged base carries a single loader's patch of, so this is
+	 * only has a setter — and that method is the one the base carries NeoForge's patch of, so this is
 	 * the only place the result is observable at all.
 	 */
 	private static void reportWindowTitle(Object minecraft) {

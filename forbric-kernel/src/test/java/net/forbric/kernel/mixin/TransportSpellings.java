@@ -23,7 +23,7 @@ import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 /**
- * What the transport spelling tests share: fabric-api's released mixins, the staged merged base, the classes it indexes
+ * What the transport spelling tests share: fabric-api's released mixins, the staged base, the classes its native references index
  * as the ones a Fabric mod was compiled against, and the few edits the tests make — a selector replaced outright, and a
  * method of the same name declared before or after the one a bare name binds. Everything is read with its debug
  * information (the callback transports read local variable names) and fresh on every call.
@@ -35,18 +35,18 @@ final class TransportSpellings {
 
 	private TransportSpellings() { }
 
-	static Path mergedBase() {
+	static Path base() {
 		String configured = System.getProperty("forbric.predicateBase");
 		Path base = configured == null || configured.isBlank()
-				? TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar") : Path.of(configured);
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(base), "staged merged base required: " + base);
+				? TestFixtures.stagedBase() : Path.of(configured);
+		TestFixtures.requireFile(Fixture.STAGED, base, "staged base required: " + base);
 		return base;
 	}
 
 	static Path fabricApi() {
 		String configured = System.getProperty("forbric.fabricApi");
 		Path api = configured == null || configured.isBlank() ? TestFixtures.fabricApi() : Path.of(configured);
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(api), "actual Fabric API required: " + api);
+		TestFixtures.requireFile(Fixture.STAGED, api, "actual Fabric API required: " + api);
 		return api;
 	}
 
@@ -63,26 +63,26 @@ final class TransportSpellings {
 		throw new AssertionError(name + " absent from " + module);
 	}
 
-	/** {@code name} as the merged base defines it. */
+	/** {@code name} as the staged base defines it. */
 	static ClassNode merged(String name) throws IOException {
-		try (ZipFile jar = new ZipFile(mergedBase().toFile())) {
+		try (ZipFile jar = new ZipFile(base().toFile())) {
 			ZipEntry entry = jar.getEntry(name + ".class");
-			TestFixtures.require(Fixture.STAGED, entry != null, name + " in the merged base");
+			TestFixtures.require(Fixture.STAGED, entry != null, name + " in the staged base");
 			return parse(jar.getInputStream(entry).readAllBytes());
 		}
 	}
 
-	/** Like {@link #merged}, null where the merged base does not define it. */
+	/** Like {@link #merged}, null where the staged base does not define it. */
 	static ClassNode mergedOrNull(String name) throws IOException {
-		try (ZipFile jar = new ZipFile(mergedBase().toFile())) {
+		try (ZipFile jar = new ZipFile(base().toFile())) {
 			ZipEntry entry = jar.getEntry(name + ".class");
 			return entry == null ? null : parse(jar.getInputStream(entry).readAllBytes());
 		}
 	}
 
-	/** {@code name} as the class a mod of {@code ecosystem} was compiled against: the hash-pinned copy the merged base indexes. */
+	/** {@code name} as the class a mod of {@code ecosystem} was compiled against: the hash-pinned copy the launch's native references index. */
 	static ClassNode nativeClass(Ecosystem ecosystem, String name) throws IOException {
-		try (ZipFile jar = new ZipFile(mergedBase().toFile())) {
+		try (ZipFile jar = new ZipFile(base().toFile())) {
 			NativeGameReferences references = new NativeGameReferences(path -> {
 				try {
 					ZipEntry entry = jar.getEntry(path);
@@ -90,9 +90,9 @@ final class TransportSpellings {
 				} catch (IOException unreadable) {
 					return null;
 				}
-			});
+			}, null, TestFixtures.launchSources(base()));
 			ClassNode node = references.get(ecosystem, name);
-			TestFixtures.require(Fixture.STAGED, node != null, "the hash-pinned native " + name + " the merged base indexes");
+			TestFixtures.require(Fixture.STAGED, node != null, "the hash-pinned native " + name + " the launch's native references index");
 			return node;
 		}
 	}

@@ -16,20 +16,20 @@ import net.forbric.api.Ecosystem;
 import net.forbric.kernel.util.Caught;
 
 /**
- * Moves a mod's callbacks on vanilla's {@code StructureTemplate.placeEntities} to the method the merged game calls in its
+ * Moves a mod's callbacks on vanilla's {@code StructureTemplate.placeEntities} to the method the game calls in its
  * place.
  *
  * <p>NeoForge's {@code placeInWorld} calls {@code addEntitiesToWorld(level, pos, settings, reporter)} where vanilla's called
- * {@code placeEntities(level, pos, mirror, rotation, pivot, box, finalize, reporter)}, and nothing in the merged game calls
+ * {@code placeEntities(level, pos, mirror, rotation, pivot, box, finalize, reporter)}, and nothing in the game calls
  * vanilla's method any more. Each injector written for it is moved on its own, whatever else the mixin holds:
  * <ul>
- * <li>an {@code @Inject} at the call in {@code placeInWorld}: its point names the call the merged method makes there;
+ * <li>an {@code @Inject} at the call in {@code placeInWorld}: its point names the call the current method makes there;
  * <li>an injector inside {@code placeEntities} — at a call, field access or allocation, or the method's head or tail —
  * whose handler does not take {@code placeEntities}' own parameters ({@code @WrapOperation} and the other call-driven
  * injectors take the call's operands; an {@code @Inject} only its {@code CallbackInfo}): it selects
  * {@code addEntitiesToWorld}, where each of its points is found as often as vanilla's body had it.
  * </ul>
- * The replacement is proved, not assumed: exactly one merged method calls {@code addEntitiesToWorld}, and where the class
+ * The replacement is proved, not assumed: exactly one current method calls {@code addEntitiesToWorld}, and where the class
  * the mod was compiled against is at hand, that method calls vanilla's once in it. Which method a handler was written
  * for is read off that class (or, without it, off a selector that spells the descriptor). A {@code @Local} the handler
  * asks for moves only to the slot proved to hold what the native slot held ({@link MixinCallbackProofs#correspondLocals});
@@ -52,7 +52,7 @@ public final class MixinStructurePlacementAdapter {
 	}
 
 	/**
-	 * {@code references} gives the class the mod was compiled against: the merged game no longer declares the native
+	 * {@code references} gives the class the mod was compiled against: the game no longer declares the native
 	 * {@code placeEntities}, so which method a bare name or pattern bound there is read off the native class
 	 * ({@link MixinTargetSelectors#nativeMember}); without it only a selector spelling that descriptor names it.
 	 */
@@ -61,7 +61,7 @@ public final class MixinStructurePlacementAdapter {
 		ClassNode target = targets.apply(TARGET), source = references == null ? null : references.apply(MixinStubRebind.ecosystemOf(mixin.name), TARGET);
 		MethodNode place = target == null ? null : MixinPlayerWorldCallbackAdapter.selector(target, LIVE);
 		if (place == null) return 0;
-		// The one merged call of addEntitiesToWorld is the replacement; natively, its method called placeEntities once.
+		// The one current call of addEntitiesToWorld is the replacement; natively, its method called placeEntities once.
 		MethodNode caller = null;
 		MethodInsnNode liveCall = null;
 		int calls = 0;
@@ -126,7 +126,7 @@ public final class MixinStructurePlacementAdapter {
 	/**
 	 * The mixin as this adapter will hand it to Mixin, for judging whether it fits before Mixin loads it
 	 * ({@code KernelGuestMixinAdapter}): a mixin whose only callbacks are on vanilla's {@code placeEntities} binds nothing
-	 * in the merged class as compiled, and would otherwise be left out as dead weight before this adapter ever saw it.
+	 * in the current class as compiled, and would otherwise be left out as dead weight before this adapter ever saw it.
 	 */
 	public static byte[] asLoaded(byte[] bytes, Function<String, byte[]> resource) {
 		try {
@@ -156,7 +156,7 @@ public final class MixinStructurePlacementAdapter {
 
 	/**
 	 * One {@code @At(INVOKE)} at vanilla's call of {@code placeEntities} (read in {@code nativeCaller}, the method that made
-	 * it, when at hand), or at the merged call it was already moved to (read in {@code liveCaller}): the target as Mixin
+	 * it, when at hand), or at the current call it was already moved to (read in {@code liveCaller}): the target as Mixin
 	 * resolves it ({@link MixinCallbackShape#names}), not as it is spelled.
 	 */
 	private static boolean pointsAtTheCall(MethodNode handler, MethodNode nativeCaller, MethodNode liveCaller) {
@@ -183,7 +183,7 @@ public final class MixinStructurePlacementAdapter {
 		return BODY.contains(kind) && MixinCallbackShape.kind(handler, kind);
 	}
 
-	/** Whether the handler was written for the native {@code placeEntities}, the method the merged game no longer calls. */
+	/** Whether the handler was written for the native {@code placeEntities}, the method the game no longer calls. */
 	private static boolean authoredFor(MethodNode handler, ClassNode source) {
 		return OLD.equals(MixinTargetSelectors.nativeMember(handler, source, TARGET));
 	}

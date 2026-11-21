@@ -26,7 +26,7 @@ import java.util.function.Consumer;
 /**
  * Answers "would an install work here, and what would it cost?" without touching the disk.
  *
- * <p>It exists because the expensive part of a Forbric install is not writing the profile — it is building three
+ * <p>It exists because the expensive part of a Forbric install is not writing the profile — it is building two
  * jars the project is not allowed to hand out, which takes a JVM, a few hundred megabytes of downloads and
  * several minutes. Finding out that the machine cannot do that <em>after</em> a user has waited through most of
  * it is the failure mode worth designing away, so every precondition is resolved up front and printed.
@@ -36,16 +36,25 @@ import java.util.function.Consumer;
 final class Doctor {
 
 	/**
-	 * Peak and resident disk, in megabytes, for a cold install.
+	 * Peak and resident disk, in megabytes (MiB), for a cold install: what the install itself puts in
+	 * {@code .forbric-build} and in the libraries it stages (Forbric's own under {@code net/forbric}, the kernel's few
+	 * dependencies), not the vanilla game and libraries a launcher already keeps.
 	 *
-	 * <p>Measured from the caches this project already produced rather than estimated: NFRT's artifacts and
-	 * intermediates for one version, the Forge download+work trees, and the six outputs. The binary-patch path
-	 * skips the decompiler, so the NFRT half is smaller than the recompile path's — but it has not been measured
-	 * cold yet, and the number below is still the recompile-path measurement, deliberately left high rather than
-	 * guessed down.
+	 * <p>Measured on a cold NeoForge-only install (gate-m17's first install, {@code du -sk} of {@code .forbric-build} and
+	 * {@code libraries/net/forbric} sampled every half second; Stage 4 C6, 2026-11-17): the size only grows during an
+	 * install and nothing is deleted at its end, so the highest sample is the last one, 476,904 KiB (a sampler that
+	 * slow misses only what lives under half a second; downloads are renamed into place, not copied). About 470 MiB
+	 * with the kernel's third-party libraries: NFRT's cache for one version (~249) and its work files (~3), the
+	 * downloads (~72: the NeoForge userdev, universal and runtime libraries and the 58 MB server jar), the three outputs
+	 * in {@code out} (~66), their staged copies and the kernel jar in {@code libraries/net/forbric} (~70), the tools
+	 * (~6), and the kernel's third-party libraries (~4). PEAK keeps a margin over that for those short-lived files.
+	 * Before Stage 4 the install also built MinecraftForge's game and runtime and
+	 * the merged base, and these numbers were 730 and 190 (estimated from earlier caches; what the 190 counted is not
+	 * recorded, and a NeoForge-only install alone keeps more than that, mostly NFRT's cache). An upgrade over such an install
+	 * holds the old files too until its last step, the clean-up of what nothing uses any more ({@link OldInstallCleanup}).
 	 */
-	private static final int PEAK_MB = 730;
-	private static final int RESIDENT_MB = 190;
+	private static final int PEAK_MB = 480;
+	private static final int RESIDENT_MB = 470;
 
 	private final Consumer<String> log;
 
@@ -112,7 +121,7 @@ final class Doctor {
 		// Supplied artifacts replace the whole build, so say plainly which ones are here — and judge them the way an
 		// install would. A supplied set that is incomplete, or holds files that are not what their names say, is
 		// refused rather than built around, so "to build" would be a promise the install does not keep. Each file
-		// is judged on its own: one missing file does not make the other two missing, and the ones that are here
+		// is judged on its own: one missing file does not make the other one missing, and the ones that are here
 		// are opened even so, so the answer to a half-filled directory is everything wrong with it at once.
 		Map<String, Boolean> artifacts = new LinkedHashMap<>();
 		Map<String, Path> located = Map.of();
@@ -126,8 +135,7 @@ final class Doctor {
 				artifactProblem = supplied.refusal(wrong).getMessage();
 			}
 		}
-		for (String coordinate : new String[] {
-				"net.forbric:patched-mc-merged", "net.forbric:forge-runtime", "net.forbric:neoforge-runtime"}) {
+		for (String coordinate : new String[] {ArtifactBuilder.BASE, ArtifactBuilder.NEOFORGE_RUNTIME}) {
 			artifacts.put(coordinate, located.containsKey(coordinate));
 		}
 		log.accept("");
@@ -146,7 +154,7 @@ final class Doctor {
 					+ " MB kept afterwards");
 		} else if (allPresent && artifactProblem == null) {
 			log.accept("");
-			log.accept("disk          : nothing to build — the three artifacts are already here");
+			log.accept("disk          : nothing to build — both artifacts are already here");
 		}
 
 		log.accept("");

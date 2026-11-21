@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
@@ -67,7 +68,7 @@ class RegistrationEventStepsTest {
 	private static final String REGISTRY_MANAGER = RegistrationEventSteps.DATA_MAPS.owner();
 	private static final String POI = "net/neoforged/neoforge/common/world/poi/PoiTypeExtender";
 	private static final Path NEOFORGE_RUNTIME =
-			TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
+			TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR).normalize();
 
 	@BeforeEach
 	@AfterEach
@@ -82,7 +83,7 @@ class RegistrationEventStepsTest {
 	/** The real carrier's method, when it is staged: seven calls, and the two the kernel keys on among them. */
 	@Test
 	void theRealMethodIsAStraightRunOfSevenCalls() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE_RUNTIME), "neoforge-runtime.jar not staged");
+		TestFixtures.requireFile(Fixture.STAGED, NEOFORGE_RUNTIME, "neoforge-runtime.jar not staged");
 		byte[] real;
 		try (ZipFile zip = new ZipFile(NEOFORGE_RUNTIME.toFile())) {
 			var entry = zip.getEntry(EVENTS + ".class");
@@ -123,18 +124,21 @@ class RegistrationEventStepsTest {
 	// --- the run ------------------------------------------------------------------------------------------------
 
 	/**
-	 * The sweep pack's failure, reduced: the data-map step throws. The steps around it still run, the capability
-	 * step's success is what the transfer bridge sees, and the data-map loss is a finding rather than a WARN.
+	 * The sweep pack's failure, reduced: the data-map step throws. As on NeoForge it ends the run — the steps after it do
+	 * not run, and the failure is what the "Registration events" task stops the boot on (D87); the capability step's success
+	 * is still what the run says, and the data-map loss is still a finding. Until D87 the steps after it still ran
+	 * ("aFailingDataMapStepNoLongerTakesTheOthersWithIt", cauldron, capabilities, poi) and the boot carried on.
 	 */
 	@Test
-	void aFailingDataMapStepNoLongerTakesTheOthersWithIt() {
+	void aFailingDataMapStepEndsTheRunAsOnNeoForge() {
 		RegistrationEventSteps.Outcome outcome = RegistrationEventSteps.fire(carrier(false, false));
 
 		assertNotNull(outcome);
 		assertTrue(outcome.isolated());
-		assertEquals(List.of("cauldron", "capabilities", "poi"), Recorder.HITS,
-				"everything but the failing step ran, in NeoForge's order");
+		assertEquals(List.of("cauldron", "capabilities"), Recorder.HITS,
+				"every step up to the failing one ran, in NeoForge's order, and none after it");
 		assertInstanceOf(IllegalStateException.class, outcome.failures().get(RegistrationEventSteps.DATA_MAPS));
+		assertSame(outcome.failures().get(RegistrationEventSteps.DATA_MAPS), outcome.failure(), "what the boot stops on");
 		assertTrue(outcome.capabilitiesRegistered(), "the transfer bridge waits on capabilities, not on data maps");
 		assertEquals(0, outcome.dataMapTypes());
 
@@ -158,15 +162,19 @@ class RegistrationEventStepsTest {
 		assertNotNull(finding("neoforge-data-maps"), "zero types after the call is still a loss");
 	}
 
+	/** A failing capability step ends the run too; until D87 the steps after it ran ({@code cauldron, poi}). */
 	@Test
-	void aFailedCapabilityStepHoldsBackOnlyTheTransferBridge() {
+	void aFailedCapabilityStepEndsTheRunAsOnNeoForge() {
 		RegistrationEventSteps.Outcome outcome = RegistrationEventSteps.fire(carrier(true, false));
 
 		assertFalse(outcome.capabilitiesRegistered());
-		assertEquals(List.of("cauldron", "poi"), Recorder.HITS);
+		assertEquals(List.of("cauldron"), Recorder.HITS);
+		assertNotNull(outcome.failure(), "what the boot stops on");
 		CompatibilityFinding capabilities = finding("neoforge-registration:CapabilityHooks.init");
 		assertNotNull(capabilities, CompatibilityFindings.all().toString());
 		assertTrue(capabilities.confirmedRequired());
+		assertFalse(capabilities.detail().contains("ran the remaining registration steps"),
+				"the run ends here and the boot stops, so the finding must not say the rest ran: " + capabilities.detail());
 	}
 
 	/**

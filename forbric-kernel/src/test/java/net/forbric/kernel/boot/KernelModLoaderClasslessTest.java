@@ -83,7 +83,7 @@ class KernelModLoaderClasslessTest {
 		declared.put("translate", declared("translate", Ecosystem.NEOFORGE, "b.jar"));
 		declared.put("lowcode", declared("lowcode", Ecosystem.NEOFORGE, "c.jar"));
 		declared.put("kotlin", declared("kotlin", Ecosystem.NEOFORGE, "d.jar"));
-		declared.put("forge_only", declared("forge_only", Ecosystem.FORGE, "e.jar"));
+		declared.put("fabric_only", declared("fabric_only", Ecosystem.FABRIC, "e.jar"));
 		declared.put("aliased", declared("aliased", Ecosystem.NEOFORGE, "f.jar"));
 		Map<String, String> languages = Map.of("a.jar", "javafml", "b.jar", "javafml", "c.jar", "lowcodefml",
 				"d.jar", "kotlinforforge", "e.jar", "lowcodefml", "f.jar", "javafml");
@@ -130,7 +130,6 @@ class KernelModLoaderClasslessTest {
 	void theLanguageIsReadFromTheFamilysOwnManifest() throws Exception {
 		Path lowcode = KernelModLoaderDeclaredTest.neoJar(tmp.resolve("lowcode.jar"), "lowcodefml", "x", "1", "");
 		assertEquals("lowcodefml", KernelModLoader.languageOf(lowcode, Ecosystem.NEOFORGE));
-		assertNull(KernelModLoader.languageOf(lowcode, Ecosystem.FORGE), "it has no mods.toml at all");
 
 		Path unnamed = tmp.resolve("unnamed.jar");
 		try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(unnamed))) {
@@ -148,10 +147,9 @@ class KernelModLoaderClasslessTest {
 		Object other = new Object();
 		Object classlessBus = new Object();
 		List<KernelModLoader.ConstructedMod> constructed = List.of(
-				new KernelModLoader.ConstructedMod("balm", "NeoForgeBalm", Ecosystem.NEOFORGE, shared, null),
-				new KernelModLoader.ConstructedMod("balm", "NeoForgeBalmClient", Ecosystem.NEOFORGE, shared, null),
-				new KernelModLoader.ConstructedMod("forge", "ForgeMod", Ecosystem.FORGE, null, null),
-				new KernelModLoader.ConstructedMod("other", "Other", Ecosystem.NEOFORGE, other, null));
+				new KernelModLoader.ConstructedMod("balm", "NeoForgeBalm", Ecosystem.NEOFORGE, shared),
+				new KernelModLoader.ConstructedMod("balm", "NeoForgeBalmClient", Ecosystem.NEOFORGE, shared),
+				new KernelModLoader.ConstructedMod("other", "Other", Ecosystem.NEOFORGE, other));
 
 		List<Object> buses = KernelLifecycle.registrationBuses(constructed,
 				List.of(new KernelModLoader.NeoIdentity(classlessBus, "container")));
@@ -289,17 +287,16 @@ class KernelModLoaderClasslessTest {
 		return cw.toByteArray();
 	}
 
-	/** The game side as a boot sees it: the kernel's runtime classes, both carriers and the mod jar. */
+	/** The game side as a boot sees it: the kernel's runtime classes, the NeoForge carrier and the mod jar. */
 	private static URLClassLoader gameLoader(Path modJar) throws Exception {
 		Path compiled = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
-		Path neo = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
-		Path forge = STAGED.resolve("forge-runtime/forge-runtime.jar");
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(neo) && Files.isRegularFile(forge),
-				"staged runtime classes/carriers absent");
+		Path neo = STAGED.resolve(TestFixtures.NEO_CARRIER_JAR);
+		TestFixtures.requireFiles(Fixture.STAGED,
+				"staged runtime classes/carrier absent", neo);
 		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "staged runtime classes/carriers absent");
 		Path stubs = PassiveSeederLoadingModListTest.loggingStubs(shared.resolve("stubs"));
 		Set<URL> urls = new LinkedHashSet<>(List.of(compiled.toUri().toURL(), stubs.toUri().toURL(),
-				neo.toUri().toURL(), forge.toUri().toURL(), modJar.toUri().toURL()));
+				neo.toUri().toURL(), modJar.toUri().toURL()));
 		// NeoForge's event bus logs through log4j, which the unit-test classpath deliberately does not carry.
 		// build.gradle resolves it as a compileOnly dependency and hands it to every test run, staged or not.
 		String log4j = System.getProperty("forbric.log4jApiForTests", "");

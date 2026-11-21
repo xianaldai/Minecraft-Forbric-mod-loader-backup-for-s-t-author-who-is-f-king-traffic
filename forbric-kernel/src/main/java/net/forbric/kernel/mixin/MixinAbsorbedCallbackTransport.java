@@ -47,7 +47,7 @@ public final class MixinAbsorbedCallbackTransport implements Opcodes {
         /** CallbackSeams' once-per-site report: the callback is skipped there, the carrier helper runs as written. */
         void declined(ClassLoader loader,String ignoredKey,String reason) {
             String broken=broken(loader),cause=broken==null?reason:broken;
-            SeamDeclines.report(source,injectorName,injectorDesc,site(),"source callback skipped at "+site()+", whose call it follows the merged game moved into "
+            SeamDeclines.report(source,injectorName,injectorDesc,site(),"source callback skipped at "+site()+", whose call it follows the game moved into "
                 +helperName()+": "+cause+"; the carrier's helper runs as written",List.of("transport=extracted callback","host="+site(),"helper="+helperName(),"declined="+reason,"cause="+cause));
         }
     }
@@ -56,7 +56,7 @@ public final class MixinAbsorbedCallbackTransport implements Opcodes {
     public static int adapt(ClassNode mixin, Function<String,ClassNode> current, Function<String,ClassNode> originals, ForbricClassLoader loader) {
         return adapt(mixin, current, originals, owner -> List.of(), loader);
     }
-    /** {@code peers}: the target as the other ecosystems compiled it natively, whose own way to the call a merge may keep. */
+    /** {@code peers}: the target as the other ecosystems compiled it natively, whose own way to the call a base may keep. */
     public static int adapt(ClassNode mixin, Function<String,ClassNode> current, Function<String,ClassNode> originals,
             Function<String,List<ClassNode>> peers, ForbricClassLoader loader) {
         if (!MergedBaseAbsorbedCalls.enabled() || loader==null) return 0;

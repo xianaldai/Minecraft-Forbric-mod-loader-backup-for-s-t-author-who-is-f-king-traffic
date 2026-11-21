@@ -14,6 +14,7 @@ import java.util.jar.JarOutputStream;
 import net.forbric.api.Ecosystem;
 import net.forbric.kernel.TestFixtures;
 import net.forbric.kernel.TestFixtures.Fixture;
+import net.forbric.kernel.discovery.LoaderKind;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,26 +27,51 @@ class MultiLoaderEntrypointsTest {
 	@TempDir Path temporary;
 	@BeforeEach @AfterEach void reset() {
 		MultiLoaderArbiter.reset();
+		net.forbric.kernel.discovery.MetadataFailures.reset();
 		System.clearProperty("forbric.multiLoaderPreference");
 		System.clearProperty(MultiLoaderArbiter.ENTRYPOINT_SWITCH);
 	}
 
-	@Test void aForgeConstructorWinsOverBothLeftoverManifests() throws Exception {
+	/**
+	 * A jar whose only constructor is MinecraftForge's used to be owned by MinecraftForge. Forbric no longer loads
+	 * MinecraftForge mods, and its other two manifests are leftovers, so it is refused: FORGE as a refused state,
+	 * suppressed for every family including MinecraftForge's own, whatever the preference or the entrypoint switch.
+	 */
+	@Test void aJarWhoseOnlyConstructorIsMinecraftForgesIsRefused() throws Exception {
 		Path jar = fixture("forge.jar", "example.ForgeEntry", Map.of("example/ForgeEntry.class",
-				type("example/ForgeEntry", Ecosystem.FORGE, "example", null, false)));
-		assertEquals(Ecosystem.FORGE, MultiLoaderArbiter.ownerOf(jar));
-		assertEquals(List.of(Ecosystem.NEOFORGE, Ecosystem.FORGE, Ecosystem.FABRIC), MultiLoaderArbiter.declaredBy(jar),
-				"declarations still provide presence aliases; only initialization ownership changes");
-		assertFalse(MultiLoaderArbiter.suppressedFor(jar, Ecosystem.FORGE));
-		assertTrue(MultiLoaderArbiter.suppressedFor(jar, Ecosystem.NEOFORGE));
-		MultiLoaderArbiter.reset();
-		System.setProperty("forbric.multiLoaderPreference", "fabric");
-		assertEquals(Ecosystem.FORGE, MultiLoaderArbiter.ownerOf(jar),
-				"a Forge-only constructor cannot be instantiated by Fabric's default adapter");
+				type("example/ForgeEntry", LoaderKind.MINECRAFTFORGE, "example", null, false)));
+		assertEquals(new JarClaim.Refused(LoaderKind.MINECRAFTFORGE), MultiLoaderArbiter.claimOf(jar),
+				"refused is a claim of its own, never unowned (a library)");
+		assertThrows(IllegalStateException.class, () -> MultiLoaderArbiter.ownerOf(jar),
+				"a refused jar has no owner, and is not answered as a library's null");
+		assertTrue(MultiLoaderArbiter.refused(jar));
+		assertEquals(List.of(LoaderKind.NEOFORGE, LoaderKind.MINECRAFTFORGE, LoaderKind.FABRIC), MultiLoaderArbiter.loadersOf(jar),
+				"declarations are still reported as they are");
+		assertEquals(List.of(Ecosystem.NEOFORGE, Ecosystem.FABRIC), MultiLoaderArbiter.declaredBy(jar),
+				"of which the ecosystems Forbric loads: MinecraftForge is none");
+		for (Ecosystem family : Ecosystem.values()) assertTrue(MultiLoaderArbiter.suppressedFor(jar, family), family.name());
+		for (String setting : List.of("fabric", "minecraftforge,neoforge,fabric")) {
+			MultiLoaderArbiter.reset();
+			System.setProperty("forbric.multiLoaderPreference", setting);
+			assertTrue(MultiLoaderArbiter.refused(jar), "no preference revives it: " + setting);
+		}
 		MultiLoaderArbiter.reset();
 		System.setProperty(MultiLoaderArbiter.ENTRYPOINT_SWITCH, "off");
 		System.clearProperty("forbric.multiLoaderPreference");
-		assertEquals(Ecosystem.NEOFORGE, MultiLoaderArbiter.ownerOf(jar), "the control restores the original loss");
+		assertTrue(MultiLoaderArbiter.refused(jar), "the judgement is the loader halves', not the entrypoint switch's");
+	}
+
+	/** Control: the same fixture with a real Fabric initializer beside the Forge constructor loads as Fabric. */
+	@Test void aForgeAndFabricJarNowLoadsAsFabric() throws Exception {
+		Path jar = fixture("arch.jar", "example.FabricEntry", Map.of(
+				"example/ForgeEntry.class", type("example/ForgeEntry", LoaderKind.MINECRAFTFORGE, "example", null, false),
+				"example/FabricEntry.class", type("example/FabricEntry", null, null, "net/fabricmc/api/ModInitializer", true)));
+		assertEquals(Ecosystem.FABRIC, MultiLoaderArbiter.ownerOf(jar));
+		assertFalse(MultiLoaderArbiter.refused(jar));
+		assertFalse(MultiLoaderArbiter.suppressedFor(jar, Ecosystem.FABRIC));
+		MultiLoaderArbiter.reset();
+		System.setProperty("forbric.multiLoaderPreference", "minecraftforge,neoforge,fabric");
+		assertEquals(Ecosystem.FABRIC, MultiLoaderArbiter.ownerOf(jar), "minecraftforge in the preference is ignored");
 	}
 
 	@Test void aFabricInitializerWinsOverLowcodeAndJavaManifestTemplates() throws Exception {
@@ -57,9 +83,14 @@ class MultiLoaderEntrypointsTest {
 
 	@Test void aNoArgForgeClassStillDoesNotImplementTheFabricMainContract() throws Exception {
 		Path jar = fixture("wrong-interface.jar", "example.ForgeEntry", Map.of("example/ForgeEntry.class",
-				type("example/ForgeEntry", Ecosystem.FORGE, "example", null, true)));
+				type("example/ForgeEntry", LoaderKind.MINECRAFTFORGE, "example", null, true)));
 		System.setProperty("forbric.multiLoaderPreference", "fabric");
-		assertEquals(Ecosystem.FORGE, MultiLoaderArbiter.ownerOf(jar));
+		// Even preferred, Fabric cannot construct the Forge class. The class is a no-argument dummy that uses nothing of
+		// Forge beyond its @Mod annotation (the Modrinth datapack-wrapper shape), so the NeoForge half is a data mod
+		// NeoForge loads without an entry class — that is the one left.
+		assertEquals(Ecosystem.NEOFORGE, MultiLoaderArbiter.ownerOf(jar));
+		assertFalse(MultiLoaderArbiter.refused(jar));
+		assertTrue(MultiLoaderArbiter.suppressedFor(jar, Ecosystem.FABRIC));
 	}
 
 	@Test void theFabricContractMayBeInheritedFromAnOwnSuperclass() throws Exception {
@@ -71,8 +102,8 @@ class MultiLoaderEntrypointsTest {
 
 	@Test void preferenceStillChoosesAmongRealImplementations() throws Exception {
 		Path jar = fixture("universal.jar", "example.FabricEntry", Map.of(
-				"example/ForgeEntry.class", type("example/ForgeEntry", Ecosystem.FORGE, "example", null, true),
-				"example/NeoEntry.class", type("example/NeoEntry", Ecosystem.NEOFORGE, "example", null, true),
+				"example/ForgeEntry.class", type("example/ForgeEntry", LoaderKind.MINECRAFTFORGE, "example", null, true),
+				"example/NeoEntry.class", type("example/NeoEntry", LoaderKind.NEOFORGE, "example", null, true),
 				"example/FabricEntry.class", type("example/FabricEntry", null, null, "net/fabricmc/api/ModInitializer", true)));
 		assertEquals(Ecosystem.NEOFORGE, MultiLoaderArbiter.ownerOf(jar));
 		MultiLoaderArbiter.reset();
@@ -82,9 +113,13 @@ class MultiLoaderEntrypointsTest {
 
 	@Test void anUnrelatedShadedModAnnotationDoesNotValidateTheWrongManifest() throws Exception {
 		Path jar = fixture("shaded.jar", null, Map.of(
-				"example/ForgeEntry.class", type("example/ForgeEntry", Ecosystem.FORGE, "example", null, true),
-				"shaded/Library.class", type("shaded/Library", Ecosystem.NEOFORGE, "another_library", null, true)));
-		assertEquals(Ecosystem.FORGE, MultiLoaderArbiter.ownerOf(jar));
+				"example/ForgeEntry.class", type("example/ForgeEntry", LoaderKind.MINECRAFTFORGE, "example", null, true),
+				"shaded/Library.class", type("shaded/Library", LoaderKind.NEOFORGE, "another_library", null, true)));
+		// The shaded NeoForge @Mod names another id, so it validates nothing as an initializer; the NeoForge half is
+		// usable as a data mod (nothing here stands on Forge), and with MinecraftForge set aside the bare preference
+		// chooses it over the library fabric.mod.json. The Forge constructor no longer outranks anything.
+		assertEquals(Ecosystem.NEOFORGE, MultiLoaderArbiter.ownerOf(jar));
+		assertTrue(MultiLoaderArbiter.suppressedFor(jar, Ecosystem.FABRIC));
 	}
 
 	@Test void dataOnlyJarsKeepTheirExistingPreference() throws Exception {
@@ -93,6 +128,83 @@ class MultiLoaderEntrypointsTest {
 		MultiLoaderArbiter.reset();
 		System.setProperty("forbric.multiLoaderPreference", "fabric");
 		assertEquals(Ecosystem.FABRIC, MultiLoaderArbiter.ownerOf(jar));
+	}
+
+	/**
+	 * qubes-mouse-fix's shape: no half has an initializer, and only fabric.mod.json names the mixin config the jar ships
+	 * (its MinecraftForge half had it in the manifest's MixinConfigs). The mod is its mixins, so it loads through the half
+	 * that applies them; with both halves naming the config, or with the entrypoint switch off, preference decides.
+	 * Red-checked: without the mixin narrowing the first assertion answered NEOFORGE.
+	 */
+	@Test void aMixinOnlyJarLoadsThroughTheHalfThatShipsItsMixins() throws Exception {
+		Path fabricOnly = mixinJar("qubes.jar", false);
+		assertEquals(Ecosystem.FABRIC, MultiLoaderArbiter.ownerOf(fabricOnly));
+		assertTrue(MultiLoaderArbiter.suppressedFor(fabricOnly, Ecosystem.NEOFORGE));
+		MultiLoaderArbiter.reset();
+		assertEquals(Ecosystem.NEOFORGE, MultiLoaderArbiter.ownerOf(mixinJar("both.jar", true)),
+				"both halves apply the mixins: the preference stands");
+		MultiLoaderArbiter.reset();
+		System.setProperty(MultiLoaderArbiter.ENTRYPOINT_SWITCH, "off");
+		assertEquals(Ecosystem.NEOFORGE, MultiLoaderArbiter.ownerOf(fabricOnly), "negative control: bare preference");
+	}
+
+	/**
+	 * A NeoForge half with no @Mod is not codeless when FML runs code of it anyway: an @EventBusSubscriber class or a
+	 * NeoForge service provider. The mixin narrowing then stands aside and the preference keeps NeoForge, as before it
+	 * existed. Red-checked: without the subscriber/service test both jars answered FABRIC.
+	 */
+	@Test void aNeoForgeHalfThatRunsThroughSubscribersOrServicesIsNotCodeless() throws Exception {
+		ClassWriter subscriber = new ClassWriter(0);
+		subscriber.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, "q/Events", null, "java/lang/Object", null);
+		subscriber.visitAnnotation("Lnet/neoforged/fml/common/EventBusSubscriber;", true).visitEnd();
+		subscriber.visitEnd();
+		Path ebs = mixinJar("ebs.jar", false, Map.of("q/Events.class", subscriber.toByteArray()));
+		assertEquals(Ecosystem.NEOFORGE, MultiLoaderArbiter.ownerOf(ebs));
+		MultiLoaderArbiter.reset();
+		Path service = mixinJar("service.jar", false, Map.of(
+				"META-INF/services/net.neoforged.neoforge.common.util.Something", "q.Impl\n".getBytes(StandardCharsets.UTF_8)));
+		assertEquals(Ecosystem.NEOFORGE, MultiLoaderArbiter.ownerOf(service));
+	}
+
+	/**
+	 * A jar whose classes cannot all be inspected is "unknown", not "no initializer": the warning says no family is
+	 * suppressed, so the mixin narrowing must not suppress one either. Red-checked: with the inspection failure returning
+	 * an empty list, the jar answered FABRIC.
+	 */
+	@Test @net.forbric.kernel.ExpectCaught({"could not inspect entrypoints", "could not be parsed"})
+	void anUninspectableJarIsLeftToThePreference() throws Exception {
+		ClassWriter future = new ClassWriter(0);
+		future.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, "q/Future", null, "java/lang/Object", null);
+		future.visitEnd();
+		byte[] bytes = future.toByteArray();
+		bytes[7] = 99; // a class-file major version no ASM reads
+		Path jar = mixinJar("future.jar", false, Map.of("q/Future.class", bytes));
+		assertEquals(Ecosystem.NEOFORGE, MultiLoaderArbiter.ownerOf(jar));
+	}
+
+	private Path mixinJar(String name, boolean neoDeclaresMixins) throws Exception {
+		return mixinJar(name, neoDeclaresMixins, Map.of());
+	}
+
+	private Path mixinJar(String name, boolean neoDeclaresMixins, Map<String, byte[]> extra) throws Exception {
+		Map<String, byte[]> entries = new LinkedHashMap<>();
+		entries.put("META-INF/mods.toml", ("modLoader=\"javafml\"\nloaderVersion=\"[1,)\"\n[[mods]]\nmodId=\"qubes\"\n"
+				+ "version=\"1\"\n").getBytes(StandardCharsets.UTF_8));
+		entries.put("META-INF/neoforge.mods.toml", ("modLoader=\"javafml\"\nloaderVersion=\"[1,)\"\n[[mods]]\n"
+				+ "modId=\"qubes\"\nversion=\"1\"\n" + (neoDeclaresMixins ? "[[mixins]]\nconfig=\"qubes.mixins.json\"\n" : ""))
+				.getBytes(StandardCharsets.UTF_8));
+		entries.put("fabric.mod.json", ("{\"schemaVersion\":1,\"id\":\"qubes\",\"version\":\"1\","
+				+ "\"mixins\":[{\"config\":\"qubes.mixins.json\",\"environment\":\"client\"}]}").getBytes(StandardCharsets.UTF_8));
+		entries.put("qubes.mixins.json", "{\"package\":\"q.mixin\",\"client\":[\"MouseMixin\"]}".getBytes(StandardCharsets.UTF_8));
+		entries.put("q/mixin/MouseMixin.class", type("q/mixin/MouseMixin", null, null, null, true));
+		entries.putAll(extra);
+		Path path = temporary.resolve(name);
+		try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(path))) {
+			for (var entry : entries.entrySet()) {
+				out.putNextEntry(new JarEntry(entry.getKey())); out.write(entry.getValue()); out.closeEntry();
+			}
+		}
+		return path;
 	}
 
 	@Test void aDependencyMaySupplyTheFabricInitializerHierarchy() throws Exception {
@@ -108,12 +220,19 @@ class MultiLoaderEntrypointsTest {
 				"aquariuslibs-1.2.0-forge-26.2-65.0.0.jar", "bannerstone-0.1.2.jar");
 		boolean available = names.stream().allMatch(name -> Files.isRegularFile(mods.resolve(name)));
 		TestFixtures.require(Fixture.THIRD_PARTY, available, "requires the prepared random baseline jars");
+		// The two animalgarden/aquarius Forge builds have nothing but a MinecraftForge initializer and are refused now;
+		// bannerstone's Fabric entrypoint is real. With the entrypoint switch off, the refusals stand (they are the
+		// loader halves' verdict) and bannerstone falls back to the bare preference among its usable halves.
 		for (int i = 0; i < names.size(); i++) {
 			Path jar = mods.resolve(names.get(i));
-			assertEquals(i < 2 ? Ecosystem.FORGE : Ecosystem.FABRIC, MultiLoaderArbiter.ownerOf(jar), names.get(i));
+			assertEquals(i < 2 ? new JarClaim.Refused(LoaderKind.MINECRAFTFORGE) : new JarClaim.Owned(Ecosystem.FABRIC),
+					MultiLoaderArbiter.claimOf(jar), names.get(i));
+			assertEquals(i < 2, MultiLoaderArbiter.refused(jar), names.get(i));
 			MultiLoaderArbiter.reset();
 			System.setProperty(MultiLoaderArbiter.ENTRYPOINT_SWITCH, "off");
-			assertEquals(Ecosystem.NEOFORGE, MultiLoaderArbiter.ownerOf(jar), "negative control: " + names.get(i));
+			assertEquals(i < 2 ? new JarClaim.Refused(LoaderKind.MINECRAFTFORGE) : new JarClaim.Owned(Ecosystem.NEOFORGE),
+					MultiLoaderArbiter.claimOf(jar), "negative control: " + names.get(i));
+			assertEquals(i < 2, MultiLoaderArbiter.refused(jar), names.get(i));
 			System.clearProperty(MultiLoaderArbiter.ENTRYPOINT_SWITCH);
 			MultiLoaderArbiter.reset();
 		}
@@ -134,16 +253,16 @@ class MultiLoaderEntrypointsTest {
 		return path;
 	}
 
-	private static byte[] type(String name, Ecosystem family, String modId, String implemented, boolean noArg) {
+	private static byte[] type(String name, LoaderKind family, String modId, String implemented, boolean noArg) {
 		return type(name, family, modId, implemented, noArg, "java/lang/Object");
 	}
 
-	private static byte[] type(String name, Ecosystem family, String modId, String implemented, boolean noArg, String parent) {
+	private static byte[] type(String name, LoaderKind family, String modId, String implemented, boolean noArg, String parent) {
 		ClassWriter out = new ClassWriter(0);
 		out.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, name, null, parent,
 				implemented == null ? null : new String[] {implemented});
 		if (family != null) {
-			String descriptor = family == Ecosystem.FORGE ? "Lnet/minecraftforge/fml/common/Mod;" : "Lnet/neoforged/fml/common/Mod;";
+			String descriptor = family == LoaderKind.MINECRAFTFORGE ? "Lnet/minecraftforge/fml/common/Mod;" : "Lnet/neoforged/fml/common/Mod;";
 			var annotation = out.visitAnnotation(descriptor, true); annotation.visit("value", modId); annotation.visitEnd();
 		}
 		var ctor = out.visitMethod(Opcodes.ACC_PUBLIC, "<init>", noArg ? "()V"

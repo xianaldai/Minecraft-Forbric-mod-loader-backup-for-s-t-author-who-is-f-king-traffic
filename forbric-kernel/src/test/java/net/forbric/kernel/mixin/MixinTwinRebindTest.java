@@ -30,11 +30,12 @@ import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
  * MixinTwinRebind on {@code ModelBlockRenderer.shouldRenderFace}, the row LiquidBounce's X-Ray needs: vanilla's
- * {@code (level, state, direction, neighborPos)}, which the merged class keeps after NeoForge's
- * {@code (level, pos, state, direction, neighborPos)} and nothing calls.
+ * {@code (level, state, direction, neighborPos)}, which NeoForge's own class keeps after its
+ * {@code (level, pos, state, direction, neighborPos)} and nothing calls (javap of the staged NeoForge jar: both
+ * {@code tesselateFlat} and {@code tesselateAmbientOcclusion} call the five-argument overload).
  */
 class MixinTwinRebindTest {
-	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED = TestFixtures.stagedBase();
 	private static final Path LIQUIDBOUNCE = Path.of("../build/lb-vfp/jars/liquidbounce-0.40.1+26.2-20260925.jar");
 	private static final String RENDERER = "net/minecraft/client/renderer/block/ModelBlockRenderer";
 	private static final String GETTER = "Lnet/minecraft/client/renderer/block/BlockAndTintGetter;";
@@ -59,12 +60,12 @@ class MixinTwinRebindTest {
 	@ExpectCaught("No enum constant net.forbric.api.Ecosystem.QUILT")
 	@Test void aRowParsesAndAMalformedOneIsRefused() {
 		MixinTwinRebind.Row row = MixinTwinRebind.Row.parse(RENDERER + "#shouldRenderFace" + VANILLA + " -> " + OVERLOAD
-				+ " | 0,2,3,4 | FABRIC,FORGE");
+				+ " | 0,2,3,4 | FABRIC,NEOFORGE");
 		assertNotNull(row);
 		assertEquals(RENDERER, row.owner());
 		assertEquals("shouldRenderFace", row.name());
 		assertArrayEquals(new int[] {0, 2, 3, 4}, row.positions());
-		assertEquals(java.util.Set.of(Ecosystem.FABRIC, Ecosystem.FORGE), row.ecosystems());
+		assertEquals(java.util.Set.of(Ecosystem.FABRIC, Ecosystem.NEOFORGE), row.ecosystems());
 		// A position whose type is not the vanilla parameter's, one too few, an unknown ecosystem.
 		assertNull(MixinTwinRebind.Row.parse(RENDERER + "#shouldRenderFace" + VANILLA + " -> " + OVERLOAD + " | 0,1,3,4 | FABRIC"));
 		assertNull(MixinTwinRebind.Row.parse(RENDERER + "#shouldRenderFace" + VANILLA + " -> " + OVERLOAD + " | 0,2,3 | FABRIC"));
@@ -199,9 +200,9 @@ class MixinTwinRebindTest {
 		assertEquals(0, MixinTwinRebind.adapt(off, name -> renderer(1, 1)), "switched off");
 	}
 
-	/** The released jar on the staged merged class: the face test moves, wrapped; nothing else in the mixin is touched. */
+	/** The released jar on NeoForge's staged class: the face test moves, wrapped; nothing else in the mixin is touched. */
 	@Test void releasedLiquidBounceMovesItsFaceTestAndNothingElse() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "actual game required");
+		TestFixtures.requireFile(Fixture.STAGED, MERGED, "actual game required");
 		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(LIQUIDBOUNCE), LIQUIDBOUNCE + " absent");
 		ClassNode renderer;
 		try (ZipFile zip = new ZipFile(MERGED.toFile())) {
@@ -229,7 +230,7 @@ class MixinTwinRebindTest {
 	}
 
 	/**
-	 * The merged class's shape: NeoForge's overload first and called by {@code tesselateFlat}, vanilla's after it and
+	 * NeoForge's class's shape: its own overload first and called by {@code tesselateFlat}, vanilla's after it and
 	 * called by nothing; each calls Block.shouldRenderFace the given number of times, and returns once.
 	 */
 	private static ClassNode renderer(int vanillaCalls, int overloadCalls) {

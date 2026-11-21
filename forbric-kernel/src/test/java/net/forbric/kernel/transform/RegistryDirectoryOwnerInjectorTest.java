@@ -80,9 +80,8 @@ import net.forbric.kernel.mixin.MergedBaseMixinCompat;
  */
 class RegistryDirectoryOwnerInjectorTest {
 	private static final Path STAGED = TestFixtures.stagedRoot();
-	private static final Path MERGED_BASE = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
-	private static final Path FORGE_PATCHED = STAGED.resolve("forge-patched/patched-mc-forge-26.2.jar");
-	private static final Path NEO_RUNTIME = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
+	private static final Path MERGED_BASE = STAGED.resolve(TestFixtures.BASE_JAR);
+	private static final Path NEO_RUNTIME = STAGED.resolve(TestFixtures.NEO_CARRIER_JAR);
 	private static final Path VANILLA = TestFixtures.vanillaJar();
 	private static final Path SWEEP = Path.of("build/compat-inputs/sweep90/mods");
 	private static final Path FABRIC_API = SWEEP.resolve("fabric-api-0.161.0+26.2.jar");
@@ -115,7 +114,7 @@ class RegistryDirectoryOwnerInjectorTest {
 
 	@Test
 	void theMergedBodyIsNeoForgesAndTheEditHandsEveryAnswerToTheOwner() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.requireFile(Fixture.STAGED, MERGED_BASE, "staged base absent — skipping real-bytecode check");
 		byte[] in = classBytes(MERGED_BASE, REGISTRIES);
 		assertTrue(calls(method(node(in), "registryDirPath"), COMMON_HOOKS, "prefixNamespace"),
 				"the merged body prefixes through NeoForge's hook — if it stopped, re-derive the repair");
@@ -193,22 +192,8 @@ class RegistryDirectoryOwnerInjectorTest {
 	}
 
 	@Test
-	void minecraftForgesInlineBodyIsEditedAtBothOfItsReturns() throws Exception {
-		requireAll(FORGE_PATCHED);
-		ModPresence.publishFabric(List.of(mod(Ecosystem.FABRIC, "wover")));
-		byte[] in = classBytes(FORGE_PATCHED, REGISTRIES);
-		MethodNode original = method(node(in), "registryDirPath");
-		assertEquals(2, count(original, Opcodes.ARETURN), "MinecraftForge prefixes inline, with its own return");
-
-		Arm forge = arm(registries(FORGE_PATCHED, true));
-		assertEquals(PRESET_INFO, forge.body("elementsDirPath", "wover", PRESET_INFO));
-		assertEquals("examplemod/thing", forge.body("elementsDirPath", "examplemod", "thing"));
-		assertEquals("worldgen/biome", forge.body("elementsDirPath", "minecraft", "worldgen/biome"));
-	}
-
-	@Test
 	void switchedOffRegistriesStaysAsMerged() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.requireFile(Fixture.STAGED, MERGED_BASE, "staged base absent");
 		System.setProperty(RegistryDirectoryOwnerInjector.PROPERTY, "off");
 		byte[] in = classBytes(MERGED_BASE, REGISTRIES);
 		assertSame(in, transform(in));

@@ -49,20 +49,41 @@ public final class KernelModFileInfo implements IModFileInfo {
 	private final KernelModFile file;
 	private final IModInfo[] owner;
 	private final IConfigurable config;
+	/** Whether this is the one file info of a jar's shared file, which lists every NeoForge mod of the jar. */
+	private final boolean shared;
 
 	/**
-	 * @param owner  a one-slot holder back-filled with the {@link KernelModInfo} once it exists. The two types
-	 *               refer to each other — a mod info has an owning file, and that file's {@code getMods()} must
-	 *               return the mod info — so one of them has to be constructed second. NeoForge's title-screen
-	 *               version check is what reads it back: {@code getModFileById(id).getMods().get(0)}.
-	 * @param config the file's top level, or null with {@code -Dforbric.fileConfigElements=off}
+	 * The owning file of the mod {@code owner} will hold.
+	 *
+	 * <p>When {@code neoForge} is true and there is a jar, the jar's ONE file info, shared with every other NeoForge
+	 * declaration of the jar, as FML builds one {@code ModFileInfo} per jar ({@link KernelModFile} has the carrier's
+	 * bytecode for it). Otherwise — a jar-less alias, a Fabric mod the kernel describes ({@code KernelDeclarationReaders}
+	 * passes false, so a universal jar's Fabric half never joins its NeoForge half's file), or any mod under
+	 * {@code -Dforbric.modFilePerJar=off} — the mod's own file and file info, as the kernel built them before Stage 4.
+	 *
+	 * @param owner    a one-slot holder back-filled with the {@link KernelModInfo} once it exists. The two types
+	 *                 refer to each other — a mod info has an owning file, and that file's {@code getMods()} must
+	 *                 return the mod info — so one of them has to be constructed second. NeoForge's title-screen
+	 *                 version check is what reads it back: {@code getModFileById(id).getMods().get(0)}.
+	 * @param config   the file's top level, or null with {@code -Dforbric.fileConfigElements=off}. A shared file
+	 *                 keeps the first declaration's; every mod of a jar reads it from the same manifest.
+	 * @param neoForge whether {@code owner} is a NeoForge declaration of {@code jar}
 	 */
-	KernelModFileInfo(String modId, Path jar, IModInfo[] owner, IConfigurable config) {
+	static KernelModFileInfo forMod(String modId, Path jar, IModInfo[] owner, IConfigurable config, boolean neoForge) {
+		if (jar == null || !neoForge || !KernelModFile.perJar()) {
+			return new KernelModFileInfo(modId, new KernelModFile(modId, jar), owner, config, false);
+		}
+		KernelModFile file = KernelModFile.sharedFor(modId, jar);
+		return file.join(modId, owner, () -> new KernelModFileInfo(modId, file, owner, config, true));
+	}
+
+	private KernelModFileInfo(String modId, KernelModFile file, IModInfo[] owner, IConfigurable config, boolean shared) {
 		this.modId = modId;
-		this.file = new KernelModFile(modId, jar);
+		this.file = file;
 		this.file.setModFileInfo(this);
 		this.owner = owner;
 		this.config = config;
+		this.shared = shared;
 	}
 
 	@Override
@@ -70,8 +91,14 @@ public final class KernelModFileInfo implements IModFileInfo {
 		return file;
 	}
 
+	/**
+	 * The mod this file info was built for. A jar's shared one lists every NeoForge mod of the jar instead, in the
+	 * order of its {@code [[mods]]} entries, as {@code ModFileInfo.getMods()} does — so each of them finds itself
+	 * walking up from its file, and {@code getMods().get(0)} is the jar's first mod, not whichever was built first.
+	 */
 	@Override
 	public List<IModInfo> getMods() {
+		if (shared) return file.mods();
 		return owner[0] != null ? List.of(owner[0]) : List.of();
 	}
 
@@ -95,7 +122,7 @@ public final class KernelModFileInfo implements IModFileInfo {
 	}
 
 	/**
-	 * Both carriers report the first mod's resolved version, not the raw jar manifest's version. The owner is
+	 * NeoForge reports the first mod's resolved version, not the raw jar manifest's version. The owner is
 	 * back-filled before this file info is published, and already carries discovery's TOML/manifest substitutions.
 	 */
 	@Override
@@ -135,6 +162,6 @@ public final class KernelModFileInfo implements IModFileInfo {
 
 	@Override
 	public String toString() {
-		return "KernelModFileInfo[" + modId + "]";
+		return "KernelModFileInfo[" + (shared ? file.getId() : modId) + "]";
 	}
 }

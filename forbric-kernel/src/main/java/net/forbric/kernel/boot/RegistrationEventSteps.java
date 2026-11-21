@@ -44,19 +44,16 @@ import net.forbric.kernel.util.ForbricLog;
  * <p>That method is seven no-argument static calls — cauldron fluid content, cauldron interactions,
  * {@code CapabilityHooks.init} (posts {@code RegisterCapabilitiesEvent}), forced chunks,
  * {@code RegistryManager.initDataMaps} (posts {@code RegisterDataMapTypesEvent}), data component modifiers and POI
- * extension. The kernel called it whole, so the first step that threw ended it: on the sweep pack's client one data
- * map listener died on a poisoned {@code DataPackRegistriesHooks}, and with it went every data map type (NeoForge's
- * eleven built-ins included), {@code ModifyDefaultComponentsEvent}, {@code ExtendPoiTypesEvent} and — because the
- * kernel's transfer bridge sat after the call in the same {@code try} — the cross-ecosystem item/fluid/energy
- * bridge. Native NeoForge is all-or-nothing too, but loudly: a failure there is a loading-error screen. The kernel
- * carries on, so it owes the steps that did not fail their turn.
+ * extension. Native NeoForge runs it as the "Registration events" init task: the first step that throws ends it, and the
+ * boot stops on that failure. Since D87 ("stop like native", lane STOP) so does the kernel: the run ends at the first
+ * failing step ({@link Outcome#failure()}) and {@code KernelLifecycle} stops the boot on it with NeoForge's own error. Until
+ * then the kernel ran the steps after a failing one and carried on, because a data-map listener on the sweep pack's
+ * client had cost every data map type and the cross-ecosystem transfer bridge.
  *
  * <p>Still NeoForge's own method, not a copy: the step list is read from its bytecode at run time, so a NeoForge
  * that adds a step gets it run, and one whose {@code init} is anything but a straight run of such calls — or whose
- * loaded class a transformer has changed — is called whole, as before. Order is the method's own. A failed step is
- * never fed back into {@code ModLoader} as a loading issue: {@code ModLoader.postEvent} refuses every later event
- * once one is recorded ("Cowardly refusing to send event"), which would silently undo the isolation.
- * {@code -Dforbric.isolatedRegistrationEvents=off} calls the method whole.
+ * loaded class a transformer has changed — is called whole. Order is the method's own. Step by step, a failure names the
+ * step that threw. {@code -Dforbric.isolatedRegistrationEvents=off} calls the method whole.
  */
 final class RegistrationEventSteps {
 	/**
@@ -87,6 +84,12 @@ final class RegistrationEventSteps {
 			int dataMapTypes) {
 		boolean clean() {
 			return failures.isEmpty() && wholeFailure == null;
+		}
+
+		/** What ended the run: the whole call's failure, or the failing step's; null when it was clean. */
+		Throwable failure() {
+			if (wholeFailure != null) return wholeFailure;
+			return failures.isEmpty() ? null : failures.values().iterator().next();
 		}
 
 		/**
@@ -195,6 +198,9 @@ final class RegistrationEventSteps {
 				} catch (Throwable t) {
 					Caught.expected(t);
 					failures.put(step, unwrap(t));
+					// Natively the first step that throws ends init, and the "Registration events" task stops the boot on
+					// it (D87): no later step runs.
+					break;
 				}
 			}
 			outcome = new Outcome(true, steps, failures, null, dataMapTypes(cl));
@@ -291,7 +297,7 @@ final class RegistrationEventSteps {
 	private static void report(Outcome outcome) {
 		for (Map.Entry<Step, Throwable> failed : outcome.failures().entrySet()) {
 			ForbricLog.warn("[Forbric/Lifecycle] NeoForge's registration step " + failed.getKey().display()
-					+ " failed — the other steps still ran", failed.getValue());
+					+ " failed — that ends NeoForge's registration events, as on NeoForge", failed.getValue());
 		}
 		if (!outcome.isolated() && outcome.wholeFailure() != null) {
 			ForbricLog.warn("[Forbric/Lifecycle] NeoForge's registration events failed — capabilities and data "
@@ -307,8 +313,10 @@ final class RegistrationEventSteps {
 			CompatibilityFindings.record(new CompatibilityFinding("neoforge-registration:" + failed.getKey().display(),
 					"forbric", "NeoForge built-in registration", "RegistrationEvents.init",
 					CompatibilityFinding.Confidence.CONFIRMED, true,
-					"NeoForge's " + failed.getKey().display() + " failed; native NeoForge stops loading here, "
-							+ "Forbric ran the remaining registration steps without it",
+					// Since D82 (lane STOP) the run ends at this step and the boot stops on it, as natively; this said
+					// "Forbric ran the remaining registration steps without it" while it did.
+					"NeoForge's " + failed.getKey().display() + " failed; that ends NeoForge's registration events and "
+							+ "stops the game, as on NeoForge",
 					List.of(String.valueOf(failed.getValue()))));
 		}
 

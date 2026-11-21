@@ -46,7 +46,7 @@ import net.forbric.kernel.TestFixtures.Fixture;
  * merge emits, and the exact instruction the repair has to land BEFORE is in that emitted {@code <init>}.
  */
 class MergedBaseParticleProvidersTest {
-	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED_BASE = TestFixtures.stagedBase();
 	private static final String ENTRY = "net/minecraft/client/particle/ParticleResources.class";
 	private static final String ID_KEYED = "Lit/unimi/dsi/fastutil/ints/Int2ObjectMap;";
 	private static final String NAME_KEYED = "Ljava/util/Map;";
@@ -105,23 +105,6 @@ class MergedBaseParticleProvidersTest {
 		assertTrue(viewed, "the stored value must come from KernelParticleProviders.intKeyedView");
 	}
 
-	/**
-	 * MinecraftForge's {@code providersByName} lost its only producer in the merge, and the synthetic replacement
-	 * init runs AFTER {@code registerProviders} — so it is empty during the exact window that matters, and stays
-	 * empty afterwards.
-	 */
-	@Test
-	void getProviderReadsTheMapThatHasSomethingInIt() throws Exception {
-		MethodNode getProvider = method(repaired(), "getProvider",
-				"(Lnet/minecraft/core/particles/ParticleType;)Lnet/minecraft/client/particle/ParticleProvider;");
-		for (AbstractInsnNode insn : getProvider.instructions) {
-			if (insn instanceof FieldInsnNode f && f.getOpcode() == Opcodes.GETFIELD) {
-				assertTrue(!"providersByName".equals(f.name),
-						"getProvider still reads providersByName, which nothing ever writes");
-			}
-		}
-	}
-
 	@Test
 	void aSecondPassLeavesTheRepairedClassAlone() throws Exception {
 		byte[] once = new ForbricMergedBaseCompatTransformer().transform(
@@ -134,7 +117,7 @@ class MergedBaseParticleProvidersTest {
 
 	@Test
 	void anotherClassIsUntouched() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.requireFile(Fixture.STAGED, MERGED_BASE, "staged base absent");
 		byte[] other = readClass("net/minecraft/client/particle/ParticleProvider.class");
 		assertNotNull(other, "content drift: ParticleProvider absent from this base");
 		assertSame(other, new ForbricMergedBaseCompatTransformer()
@@ -150,7 +133,7 @@ class MergedBaseParticleProvidersTest {
 	}
 
 	private static byte[] original() throws IOException {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping real-bytecode check");
+		TestFixtures.requireFile(Fixture.STAGED, MERGED_BASE, "staged base absent — skipping real-bytecode check");
 		byte[] in = readClass(ENTRY);
 		assertNotNull(in, "content drift: ParticleResources absent from this base");
 		ClassNode node = new ClassNode();
@@ -174,7 +157,9 @@ class MergedBaseParticleProvidersTest {
 			var e = jar.getEntry(entry);
 			if (e == null) return null;
 			try (InputStream in = jar.getInputStream(e)) {
-				return in.readAllBytes();
+				// As the chain hands it to the compat repairs: after the vanilla twins, which give the genuine
+				// ParticleResources back vanilla's int-keyed providers map beside NeoForge's.
+				return PreMixinView.twinned(entry.substring(0, entry.length() - ".class".length()), in.readAllBytes());
 			}
 		}
 	}

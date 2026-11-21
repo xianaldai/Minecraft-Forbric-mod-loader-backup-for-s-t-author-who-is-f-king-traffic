@@ -25,9 +25,9 @@ public final class MixinUnusedArgumentObserverAdapter {
         ClassNode current=classes.apply(owners.getFirst()),old=references.apply(owners.getFirst());if(current==null||old==null)return 0;
         List<MethodNode> wrappers=new ArrayList<>();for(MethodNode handler:new ArrayList<>(mixin.methods)) {
             Source written=source(mixin.name,handler);if(written==null)continue;
-            // The method the handler binds in the class it was written against and in the merged one, as Mixin binds its
+            // The method the handler binds in the class it was written against and in the current one, as Mixin binds its
             // selectors there, however they are spelled: one method of one name in both. Every sharer of its value must
-            // bind that same merged method.
+            // bind that same current method.
             MethodNode original=MixinTargetSelectors.one(handler,old),host=MixinTargetSelectors.one(handler,current);
             if(original==null||host==null||!original.name.equals(host.name)||!typedShares(mixin,written,current,host))continue;
             MethodNode originalConsumer=declared(old,written.consumer().name,written.consumer().desc),consumer=declared(current,written.consumer().name,written.consumer().desc);

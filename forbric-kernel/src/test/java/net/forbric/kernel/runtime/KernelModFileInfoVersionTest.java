@@ -21,6 +21,7 @@ import net.forbric.api.ModPresence;
 import net.forbric.kernel.TestFixtures;
 import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.discovery.ForbricModDiscoverer;
+import net.forbric.kernel.discovery.MetadataFailures;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -37,14 +38,15 @@ class KernelModFileInfoVersionTest {
     void clearMetadata() {
         ModPresence.publishForgeFamily(List.of());
         ModPresence.publishFabric(List.of());
+        MetadataFailures.reset();
     }
 
     @Test
-    void bothCarriersDelegateVersionStringToTheFirstModVersion() throws Exception {
-        for (String family : List.of("forge", "neoforge")) {
-            Path jar = STAGED.resolve(family + "-runtime/" + family + "-runtime.jar");
-            TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged carrier absent");
-            String namespace = family.equals("forge") ? "net/minecraftforge" : "net/neoforged";
+    void theCarrierDelegatesVersionStringToTheFirstModVersion() throws Exception {
+        {
+            Path jar = TestFixtures.neoCarrier();
+            TestFixtures.requireFile(Fixture.STAGED, jar, "staged carrier absent");
+            String namespace = "net/neoforged";
             try (ZipFile zip = new ZipFile(jar.toFile())) {
                 String entry = namespace + "/fml/loading/moddiscovery/ModFileInfo.class";
                 ClassNode node = new ClassNode();
@@ -72,22 +74,29 @@ class KernelModFileInfoVersionTest {
     }
 
     @Test
-    void forgeDeclaredVersionIsRetainedWithoutAManifestVersion() throws Exception {
-        Path jar = fixture("forge.jar", "META-INF/mods.toml", "3.8.7", null);
+    void aDeclaredVersionIsRetainedWithoutAManifestVersion() throws Exception {
+        Path jar = fixture("neo-declared.jar", "META-INF/neoforge.mods.toml", "3.8.7", null);
         try (URLClassLoader runtime = runtimeLoader()) {
             assertEquals("3.8.7", version(info(runtime, jar)));
         }
+        // A MinecraftForge-only jar is refused (Stage 3): no mod, so no version for any ModInfo to carry.
+        assertRefused(fixture("forge.jar", "META-INF/mods.toml", "3.8.7", null));
+        // Beside a usable NeoForge half the jar loads, but its mods.toml is not read into mods: NeoForge never reads that
+        // file, and Forbric loads no MinecraftForge mod.
+        Path universal = universal("universal.jar", "3.8.7", null);
+        assertFalse(MetadataFailures.unsupported(universal), "a jar with a usable NeoForge half is not refused");
+        assertEquals(List.of("neohalf"), new ForbricModDiscoverer().discoverJar(universal).stream()
+                .map(net.forbric.api.DiscoveredMod::getId).toList(), "only the NeoForge half is discovered");
     }
 
     @Test
-    void bothTomlDialectsUseTheResolvedManifestPlaceholder() throws Exception {
+    void theTomlDialectUsesTheResolvedManifestPlaceholder() throws Exception {
         try (URLClassLoader runtime = runtimeLoader()) {
-            for (String metadata : List.of("META-INF/mods.toml", "META-INF/neoforge.mods.toml")) {
-                Path jar = fixture(metadata.contains("neoforge") ? "neo.jar" : "forge.jar",
-                        metadata, "${file.jarVersion}", "7.6.5-dev");
-                assertEquals("7.6.5-dev", version(info(runtime, jar)), "discovery must resolve " + metadata);
-            }
+            // The dialect is shared; NeoForge's file is the one discovery reads (a mods.toml alone is refused, below).
+            Path jar = fixture("neo.jar", "META-INF/neoforge.mods.toml", "${file.jarVersion}", "7.6.5-dev");
+            assertEquals("7.6.5-dev", version(info(runtime, jar)), "discovery must resolve META-INF/neoforge.mods.toml");
         }
+        assertRefused(fixture("forge.jar", "META-INF/mods.toml", "${file.jarVersion}", "7.6.5-dev"));
     }
 
     @Test
@@ -161,24 +170,49 @@ class KernelModFileInfoVersionTest {
     }
 
     private Path fixture(String name, String metadata, String version, String manifestVersion) throws Exception {
+        return jar(name, manifestVersion, metadata, toml("versionprobe", version));
+    }
+
+    /**
+     * A universal jar: its mods.toml declares versionprobe, beside a NeoForge half of another id with no @Mod at all
+     * (a data or library half NeoForge loads), which is what keeps the jar from being refused. The NeoForge half's own
+     * version differs, so reading the wrong manifest cannot pass for the right one.
+     */
+    private Path universal(String name, String forgeVersion, String manifestVersion) throws Exception {
+        return jar(name, manifestVersion, "META-INF/mods.toml", toml("versionprobe", forgeVersion),
+                "META-INF/neoforge.mods.toml", toml("neohalf", "1.0.0"));
+    }
+
+    private Path jar(String name, String manifestVersion, String... entries) throws Exception {
         Manifest manifest = new Manifest();
         manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
         if (manifestVersion != null) manifest.getMainAttributes().put(Attributes.Name.IMPLEMENTATION_VERSION, manifestVersion);
         Path path = temp.resolve(name);
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(path), manifest)) {
-            output.putNextEntry(new ZipEntry(metadata));
-            String toml = "modLoader=\"javafml\"\nloaderVersion=\"[1,)\"\nlicense=\"test\"\n[[mods]]\nmodId=\"versionprobe\"\n"
-                    + (version == null ? "" : "version=\"" + version + "\"\n");
-            output.write(toml.getBytes(StandardCharsets.UTF_8));
-            output.closeEntry();
+            for (int i = 0; i < entries.length; i += 2) {
+                output.putNextEntry(new ZipEntry(entries[i]));
+                output.write(entries[i + 1].getBytes(StandardCharsets.UTF_8));
+                output.closeEntry();
+            }
         }
         return path;
     }
 
+    private static String toml(String modId, String version) {
+        return "modLoader=\"javafml\"\nloaderVersion=\"[1,)\"\nlicense=\"test\"\n[[mods]]\nmodId=\"" + modId + "\"\n"
+                + (version == null ? "" : "version=\"" + version + "\"\n");
+    }
+
+    /** Stage 3: discovery yields nothing of a MinecraftForge-only jar and records it as unsupported. */
+    private static void assertRefused(Path jar) throws Exception {
+        assertEquals(List.of(), new ForbricModDiscoverer().discoverJar(jar), "a MinecraftForge-only jar yields no mod");
+        assertTrue(MetadataFailures.unsupported(jar), MetadataFailures.of(jar).toString());
+    }
+
     private static URLClassLoader runtimeLoader() throws Exception {
         Path compiled = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
-        Path carrier = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
-        TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "staged carrier absent");
+        Path carrier = STAGED.resolve(TestFixtures.NEO_CARRIER_JAR);
+        TestFixtures.requireFile(Fixture.STAGED, carrier, "staged carrier absent");
         TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "staged runtime classes absent");
         return new URLClassLoader(new URL[] {compiled.toUri().toURL(), carrier.toUri().toURL()},
                 KernelModFileInfoVersionTest.class.getClassLoader());

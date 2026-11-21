@@ -2,7 +2,7 @@
 # M51 — item tooltips show their component lines again, and NeoForge's appenders and Fabric's component tooltip
 # providers land where they asked.
 #
-# The merged ItemStack.addDetailsToTooltip is NeoForge's dispatcher over the appender lists ItemTooltipHandler.init
+# NeoForge's ItemStack.addDetailsToTooltip is a dispatcher over the appender lists ItemTooltipHandler.init
 # builds. init's only caller is GameData.postRegisterEvents, which the kernel replaces with its own copy of the tail,
 # and that copy left init out: tooltips showed the item's name and nothing else — no lore, enchantments, attribute
 # modifiers or durability. fabric-item-api's own tooltip injectors assume vanilla's single body and drew a Fabric
@@ -25,6 +25,7 @@ set -uo pipefail
 
 SERVER_DIR="$KERNEL/run/server-tooltips-m51"
 RESULTS="$BUILD/verification/m51-tooltips"
+refuse_shared_rundir "$SERVER_DIR"
 FAIL=0
 CASES=19
 VANILLA_AND_NEO="{'vanilla.lore', 'vanilla.attributes', 'vanilla.enchantment', 'vanilla.durability', 'neo.eventPosted', 'neo.before'}"
@@ -46,7 +47,7 @@ run_server() {
   seed_server_properties "$SERVER_DIR"
   printf 'level-name=world\nlevel-type=minecraft:flat\ngenerate-structures=false\nmax-tick-time=-1\npause-when-empty-seconds=0\nonline-mode=false\nspawn-animals=false\n' >> "$SERVER_DIR/server.properties"
   RUNDIR="$SERVER_DIR" FORBRIC_COMPAT_POLICY="$policy" \
-    FORBRIC_JVM="-Dforbric.tooltipProbe=$RESULTS/$phase.json -Dforbric.tooltipPhase=$phase $extra" \
+    FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.tooltipProbe=$RESULTS/$phase.json -Dforbric.tooltipPhase=$phase $extra" \
     "$KERNEL/run/launch-kernel-server.sh" < /dev/null > "$RESULTS/$phase.log" 2>&1 &
   pid=$!; record_server_pid "$SERVER_DIR" "$pid"
   await_server "$pid" "$RESULTS/$phase.log" 240 30

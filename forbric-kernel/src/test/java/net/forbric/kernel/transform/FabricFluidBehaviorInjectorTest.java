@@ -15,12 +15,12 @@ import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
+import net.forbric.kernel.TestFixtures;
 
 /** The merged EntityFluidInteraction.getFluidTypeByTag asks the kernel for a Fabric behaviour tag before NeoForge throws. */
 @ResourceLock("system-properties")
 class FabricFluidBehaviorInjectorTest {
-	private static final Path MERGED = Path.of(System.getenv().getOrDefault("FORBRIC_OLD", "../forbric-loader"),
-			"run/merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED = net.forbric.kernel.TestFixtures.stagedBase();
 	private static final String INTERACTION = "net/minecraft/world/entity/EntityFluidInteraction";
 
 	@AfterEach void reset() { System.clearProperty(FabricFluidBehaviorInjector.PROPERTY); }

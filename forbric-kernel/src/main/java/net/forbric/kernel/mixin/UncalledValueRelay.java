@@ -31,7 +31,7 @@ import net.forbric.kernel.util.Caught;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
- * Guest hooks woven into a vanilla method the merged game never calls, run where the carrier computes that method's value.
+ * Guest hooks woven into a vanilla method the game never calls, run where the carrier computes that method's value.
  *
  * <p>Vanilla's {@code DropExperienceBlock.spawnAfterBreak} (and four more blocks' — the census lists them) calls
  * {@code Block.tryDropExperience(level, pos, tool, provider)}: {@code i = processBlockExperience(level, tool,
@@ -39,17 +39,18 @@ import net.forbric.kernel.util.ForbricLog;
  * experience there — a {@code @ModifyVariable} at the store of {@code i} (PuzzlesLib's takes it and pays it out later), a
  * cancel at its start. NeoForge removed those calls: the same value is {@code BlockDropsEvent}'s experience, computed from the
  * block's {@code getExpDrop} (the same provider, sampled), processed the same way, and popped once by
- * {@code CommonHooks.handleBlockDrops}. Nothing in the merged game calls {@code tryDropExperience}, so every such hook was
- * woven and never ran — and since the merged {@code playerDestroy} reaches NeoForge's drops again, the vanilla experience it
+ * {@code CommonHooks.handleBlockDrops}. Nothing in the game calls {@code tryDropExperience}, so every such hook was
+ * woven and never ran — and since the current {@code playerDestroy} reaches NeoForge's drops again, the vanilla experience it
  * meant to replace or take was popped as well, on top of what the mod paid out itself.
  *
  * <p>So, after Mixin, the method's woven body is copied into a relay of the same class ({@code tryDropExperience$forbricrelay}),
  * with three calls replaced by the kernel's: the provider's draw answers nothing (the carrier already drew), the processing
  * answers the value the carrier computed (the event's experience as it stands when the relay runs), and the pop records the
  * amount instead of popping it. Every guest hook woven into the method stays where Mixin put it and runs in the relay, in its
- * order, on the carrier's value. The kernel's drops listener ({@code KernelGameBlockEvents}, at {@code LOWEST}) runs the
- * relay for a block whose native {@code spawnAfterBreak} asked the method (the census's callers, through a class that only
- * forwards to its parent's), and the event drops what the relay would have popped: once, where NeoForge pops it.
+ * order, on the carrier's value. The kernel's drops listener ({@code KernelServerDuties.installExperienceRelay}, on NeoForge's
+ * bus itself at {@code LOWEST}) runs the relay for a
+ * block whose native {@code spawnAfterBreak} asked the method (the census's callers, through a class that only forwards to
+ * its parent's), and the event drops what the relay would have popped: once, where NeoForge pops it.
  *
  * <p>The relay is made only when it can stand for the method exactly: guest code was woven into it; every hook woven there is
  * a mixin of an ecosystem whose native game calls the method (the census's row — a NeoForge mod's hook there never runs
@@ -188,7 +189,7 @@ public final class UncalledValueRelay {
 		if (text(method).equals(text(original))) return null;
 		String why = declined(contract, node, before, method, original);
 		if (why != null) {
-			ForbricLog.warn("[Forbric/Mixin] %s never runs in the merged game, and the hooks woven into it are not relayed to where the carrier "
+			ForbricLog.warn("[Forbric/Mixin] %s never runs in the game, and the hooks woven into it are not relayed to where the carrier "
 					+ "computes its value — %s; they stay where nothing calls them", contract.display(), why);
 			return null;
 		}
@@ -217,7 +218,7 @@ public final class UncalledValueRelay {
 		ClassWriter writer = new ClassWriter(0);
 		node.accept(writer);
 		List<String> hooks = hooks(node, before, method);
-		ForbricLog.info("[Forbric/Mixin] %s never runs in the merged game; the %d hook(s) woven into it (%s) run in %s%s, on the value the carrier "
+		ForbricLog.info("[Forbric/Mixin] %s never runs in the game; the %d hook(s) woven into it (%s) run in %s%s, on the value the carrier "
 				+ "computes in its place", contract.display(), hooks.size(), String.join(", ", hooks), contract.name(), SUFFIX);
 		return writer.toByteArray();
 	}
@@ -253,7 +254,7 @@ public final class UncalledValueRelay {
 		return null;
 	}
 
-	/** The mixins whose merged methods {@code method}'s woven body calls or hands as a method reference. */
+	/** The mixins whose current methods {@code method}'s woven body calls or hands as a method reference. */
 	private static Set<String> mixinsWovenInto(ClassNode node, ClassNode before, MethodNode method) {
 		Set<String> out = new LinkedHashSet<>();
 		for (AbstractInsnNode instruction : method.instructions) {
@@ -365,7 +366,7 @@ public final class UncalledValueRelay {
 				try {
 					return resolveRelay(of, c);
 				} catch (LinkageError | RuntimeException unresolvable) {
-					// Reading a class's declared methods links their types; one the merged game cannot link is not asked.
+					// Reading a class's declared methods links their types; one the game cannot link is not asked.
 					Caught.warn(unresolvable, "[Forbric/Mixin] could not tell whether the native game asks %s of %s; its relay is not run for it",
 							c.key(), of.getName());
 					return null;
@@ -438,7 +439,7 @@ public final class UncalledValueRelay {
 
 	/**
 	 * What the native {@code caller} hands the contract method's unread parameter, as a function of the instance: a field of
-	 * the instance, a static field, or a static call on constants, read off the caller's native body and evaluated on the merged
+	 * the instance, a static field, or a static call on constants, read off the caller's native body and evaluated on the current
 	 * classes; null when it is anything else.
 	 */
 	static java.util.function.Function<Object, Object> nativeArgument(Class<?> type, Contract contract, String caller) {

@@ -18,27 +18,34 @@ ck  "left the world cleanly"            "ClientSmoke\] clean disconnect observed
 ck  "server side really ran"            "joined the game|加入了游戏"
 ck  "datapacks fully loaded"            "Loaded [1-9][0-9]* advancements"
 ck  "FML construct posted (Neo)"        "posted FML construct to [1-9][0-9]* NeoForge mod"
-ck  "FML construct posted (Forge)"      "posted FML construct to [1-9][0-9]* traditional-Forge mod"
 ck  "client setup posted"               "posted FML client setup to [1-9][0-9]* NeoForge mod"
 ck  "common setup inside Minecraft ctor" "\[Render thread/INFO\]: \[Forbric/Lifecycle\] posted FML common setup to [1-9][0-9]* NeoForge mod"
 abs "…not from the pre-Minecraft window" "\[main/INFO\]: \[Forbric/Lifecycle\] posted FML common setup"
 ck  "registration events ran"           "ran NeoForge.s registration events.* [1-9][0-9]* data map type"
 ck  "load complete posted"              "posted FML load complete to [1-9][0-9]* NeoForge mod"
+# The kernel writes this sentence whenever it applied the dependency order to construction, whether a class had to move
+# or the classes were found in that order already; with ordering switched off or failed, or when the order names none of
+# the classes being constructed, it writes another line or a warning, and never this one
+# (KernelModLoader.orderByDependency, ConstructionOrderVerdictTest). It used to be written only when something moved, so
+# a small pack with nothing to reorder failed here while healthy (C6 ACCEPT W-2).
 ck  "construction is dependency order"  "Forbric/Order\] construction order is dependency order"
 ck  "Fabric init is Fabric Loader order" "Forbric/Order\] [1-9][0-9]* Fabric mod\(s\) initialise in Fabric Loader.s order, by mod id"
 ck  "Fabric mains in Minecraft.<init>" "\[Render thread/INFO\]: \[Forbric/Fabric\] invoked [1-9][0-9]* Fabric main entrypoint\(s\) in the Minecraft.<init> window"
 abs "…not the pre-Minecraft window"     "\[main/INFO\]: \[Forbric/Fabric\] invoked [0-9]+ Fabric main entrypoint"
 ck  "datapacks served"                  "Forbric/DataPacks\] served [1-9][0-9]* datapack"
-ck  "registry alias parity restored"    "Forbric/Aliases\] gave .* alias-resolving lookup"
-ck  "NeoForge registration order"       "fired RegisterEvent in NeoForge.s registration order"
-ck  "client bridge pass complete"       "EventMux\] all [0-9]+ CLIENT_MOD_BUS bridge\(s\) installed"
-ck  "game-bus bridge pass complete"     "EventMux\] all [0-9]+ GAME_BUS bridge\(s\) installed"
-ck  "client game-bus bridges on"        "EventMux\] all [0-9]+ CLIENT_GAME_BUS bridge\(s\) installed"
+# (No alias line here: since Stage 4 the alias repair only fires when fabric-registry-sync's mixin adds a warning
+# addAlias to MappedRegistry, so it depends on the pack; gate-m9, whose pack carries fabric-api, pins it.)
+# RegisterEvent is posted by NeoForge's own GameData.postRegisterEvents (K3). Its own line ("fired RegisterEvent in
+# NeoForge's registration order") prints with or without the kernel's seam on it, so a check on that line could not go
+# red (K3 review B-3); this is gate-m9's seam pair instead (C5 wave 2b review B-1), the same patterns as gate-m1 and
+# gate-m9 (AssertCompatTest pins them together): the seam applied after Mixin wove what this pack aims at the method,
+# and no "not the shape" warning, which is the seam standing down and NeoForge's method running as shipped.
+ck  "postRegisterEvents carries the seam" "GameData.postRegisterEvents posts RegisterEvent itself, every mixin on it applied: .* [0-9]+ tail step"
 echo "== must be absent =="
-abs "no mod failed a phase"             "failed during (construct|IMC enqueue|IMC process)"
-abs "no bridge reported missing"        "bridge\(s\) MISSING"
+abs "no mod failed a phase"             "Failed to wait for future "
 abs "no unbound data component"         "Trying to access unbound value"
 abs "no RegisterEvent listener failed"  "RegisterEvent listener failed"
+abs "postRegisterEvents is the seam's shape" "GameData.postRegisterEvents is not the shape the kernel knows"
 abs "no tag lost to a dangling id"      "Couldn.t load tag"
 abs "JEI-style empty plugin list"       "plugins must not be empty"
 abs "no null pack reached the repo"     "streamSelfAndChildren.* because .pack. is null"

@@ -57,7 +57,7 @@ import net.forbric.kernel.mixin.MixinFit;
 class GuestInjectorPrunerTest {
     private static final String MODEL_MANAGER_MIXIN="net.fabricmc.fabric.mixin.client.model.loading.ModelManagerMixin";
     private static final String ITEM_STACK_MIXIN="net.fabricmc.fabric.mixin.item.ItemStackMixin";
-	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED_BASE = TestFixtures.stagedBase();
 	private static final Path CLIENT_MODS =
 			Path.of(System.getProperty("user.dir"), "run", "client-kernel", "mods").normalize();
 	private static final String MIXIN_ENTRY =
@@ -285,12 +285,12 @@ class GuestInjectorPrunerTest {
 
 	/**
 	 * The premise and the payoff in one place: on the original bytes MixinFit reads PARTIAL with {@code fromStream}
-	 * among the misses; on the pruned bytes it reads FIT. If the merged base ever grows {@code fromStream} back,
+	 * among the misses; on the pruned bytes it reads FIT. If the staged base ever grows {@code fromStream} back,
 	 * this is the test that says the pruner has become unnecessary.
 	 */
 	@Test
 	void thePrunedMixinFitsTheMergedModelManagerWhereTheOriginalWasPartial() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.requireFile(Fixture.STAGED, MERGED_BASE, "staged base absent");
 		byte[] original = realMixin();
 		Function<String, byte[]> resolver = mergedBaseResolver();
 
@@ -465,7 +465,7 @@ class GuestInjectorPrunerTest {
         return new GuestInjectorPruner(owner->{
             try {
                 if(owner.equals("net/neoforged/neoforge/common/tooltip/ItemTooltipHandler")) {
-                    byte[] bytes=readFromJar(TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar"),owner+".class");
+                    byte[] bytes=readFromJar(TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR),owner+".class");
                     return bytes==null?null:read(new NeoTooltipAppendersInjector().transform(owner.replace('/','.'),bytes,null));
                 }
                 if(owner.equals("net/fabricmc/fabric/impl/item/ItemComponentTooltipProviderRegistryImpl")) {

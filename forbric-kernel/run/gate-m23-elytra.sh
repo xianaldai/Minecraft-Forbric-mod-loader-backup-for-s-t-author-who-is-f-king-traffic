@@ -5,7 +5,8 @@
 # decides gliding from the neoforge:gliding_flight attribute and never looks at the item, and vanilla's
 # ItemStack.forEachModifier, which reads the raw component instead of calling the method that posts the event
 # NeoForge's own listener answers. The listener is the only thing anywhere that raises that attribute. Producer on
-# one side of the merge, consumer on the other, attribute stuck at its false default.
+# one side of the merge, consumer on the other, attribute stuck at its false default. On NeoForge's own base (Stage 4)
+# both halves are NeoForge's; the gate keeps the behaviour pinned rather than the merge's fix.
 #
 # WHY IT ASSERTS SUSTAIN AND NOT JUST START. canGlide being false did not stop flight from starting — it made
 # updateFallFlying clear the flag on the very next tick, so a player got a moment of flight and was pulled back.
@@ -27,11 +28,16 @@ mkdir -p "$BUILD"
 
 kernel_jar
 [ -d "$RUNDIR/saves/$WORLD" ] || { echo "[kernel] SKIP-FATAL: no world at $RUNDIR/saves/$WORLD" >&2; exit 3; }
+# The gate writes into its rundir, so it refuses the shared fixture itself and any link into it: run it on a clone
+# (`cp -c -R "$(cd run/client-merged-pack && pwd -P)" <dir>`), as gates-parallel.py does.
+# (After the missing-fixture check, so a machine without the fixture still gets that check's own words, as
+# gates-parallel.py expects when it leaves the rundir variable unset; nothing above writes into the rundir.)
+refuse_shared_rundir "$RUNDIR"
 
 step "fly an elytra in a real client"
 : > "$LOG"
 reap_stale_server "$RUNDIR"
-FORBRIC_JVM="-Dforbric.clientSmoke=true -Dforbric.clientSmokeWorld=$WORLD -Dforbric.clientSmokeReadyTicks=60 \
+FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.clientSmoke=true -Dforbric.clientSmokeWorld=$WORLD -Dforbric.clientSmokeReadyTicks=60 \
 -Dforbric.clientSmokeElytra=$AT -Dforbric.clientSmokeDisconnectTicks=$((AT + 120)) ${M23_EXTRA_JVM:-}" \
 RUNDIR="$RUNDIR" "$KERNEL/run/launch-kernel-client.sh" \
   --quickPlayPath "$RUNDIR/quickPlay/log.json" --quickPlaySingleplayer "$WORLD" > "$LOG" 2>&1 &

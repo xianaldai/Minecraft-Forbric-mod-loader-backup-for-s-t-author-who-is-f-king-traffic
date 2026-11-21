@@ -40,7 +40,7 @@ import net.forbric.kernel.util.ForbricLog;
  *
  * <p>Minecraft writes a crash report and nothing in it answers the only question a player has. The Forge line
  * that would — {@code Suspected Mods:} — is produced by walking a {@code ModuleLayer} of {@code IModInfo}, which
- * this kernel deliberately does not have ({@code KernelForgeModContext}), so on a Forbric instance it says
+ * this kernel deliberately does not have, so on a Forbric instance it says
  * {@code NONE} when it appears at all. Measured across every crash report in {@code run/}: not one names a mod.
  * Meanwhile the trace itself is full of the answer — the top frame of six of six crashes in {@code client-popular}
  * belongs to a mod jar by name.
@@ -58,7 +58,7 @@ import net.forbric.kernel.util.ForbricLog;
  * <p>A jar file name is not a mod id — {@code xaeroworldmap-forge-26.2-1.46.1.jar} carries ids from the
  * {@code xaerominimap} family, and jars renamed to a content hash are real. So every name found in the trace is
  * looked up in {@link ModCatalog}, and a name no row carries contributes nothing. That also supplies the
- * deny-list for free: the merged base, the runtime carriers, the kernel's own jar and Minecraft's libraries are
+ * deny-list for free: the game base, the runtime carrier, the kernel's own jar and Minecraft's libraries are
  * not mods, so they are not in the catalogue, so they cannot be blamed.
  *
  * <p>Same rule for the other two forms. {@code MixinConfigOwners}' policy is the one this inherits: a
@@ -112,6 +112,31 @@ public final class CrashAttribution {
 	 * exception's message lines, and only ids the catalogue has, like every other signal here.
 	 */
 	private static final Pattern CLASHING = Pattern.compile("Sources?: ([A-Za-z0-9_\\-]+(?:(?:, and |, ?| and )[A-Za-z0-9_\\-]+)+)");
+
+	/**
+	 * A section NeoForge's {@code CrashReportExtender.dumpModLoadingCrashReport} writes for each mod-loading issue:
+	 * {@code -- Mod loading issue for: <mod id> --}, or {@code -- Mod loading issue --} for one no mod is attached to
+	 * (javap of 26.2.0.93). Its details and stack trace are the failure itself, not the system report.
+	 *
+	 * <p>Read because that report is the one a mod-loading failure leaves: above the divider it has only
+	 * {@code ModLoadingCrashException: Mod loading has failed}, with no frame and no name, so reading the exception chain
+	 * alone named nobody for every one of them.
+	 */
+	private static final Pattern MOD_LOADING_ISSUE = Pattern.compile("^-- Mod loading issue(?: for: ([A-Za-z0-9_\\-.]+))? --$");
+
+	/** Any section header of a crash report's walkthrough: {@code -- System Details --}, {@code -- Head --}. */
+	private static final Pattern SECTION = Pattern.compile("^-- .+ --$");
+
+	/**
+	 * One of the issues in NeoForge's {@code ModLoadingException} message — {@code Loading errors encountered:} and then
+	 * a {@code \t- } line per issue — naming its mod the way NeoForge's issue texts do,
+	 * {@code {name} ({id}) encountered an error while dispatching ...} ({@code fml.modloadingissue.*}). A client's crash
+	 * report carries the issues only there.
+	 */
+	private static final Pattern ISSUE_NAMES = Pattern.compile("\\(([A-Za-z0-9_\\-.]+)\\)");
+
+	/** The reason a suspect carries when NeoForge's mod-loading error names it. */
+	static final String NEOFORGE_ISSUE = "NeoForge's mod-loading error names it";
 
 	/** The reason a suspect carries when the error names it as one side of a clash. */
 	static final String CLASH = "the error names it as clashing with another mod";
@@ -192,7 +217,8 @@ public final class CrashAttribution {
 		try {
 			Path report = crashReportFromThisRun(dir.resolve("crash-reports"), startedAt);
 			if (report == null) return;
-			List<Suspect> suspects = suspects(Files.readString(report, StandardCharsets.UTF_8));
+			List<Suspect> suspects = suspects(Files.readString(report, StandardCharsets.UTF_8),
+					neoForgeLoadingErrors(KernelLifecycle.gameLoader()));
 			String rendered = render(chinese(), report.getFileName().toString(), suspects);
 
 			Path out = dir.resolve(".forbric-kernel").resolve(FILE);
@@ -293,15 +319,41 @@ public final class CrashAttribution {
 	 *
 	 * <p>Only the exception chain at the top is read, not the whole file. Everything below the walkthrough
 	 * divider is Minecraft's own system report — thread dumps, the mod lists, the graphics card — and a mod
-	 * named there is named for being installed, not for being involved.
+	 * named there is named for being installed, not for being involved. The one exception is NeoForge's mod-loading
+	 * issue sections ({@link #modLoadingIssues}): NeoForge writes the failure there and not above the divider.
 	 */
 	static List<Suspect> suspects(String crashReport) {
-		String trace = exceptionChain(crashReport);
+		return suspects(crashReport, "");
+	}
+
+	/**
+	 * The same, also reading {@code loadingErrors}: NeoForge's own record of why mod loading failed
+	 * ({@link #neoForgeLoadingErrors}), which a client's crash report does not carry. Natively NeoForge keeps each issue's
+	 * cause in {@code ModLoader}'s loading issues and shows them in its fatal-error window; the client's crash report is
+	 * {@code CrashReport.forThrowable} of the {@code ModLoadingException}, which has no cause of its own, so a throw that no
+	 * mod's listener made ({@code fml.modloadingissue.uncaughterror}, a guest's mixin inside {@code GameData}'s try) left
+	 * only its message there and nothing to name a mod by (K3c open item 6). The server's {@code crash-*-fml.txt} already has
+	 * the trace in its issue sections.
+	 */
+	static List<Suspect> suspects(String crashReport, String loadingErrors) {
+		String trace = exceptionChain(crashReport) + modLoadingIssues(crashReport) + loadingErrors;
 		Map<String, Suspect> byId = new LinkedHashMap<>();
 
 		int depth = 0;
+		boolean issues = false;
 		for (String line : trace.split("\n")) {
 			depth++;
+			Matcher issueFor = MOD_LOADING_ISSUE.matcher(line);
+			if (issueFor.matches() && issueFor.group(1) != null) remember(byId, issueFor.group(1), NEOFORGE_ISSUE, depth);
+			// NeoForge's ModLoadingException lists its issues under this line, up to the first frame or its warnings.
+			if (line.endsWith("Loading errors encountered:")) {
+				issues = true;
+			} else if (line.startsWith("\tat ") || line.endsWith("Loading warnings encountered:")) {
+				issues = false;
+			} else if (issues && line.startsWith("\t- ")) {
+				Matcher named = ISSUE_NAMES.matcher(line);
+				while (named.find()) remember(byId, named.group(1), NEOFORGE_ISSUE, depth);
+			}
 			// The handler form FIRST: such a frame carries the vanilla jar, so reading its bracket would
 			// blame Minecraft for a mod's mixin.
 			Matcher handler = MIXIN_HANDLER.matcher(line);
@@ -389,6 +441,64 @@ public final class CrashAttribution {
 			}
 		}
 		return "";
+	}
+
+	/**
+	 * Each ERROR issue NeoForge's {@code ModLoader} recorded in this process ({@code ModLoader.getLoadingErrors()}) that has a
+	 * cause, rendered as NeoForge renders a cause in its own mod-loading crash report
+	 * ({@code CrashReportExtender.generateEnhancedStackTrace}, frames with their jars), each after a newline; empty when mod
+	 * loading did not fail, or NeoForge is not there. Never throws: it runs in the shutdown hook.
+	 */
+	static String neoForgeLoadingErrors(ClassLoader cl) {
+		if (cl == null) return "";
+		try {
+			Class<?> loader = Class.forName("net.neoforged.fml.ModLoader", false, cl);
+			java.lang.reflect.Method extender = null;
+			try {
+				extender = Class.forName("net.neoforged.neoforge.logging.CrashReportExtender", true, cl)
+						.getMethod("generateEnhancedStackTrace", Throwable.class);
+			} catch (ReflectiveOperationException | LinkageError plain) {
+				Caught.expected(plain);
+			}
+			StringBuilder out = new StringBuilder();
+			for (Object issue : (List<?>) loader.getMethod("getLoadingErrors").invoke(null)) {
+				Throwable cause = (Throwable) issue.getClass().getMethod("cause").invoke(issue);
+				if (cause == null) continue;
+				String rendered;
+				if (extender != null) {
+					rendered = (String) extender.invoke(null, cause);
+				} else {
+					java.io.StringWriter text = new java.io.StringWriter();
+					cause.printStackTrace(new java.io.PrintWriter(text));
+					rendered = text.toString();
+				}
+				out.append('\n').append(rendered.replace("\r\n", "\n"));
+			}
+			return out.toString();
+		} catch (ClassNotFoundException absent) {
+			Caught.expected(absent);
+			return "";
+		} catch (ReflectiveOperationException | LinkageError | RuntimeException unreadable) {
+			Caught.warn(unreadable, "[Forbric/Crash] could not read NeoForge's mod-loading errors; the crash report alone is read");
+			return "";
+		}
+	}
+
+	/**
+	 * NeoForge's mod-loading issue sections ({@link #MOD_LOADING_ISSUE}), each up to the next section header, with a
+	 * leading newline each; empty when the report has none. Below the divider, but the failure's own words and trace —
+	 * {@code -- System Details --} and the other sections stay unread.
+	 */
+	static String modLoadingIssues(String crashReport) {
+		int divider = crashReport.indexOf("\n------------");
+		if (divider < 0) return "";
+		StringBuilder out = new StringBuilder();
+		boolean in = false;
+		for (String line : crashReport.substring(divider + 1).split("\n")) {
+			if (SECTION.matcher(line).matches()) in = MOD_LOADING_ISSUE.matcher(line).matches();
+			if (in) out.append('\n').append(line);
+		}
+		return out.toString();
 	}
 
 	/**
@@ -530,6 +640,7 @@ public final class CrashAttribution {
 			case CLASH -> "报错里把它和另一个 mod 列为冲突的双方";
 			case "its mixin was running" -> "它改过的代码正在运行";
 			case "Mixin named it" -> "报错里直接点了它的名字";
+			case NEOFORGE_ISSUE -> "NeoForge 的模组加载报错里点了它的名字";
 			default -> "报错里有它的代码";
 		};
 	}

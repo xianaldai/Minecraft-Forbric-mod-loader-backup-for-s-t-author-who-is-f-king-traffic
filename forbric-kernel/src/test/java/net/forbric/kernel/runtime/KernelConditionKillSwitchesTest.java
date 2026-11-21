@@ -17,6 +17,8 @@
 package net.forbric.kernel.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -37,7 +39,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * The two condition leniencies, on and off, over the compiled game-side classes: with the switch unset a foreign
+ * NeoForge's condition leniency, on and off, over the compiled game-side classes: with the switch unset a foreign
  * type never reaches the strict codec and decodes to the kernel's marker; with it off the strict codec is asked
  * exactly once, as the carrier's own path would.
  */
@@ -46,7 +48,7 @@ class KernelConditionKillSwitchesTest {
 	@AfterEach
 	void reset() {
 		System.clearProperty("forbric.neoConditions");
-		System.clearProperty("forbric.forgeConditions");
+		System.clearProperty("forbric.neoConditions.fabricPacksOnly");
 	}
 
 	@Test
@@ -54,9 +56,239 @@ class KernelConditionKillSwitchesTest {
 		run("net.forbric.kernel.runtime.KernelNeoConditions", "net.neoforged.neoforge.common.conditions.ICondition", "forbric.neoConditions");
 	}
 
+	/**
+	 * D69: the leniency is a Fabric mod's pack's. A data file opened from any other pack — a world datapack, a NeoForge mod's,
+	 * vanilla's — or decoded with no file opened on its thread gets NeoForge's own codec, as on native NeoForge, which skips
+	 * it; {@code -Dforbric.neoConditions.fabricPacksOnly=off} puts back the leniency for every pack (gate-m21's red control).
+	 */
 	@Test
-	void minecraftForgeLeniencyIgnoresAForeignTypeUnlessSwitchedOff() throws Exception {
-		run("net.forbric.kernel.runtime.KernelForgeConditions", "net.minecraftforge.common.crafting.conditions.ICondition", "forbric.forgeConditions");
+	void outsideAFabricModsPackTheStrictCodecDecides() throws Exception {
+		try (URLClassLoader cl = gameSideLoader()) {
+			Decoding d = new Decoding(cl, "net.forbric.kernel.runtime.KernelNeoConditions");
+			Class<?> sources = Class.forName("net.forbric.kernel.runtime.KernelConditionSources", true, cl);
+			Method bindPacks = sources.getDeclaredMethod("bindFabricModPacksForTest", Predicate.class);
+			bindPacks.setAccessible(true);
+			Object fabricPack = new Object(), worldPack = new Object();
+			bindPacks.invoke(null, (Predicate<Object>) pack -> pack == fabricPack);
+			Method reading = sources.getMethod("reading", Object.class), forget = sources.getDeclaredMethod("forgetForTest");
+			forget.setAccessible(true);
+			try {
+				forget.invoke(null);
+				d.decode();
+				assertEquals(1, d.strictCalls.get(), "no file opened on this thread: NeoForge's verdict");
+				reading.invoke(null, worldPack);
+				d.decode();
+				assertEquals(2, d.strictCalls.get(), "a world datapack's file: NeoForge's verdict");
+				reading.invoke(null, fabricPack);
+				assertEquals("forbric:foreign-condition", d.decodedName(), "a Fabric mod's file: tolerated");
+				assertEquals(2, d.strictCalls.get());
+				reading.invoke(null, worldPack);
+				System.setProperty("forbric.neoConditions.fabricPacksOnly", "off");
+				assertEquals("forbric:foreign-condition", d.decodedName(), "switched off, every pack is tolerated again");
+				assertEquals(2, d.strictCalls.get());
+			} finally {
+				forget.invoke(null);
+			}
+		}
+	}
+
+	/**
+	 * Recipes are parsed in one pass and decoded in a second, so the pack named at each open is the LAST file's by the time
+	 * any recipe decodes (lens A of lane S's wave-2 review). The transformed scan records each parsed element's pack and
+	 * names it again at that element's decode: a Fabric mod's recipe is tolerated though a world datapack's file was opened
+	 * after it, the world datapack's is not though a Fabric mod's was, an element no file of the scan produced (one a mod
+	 * added in ModifyRecipeJsonsEvent) gets NeoForge's verdict, and the end of the scan names no pack to a later decode.
+	 */
+	@Test
+	void aRecipeIsJudgedByThePackItWasParsedFromNotTheLastOneOpened() throws Exception {
+		try (URLClassLoader cl = gameSideLoader()) {
+			Decoding d = new Decoding(cl, "net.forbric.kernel.runtime.KernelNeoConditions");
+			Class<?> sources = Class.forName("net.forbric.kernel.runtime.KernelConditionSources", true, cl);
+			Method bindPacks = sources.getDeclaredMethod("bindFabricModPacksForTest", Predicate.class);
+			bindPacks.setAccessible(true);
+			Object fabricPack = new Object(), worldPack = new Object();
+			bindPacks.invoke(null, (Predicate<Object>) pack -> pack == fabricPack);
+			Method reading = sources.getMethod("reading", Object.class), parsed = sources.getMethod("parsed", Object.class),
+					decoding = sources.getMethod("decoding", Object.class), begin = sources.getMethod("beginTwoPassScan"),
+					end = sources.getMethod("endTwoPassScan"), done = sources.getMethod("doneReading"),
+					forget = sources.getDeclaredMethod("forgetForTest"), open = sources.getDeclaredMethod("openScansForTest");
+			forget.setAccessible(true);
+			open.setAccessible(true);
+			Object fabricRecipe = new Object(), worldRecipe = new Object(), addedByAMod = new Object();
+			try {
+				forget.invoke(null);
+				begin.invoke(null);
+				reading.invoke(null, fabricPack);
+				parsed.invoke(null, fabricRecipe);
+				reading.invoke(null, worldPack);
+				parsed.invoke(null, worldRecipe);
+				// second pass, in the order the parsed map hands them back
+				decoding.invoke(null, fabricRecipe);
+				assertEquals("forbric:foreign-condition", d.decodedName(), "the Fabric mod's recipe, though a world file was opened last");
+				assertEquals(0, d.strictCalls.get());
+				decoding.invoke(null, worldRecipe);
+				d.decode();
+				assertEquals(1, d.strictCalls.get(), "the world datapack's recipe: NeoForge's verdict");
+				reading.invoke(null, fabricPack);
+				decoding.invoke(null, worldRecipe);
+				d.decode();
+				assertEquals(2, d.strictCalls.get(), "a Fabric pack opened last does not lend the world recipe its leniency");
+				decoding.invoke(null, addedByAMod);
+				d.decode();
+				assertEquals(3, d.strictCalls.get(), "an element no file of this scan produced: NeoForge's verdict");
+				decoding.invoke(null, fabricRecipe);
+				end.invoke(null);
+				assertEquals(0, open.invoke(null));
+				d.decode();
+				assertEquals(4, d.strictCalls.get(), "after the scan no pack stays named");
+				reading.invoke(null, fabricPack);
+				done.invoke(null);
+				d.decode();
+				assertEquals(5, d.strictCalls.get(), "after a one-pass scan's return no pack stays named");
+			} finally {
+				forget.invoke(null);
+			}
+		}
+	}
+
+	/**
+	 * A Fabric mod's pack with overlays reaches a {@code Resource} as NeoForge's base's own {@code CompositePackResources}
+	 * (fabric-resource-loader's {@code ModPackResourcesFactory.openFull}); the pack judged is its primary (lens A, A-2). The
+	 * composite here is the real class from the staged base, around a stand-in primary.
+	 */
+	@Test
+	void aCompositePackIsJudgedByItsPrimary() throws Exception {
+		try (URLClassLoader cl = gameSideLoader()) {
+			Decoding d = new Decoding(cl, "net.forbric.kernel.runtime.KernelNeoConditions");
+			Class<?> sources = Class.forName("net.forbric.kernel.runtime.KernelConditionSources", true, cl);
+			Class<?> packResources = Class.forName("net.minecraft.server.packs.PackResources", false, cl);
+			Object primary = Proxy.newProxyInstance(cl, new Class<?>[] { packResources }, (proxy, method, args) -> {
+				if ("toString".equals(method.getName())) return "stand-in Fabric pack";
+				if ("hashCode".equals(method.getName())) return System.identityHashCode(proxy);
+				if ("equals".equals(method.getName())) return proxy == args[0];
+				throw new UnsupportedOperationException(method.getName());
+			});
+			Object composite = Class.forName("net.minecraft.server.packs.CompositePackResources", true, cl)
+					.getConstructor(packResources, List.class).newInstance(primary, List.of());
+			Method bindPacks = sources.getDeclaredMethod("bindFabricModPacksForTest", Predicate.class);
+			bindPacks.setAccessible(true);
+			bindPacks.invoke(null, (Predicate<Object>) pack -> pack == primary);
+			Method forget = sources.getDeclaredMethod("forgetForTest");
+			forget.setAccessible(true);
+			try {
+				sources.getMethod("reading", Object.class).invoke(null, composite);
+				assertEquals("forbric:foreign-condition", d.decodedName(), "the composite's primary is the Fabric mod's pack");
+				assertEquals(0, d.strictCalls.get());
+				Method primaryOf = sources.getDeclaredMethod("primary", Object.class);
+				primaryOf.setAccessible(true);
+				assertSame(primary, primaryOf.invoke(null, composite));
+				Object plain = new Object();
+				assertSame(plain, primaryOf.invoke(null, plain), "any other pack is itself");
+			} finally {
+				forget.invoke(null);
+			}
+		}
+	}
+
+	/**
+	 * The names the leniency looks for are fabric-resource-loader's real ones in the pinned Fabric API (B-1 of lane S's
+	 * wave-2 review): v1's {@code ModNioPackResources} and v0's {@code ModResourcePack} are a Fabric mod's pack; the base's
+	 * own path, file, vanilla and composite packs are not.
+	 */
+	@Test
+	void fabricResourceLoadersOwnPackTypesAreRecognisedAndTheBasesAreNot() throws Exception {
+		Path api = TestFixtures.fabricApi();
+		TestFixtures.requireFile(Fixture.STAGED, api, "the pinned Fabric API fixture: " + api);
+		Path dir = Files.createTempDirectory("forbric-d69-frl");
+		try (URLClassLoader game = gameSideLoader()) {
+			List<URL> modules = new ArrayList<>();
+			try (java.util.zip.ZipFile outer = new java.util.zip.ZipFile(api.toFile())) {
+				for (java.util.zip.ZipEntry nested : java.util.Collections.list(outer.entries())) {
+					String name = nested.getName();
+					if (!name.startsWith("META-INF/jars/fabric-resource-loader-v") || !name.endsWith(".jar")) continue;
+					Path module = dir.resolve(name.substring(name.lastIndexOf('/') + 1));
+					try (java.io.InputStream in = outer.getInputStream(nested)) {
+						Files.write(module, in.readAllBytes());
+					}
+					modules.add(module.toUri().toURL());
+				}
+			}
+			assertEquals(2, modules.size(), "fabric-resource-loader v0 and v1 nested in " + api);
+			try (URLClassLoader fabric = new URLClassLoader(modules.toArray(new URL[0]), game)) {
+				Class<?> sources = Class.forName("net.forbric.kernel.runtime.KernelConditionSources", true, game);
+				Method byName = sources.getDeclaredMethod("implementsByName", Class.class);
+				byName.setAccessible(true);
+				for (String fabricPack : List.of("net.fabricmc.fabric.impl.resource.pack.ModNioPackResources",
+						"net.fabricmc.fabric.api.resource.v1.pack.ModPackResources", "net.fabricmc.fabric.api.resource.ModResourcePack")) {
+					Class<?> type = Class.forName(fabricPack, false, fabric);
+					boolean recognised = type.isInterface() ? (boolean) byName.invoke(null, proxyClassOf(fabric, type)) : (boolean) byName.invoke(null, type);
+					assertTrue(recognised, fabricPack + " is a Fabric mod's pack");
+				}
+				for (String basePack : List.of("net.minecraft.server.packs.PathPackResources", "net.minecraft.server.packs.FilePackResources",
+						"net.minecraft.server.packs.VanillaPackResources", "net.minecraft.server.packs.CompositePackResources")) {
+					assertEquals(false, byName.invoke(null, Class.forName(basePack, false, game)), basePack + " is not");
+				}
+			}
+		} finally {
+			try (var walk = Files.walk(dir)) {
+				walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
+			}
+		}
+	}
+
+	/** A class implementing exactly {@code iface}, as a pack class would; generated, so no method of it is ever needed. */
+	private static Class<?> proxyClassOf(ClassLoader loader, Class<?> iface) throws Exception {
+		org.objectweb.asm.ClassWriter w = new org.objectweb.asm.ClassWriter(0);
+		String name = "forbric/test/PackOf" + iface.getSimpleName();
+		w.visit(org.objectweb.asm.Opcodes.V17, org.objectweb.asm.Opcodes.ACC_PUBLIC | org.objectweb.asm.Opcodes.ACC_ABSTRACT, name,
+				null, "java/lang/Object", new String[] { iface.getName().replace('.', '/') });
+		w.visitEnd();
+		byte[] bytes = w.toByteArray();
+		return new ClassLoader(loader) {
+			Class<?> define() {
+				return defineClass(name.replace('/', '.'), bytes, 0, bytes.length);
+			}
+		}.define();
+	}
+
+	/** One lenient codec over a strict stand-in that counts its calls, decoding {"type":"x:foreign"}. */
+	private static final class Decoding {
+		final AtomicInteger strictCalls = new AtomicInteger();
+		final Object lenient, ops, input;
+		final Method decode, result;
+
+		Decoding(URLClassLoader cl, String helperName) throws Exception {
+			Class<?> helper = Class.forName(helperName, true, cl);
+			Class<?> codecClass = Class.forName("com.mojang.serialization.Codec", true, cl);
+			Class<?> dataResult = Class.forName("com.mojang.serialization.DataResult", true, cl);
+			ops = Class.forName("com.mojang.serialization.JsonOps", true, cl).getField("INSTANCE").get(null);
+			input = Class.forName("com.google.gson.JsonParser", true, cl).getMethod("parseString", String.class)
+					.invoke(null, "{\"type\":\"x:foreign\"}");
+			Method bind = helper.getDeclaredMethod("bindKnownTypesForTest", Predicate.class);
+			bind.setAccessible(true);
+			bind.invoke(null, (Predicate<String>) id -> false);
+			Method error = dataResult.getMethod("error", java.util.function.Supplier.class);
+			Object strict = Proxy.newProxyInstance(cl, new Class<?>[] { codecClass }, (proxy, method, args) -> {
+				if ("decode".equals(method.getName())) {
+					strictCalls.incrementAndGet();
+					return error.invoke(null, (java.util.function.Supplier<String>) () -> "strict");
+				}
+				if ("toString".equals(method.getName())) return "strict";
+				throw new UnsupportedOperationException(method.getName());
+			});
+			lenient = helper.getMethod("lenient", codecClass).invoke(null, strict);
+			decode = codecClass.getMethod("decode", Class.forName("com.mojang.serialization.DynamicOps", true, cl), Object.class);
+			result = dataResult.getMethod("result");
+		}
+
+		Object decode() throws Exception {
+			return decode.invoke(lenient, ops, input);
+		}
+
+		String decodedName() throws Exception {
+			Optional<?> pair = (Optional<?>) result.invoke(decode());
+			return String.valueOf(pair.orElseThrow().getClass().getMethod("getFirst").invoke(pair.orElseThrow()));
+		}
 	}
 
 	private static void run(String helperName, String conditionName, String property) throws Exception {
@@ -80,6 +312,13 @@ class KernelConditionKillSwitchesTest {
 				owned.setAccessible(true);
 				owned.invoke(null, (Predicate<String>) id -> true);
 			}
+
+			// D69: the leniency is for a Fabric mod's pack, so the file is decoded as one opened from such a pack.
+			Class<?> sources = Class.forName("net.forbric.kernel.runtime.KernelConditionSources", true, cl);
+			Method bindPacks = sources.getDeclaredMethod("bindFabricModPacksForTest", Predicate.class);
+			bindPacks.setAccessible(true);
+			bindPacks.invoke(null, (Predicate<Object>) pack -> true);
+			sources.getMethod("reading", Object.class).invoke(null, new Object());
 
 			AtomicInteger strictCalls = new AtomicInteger();
 			Method error = dataResult.getMethod("error", java.util.function.Supplier.class);
@@ -109,13 +348,12 @@ class KernelConditionKillSwitchesTest {
 	static URLClassLoader gameSideLoader() throws Exception {
 		Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime").normalize();
 		Path run = TestFixtures.stagedRoot();
-		Path forgeRt = run.resolve("forge-runtime/forge-runtime.jar");
-		Path neoRt = run.resolve("neoforge-runtime/neoforge-runtime.jar");
-		Path merged = run.resolve("merged-base/patched-mc-merged-26.2.jar");
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(forgeRt) && Files.isRegularFile(neoRt) && Files.isRegularFile(merged),
-				"the staged artifacts are absent");
+		Path neoRt = run.resolve(TestFixtures.NEO_CARRIER_JAR);
+		Path merged = run.resolve(TestFixtures.BASE_JAR);
+		TestFixtures.requireFiles(Fixture.STAGED,
+				"the staged artifacts are absent", neoRt, merged);
 		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "the game-side set is not compiled");
-		List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), forgeRt.toUri().toURL(), neoRt.toUri().toURL(), merged.toUri().toURL()));
+		List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), neoRt.toUri().toURL(), merged.toUri().toURL()));
 		for (String pattern : List.of("com/mojang/datafixerupper", "com/google/code/gson", "com/mojang/brigadier", "com/google/guava/guava",
 				"it/unimi/dsi/fastutil", "org/slf4j/slf4j-api", "org/apache/logging/log4j/log4j-api",
 				// Identifier.<clinit> reaches netty's DecoderException

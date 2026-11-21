@@ -29,7 +29,7 @@ import net.forbric.api.Ecosystem;
 import net.forbric.kernel.TestFixtures;
 
 /**
- * {@link UncalledDecisionEntries} on the unmodified Create Fly redstone-connection hook against the staged merged base and the
+ * {@link UncalledDecisionEntries} on the unmodified Create Fly redstone-connection hook against the staged base and the
  * native references it carries. Natively {@code RedStoneWireBlock.getConnectingSide} asks the static
  * {@code shouldConnectTo(state, direction)} once and {@code shouldConnectTo(state)} (which forwards {@code (state, null)})
  * twice; NeoForge asks the neighbour's {@code state.canRedstoneConnectTo(level, pos, direction)} at the same three places, and
@@ -50,14 +50,13 @@ class UncalledDecisionEntriesStagedTest {
 	}
 
 	private static Path merged() {
-		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
-		TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(jar), "actual game required");
+		Path jar = TestFixtures.stagedBase();
+		TestFixtures.requireFile(TestFixtures.Fixture.STAGED, jar, "actual game required");
 		return jar;
 	}
 
 	private static Function<String, ClassNode> game() {
-		List<Path> jars = List.of(merged(), TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar"),
-				TestFixtures.stagedRoot().resolve("merged-base/forge-runtime-interop.jar"));
+		List<Path> jars = List.of(merged(), TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR));
 		Map<String, ClassNode> read = new HashMap<>();
 		return owner -> read.computeIfAbsent(owner, name -> {
 			for (Path jar : jars) {
@@ -85,7 +84,7 @@ class UncalledDecisionEntriesStagedTest {
 			} catch (Exception unreadable) {
 				return null;
 			}
-		});
+		}, null, TestFixtures.launchSources(jar));
 		return references::get;
 	}
 

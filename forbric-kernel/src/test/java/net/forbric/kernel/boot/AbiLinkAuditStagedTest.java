@@ -29,20 +29,19 @@ import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.Test;
 
 /**
- * The false-positive pin: over the staged 97-jar client pack, resolved against both carriers, the merged base and
+ * The false-positive pin: over the staged 97-jar client pack, resolved against the NeoForge carrier, the base and
  * the pack itself, the audit finds NOTHING. A real pack has CustomSkinLoader naming fml/loading and fml/relauncher,
  * universal jars naming both families, Fabric ports shipping net.minecraftforge.* for their dependants — every one
- * of those is a shape a naive audit cries wolf on.
+ * of those is a shape a naive audit cries wolf on. Judged as {@link AbiLinkAudit#scan} judges it, universal jars'
+ * set-aside MinecraftForge halves skipped.
  */
 class AbiLinkAuditStagedTest {
 	@Test
 	void theStagedClientPackHasNoDanglingForgeFamilyReference() throws Exception {
 		Path mods = Path.of(System.getProperty("user.dir"), "run", "client-merged-pack", "mods").normalize();
 		Path run = TestFixtures.stagedRoot().normalize();
-		List<Path> against = List.of(run.resolve("forge-runtime/forge-runtime.jar"), run.resolve("neoforge-runtime/neoforge-runtime.jar"),
-				run.resolve("merged-base/patched-mc-merged-26.2.jar"));
-		TestFixtures.require(Fixture.STAGED, against.stream().allMatch(Files::isRegularFile),
-				"staged pack or carriers absent");
+		List<Path> against = List.of(run.resolve(TestFixtures.NEO_CARRIER_JAR), run.resolve(TestFixtures.BASE_JAR));
+		TestFixtures.requireFiles(Fixture.STAGED, "staged pack or carriers absent", against.toArray(Path[]::new));
 		TestFixtures.require(Fixture.THIRD_PARTY, Files.isDirectory(mods), "staged pack or carriers absent");
 		List<Path> jars = new ArrayList<>();
 		try (Stream<Path> list = Files.list(mods)) {
@@ -52,7 +51,10 @@ class AbiLinkAuditStagedTest {
 		TestFixtures.require(Fixture.THIRD_PARTY, jars.size() >= 50, "the staged pack is not the real one");
 		List<Path> universe = new ArrayList<>(against);
 		universe.addAll(jars);
-		List<AbiLinkAudit.Finding> findings = AbiLinkAudit.audit(jars, AbiLinkAudit.classesOf(universe));
+		// The predicate production's scan passes: a universal jar's MinecraftForge half is set aside by arbitration and
+		// never loaded, so its net/minecraftforge/ references are not judged (doubledoors and collective carry one).
+		List<AbiLinkAudit.Finding> findings = AbiLinkAudit.audit(jars, AbiLinkAudit.classesOf(universe),
+				MultiLoaderArbiter::carriesMinecraftForgeHalf);
 		assertEquals(List.of(), findings, "measured 0 over the staged pack; a finding here is a false positive to scope out, "
 				+ "or a real mod compiled against another Forge that has just been staged");
 	}

@@ -56,18 +56,16 @@ class MixinDefaultPredicateTransportSpellingTest {
 	private static Inputs inputs() throws Exception {
 		ClassNode mixin = MixinCallbackSelectorSpellingTest.unrelatedNames(
 				TransportSpellings.fabricMixin("fabric-rendering-fluids-v1", "net/fabricmc/fabric/mixin/client/rendering/fluid/FluidRendererMixin"));
-		ZipFile game = open(TransportSpellings.mergedBase());
-		ZipFile neo = open(TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar"));
-		ZipFile forge = open(TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar"));
-		NativeGameReferences references = new NativeGameReferences(name -> read(game, name));
+		ZipFile game = open(TransportSpellings.base());
+		ZipFile neo = open(TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR));
+		NativeGameReferences references = new NativeGameReferences(name -> read(game, name), null, TestFixtures.launchSources(TransportSpellings.base()));
 		ClassNode host = references.get(Ecosystem.FABRIC, HOST);
-		TestFixtures.require(Fixture.STAGED, host != null, "the hash-pinned native " + HOST + " the merged base indexes");
+		TestFixtures.require(Fixture.STAGED, host != null, "the hash-pinned native " + HOST + " the launch's native references index");
 		Map<String, ClassNode> currentCache = new HashMap<>(), nativeCache = new HashMap<>();
 		nativeCache.put(HOST, host);
 		Function<String, ClassNode> current = name -> currentCache.computeIfAbsent(name, n -> {
 			byte[] bytes = read(game, n + ".class");
 			if (bytes == null) bytes = read(neo, n + ".class");
-			if (bytes == null) bytes = read(forge, n + ".class");
 			if (bytes == null) try (InputStream in = ClassLoader.getSystemResourceAsStream(n + ".class")) {
 				if (in != null) bytes = in.readAllBytes();
 			} catch (Exception unavailable) {
@@ -80,7 +78,7 @@ class MixinDefaultPredicateTransportSpellingTest {
 	}
 
 	private static ZipFile open(Path jar) throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged input required: " + jar);
+		TestFixtures.requireFile(Fixture.STAGED, jar, "staged input required: " + jar);
 		ZipFile zip = new ZipFile(jar.toFile());
 		OPEN.add(zip);
 		return zip;

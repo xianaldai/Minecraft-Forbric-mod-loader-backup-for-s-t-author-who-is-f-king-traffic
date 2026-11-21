@@ -20,11 +20,14 @@ class GateWorldgenContractTest {
 	void theGateProbesExactlyTheBlocksThePackagedCanariesPlace() throws Exception {
 		Path gate = Path.of("run/gate-m25-worldgen.sh");
 		String script = Files.readString(gate);
-		String forge = WorldgenCanaryDataTest.inspect("forge", "forbriclive", "livemod-src", "forge-runtime");
+		// The refused MinecraftForge canary's marker (its forge-runtime/forbriclive.jar placed end_stone; Stage 4 no longer stages it).
+		String forge = "minecraft:end_stone";
 		String neo = WorldgenCanaryDataTest.inspect("neoforge", "forbricneolive", "livemod-src-neoforge", "neoforge-runtime");
-		for (String block : List.of(forge, neo)) {
-			assertTrue(script.contains("'^" + block + ": [1-9][0-9]*'"), "missing positive gate assertion for " + block);
-		}
+		// Stage 3 of dropping MinecraftForge: the MinecraftForge canary is refused, so the gate no longer stages it, and
+		// its marker is neither asserted nor probed for; the NeoForge canary's marker is the one the gate reads.
+		assertTrue(script.contains("'^" + neo + ": [1-9][0-9]*'"), "missing positive gate assertion for " + neo);
+		assertFalse(script.contains("'^" + forge + ": [1-9][0-9]*'"), "a positive assertion on the refused canary's marker " + forge);
+		assertFalse(script.contains("forge-runtime/forbriclive.jar"), "gate-m25 still stages the refused MinecraftForge canary");
 
 		// Run the production shell command, intercepting only Python. This observes quoting, the real region
 		// directory and every actual needle; merely retaining the check's regex cannot satisfy this contract.
@@ -44,19 +47,21 @@ class GateWorldgenContractTest {
 		recorder.environment().put("CAPTURE", capture.toString());
 		assertSuccessful(recorder);
 		assertEquals(List.of(kernel.resolve("run/compat/region-probe.py").toString(),
-				rundir.resolve("world/dimensions/minecraft/overworld/region").toString(), neo, forge),
+				rundir.resolve("world/dimensions/minecraft/overworld/region").toString(), neo),
 				List.of(Files.readString(capture).split("\\x00")),
-				"the real probe argv must read the current overworld layout and both packaged markers");
+				"the real probe argv must read the current overworld layout and the NeoForge canary's marker");
 
 		assertTrue(script.contains("'^unreadable: 0"));
 		assertTrue(script.contains("\"$CHUNKS\" -ge 20"));
-		// Phase 1 D landed: the Forge half is green, the expected-red escape is gone, and a switch-off boot is the
-		// negative control that proves each MinecraftForge claim can still go red on its own.
+		// The expected-red escape stays gone, and the red demonstration is M25_NO_DATA=1 (D48). The -Dforbric.forgeWorldgen=off
+		// boot went in Stage 4 C5 with the MinecraftForge worldgen bridge it switched off (a retired switch, D29), and so did
+		// the declaration line it read; a gate that boots on a retired switch tests nothing.
 		assertFalse(script.contains("EXPECTED: RED"), "the expected-red header must go when the gap closes");
 		assertFalse(script.contains("EXPECTED-RED"));
-		assertTrue(script.contains("M25_NO_DATA"));
-		assertTrue(script.contains("-Dforbric.forgeWorldgen=off"), "the negative-control boot must stay");
-		assertTrue(script.indexOf("boot \"$CONTROL_LOG\" \"-Dforbric.forgeWorldgen=off\"") > script.indexOf("boot \"$LOG\""));
+		assertTrue(script.contains("M25_NO_DATA"), "the M25_NO_DATA red demonstration must stay");
+		assertFalse(script.contains("boot \"$CONTROL_LOG\""), "no second boot on the retired -Dforbric.forgeWorldgen switch");
+		assertFalse(script.contains("MinecraftForge.s modifier registries"), "the MinecraftForge declaration line has no producer");
+		assertEquals(1, script.split("\nboot \"", -1).length - 1, "exactly one boot");
 		assertSuccessful(new ProcessBuilder("bash", "-n", gate.toString()));
 	}
 

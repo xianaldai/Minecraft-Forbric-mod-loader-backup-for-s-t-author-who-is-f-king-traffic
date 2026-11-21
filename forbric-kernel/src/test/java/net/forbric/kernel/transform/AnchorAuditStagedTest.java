@@ -38,7 +38,7 @@ import net.forbric.kernel.TestFixtures;
 import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
- * The anchor books against the real merged base, and against a copy of it with the anchor taken away.
+ * The anchor books against the real staged base, and against a copy of it with the anchor taken away.
  *
  * <p>The second half is the point. Asserting that a repair applies today proves only that today is fine; the
  * failure this whole mechanism exists for is the one that arrives with a carrier upgrade, months from now, and
@@ -51,7 +51,7 @@ import net.forbric.kernel.TestFixtures.Fixture;
  */
 class AnchorAuditStagedTest {
 	private static final Path STAGED = TestFixtures.stagedRoot();
-	private static final Path MERGED_BASE = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED_BASE = STAGED.resolve(TestFixtures.BASE_JAR);
 	private static final String MINECRAFT = "net.minecraft.client.Minecraft";
 	private static final String ENTRY = "net/minecraft/client/Minecraft.class";
 	private static final String OPTIONS = "net/minecraft/client/Options";

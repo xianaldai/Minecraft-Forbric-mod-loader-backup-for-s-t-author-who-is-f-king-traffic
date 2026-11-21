@@ -22,6 +22,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -32,8 +33,8 @@ import java.util.zip.ZipOutputStream;
 
 /**
  * Dependency-free zip/jar primitives, replacing the {@code python3} heredocs in the dev build scripts
- * ({@code assemble-minecraftforge-runtime.sh} and {@code build-patched-forge.sh}). The Forge-specific merge/overlay
- * policy lives in {@link ForgeRuntimeBuilder}/{@link PatchedMcBuilder}; this class only reads, writes, and extracts.
+ * ({@code assemble-neoforge-runtime.sh}). The runtime's merge policy lives in {@link NeoForgeRuntimeBuilder}; this
+ * class only reads, writes, and extracts.
  */
 final class Zips {
 	private Zips() {}
@@ -80,14 +81,33 @@ final class Zips {
 		}
 	}
 
-	/** Write a deflated jar whose entries are exactly {@code entries}, in iteration order. */
+	/**
+	 * The one time every entry {@link #writeJar} writes carries, the same one {@link VanillaReference} uses.
+	 *
+	 * <p>Without it each entry took the clock's time, so the NeoForge runtime built twice from the same inputs came out
+	 * with the same entries and contents but different bytes: an upgrade rewrote {@code net.forbric:neoforge-runtime:
+	 * 26.2.0.93} in place under a new SHA-1, and two machines never agreed on one. {@link ZipEntry#setTimeLocal} writes it
+	 * as given, in every time zone.
+	 */
+	static final LocalDateTime FIXED_TIME = LocalDateTime.of(2000, 1, 1, 0, 0);
+
+	/**
+	 * Write a deflated jar whose entries are exactly {@code entries}, in iteration order, every one at {@link #FIXED_TIME}:
+	 * the same entries give the same bytes.
+	 */
 	static void writeJar(Path out, Map<String, byte[]> entries) throws IOException {
+		writeJar(out, entries, FIXED_TIME);
+	}
+
+	/** {@link #writeJar(Path, Map)} at another entry time: only the reproducible-runtime test asks for one. */
+	static void writeJar(Path out, Map<String, byte[]> entries, LocalDateTime entryTime) throws IOException {
 		Files.createDirectories(out.getParent());
 		try (OutputStream fos = Files.newOutputStream(out);
 		     ZipOutputStream zos = new ZipOutputStream(new BufferedOutputStream(fos))) {
 			zos.setMethod(ZipOutputStream.DEFLATED);
 			for (Map.Entry<String, byte[]> e : entries.entrySet()) {
 				ZipEntry ze = new ZipEntry(e.getKey());
+				ze.setTimeLocal(entryTime);
 				zos.putNextEntry(ze);
 				zos.write(e.getValue());
 				zos.closeEntry();

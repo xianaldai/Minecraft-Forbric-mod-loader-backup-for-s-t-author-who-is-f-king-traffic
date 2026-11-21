@@ -17,8 +17,6 @@
 package net.forbric.kernel.runtime;
 
 import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
 import java.util.Collections;
 import java.util.Optional;
 import java.util.Set;
@@ -42,7 +40,7 @@ import net.forbric.kernel.util.ForbricLog;
  *
  * <h2>Why nothing evaluates them</h2>
  *
- * <p>fabric-api reads that key from exactly two mixins, and the merged base defeats both:
+ * <p>fabric-api reads that key from exactly two mixins, and NeoForge's base defeats both:
  * <ul>
  *   <li>{@code RegistryLoadTaskPendingRegistrationMixin} injects at {@code Decoder.parse} inside
  *       {@code loadFromResource}. NeoForge's patch of that method replaced the call with {@code Codec.parse}
@@ -50,7 +48,7 @@ import net.forbric.kernel.util.ForbricLog;
  *       anchor does not exist — and the kernel rewrites every guest config's {@code defaultRequire} to 0, so it
  *       SOFT-SKIPS. Silently.</li>
  *   <li>{@code SimpleJsonResourceReloadListenerMixin.skipData} targets
- *       {@code lambda$scanDirectory$0(Map, Identifier, Object)}; the merged base's is
+ *       {@code lambda$scanDirectory$0(Map, Identifier, Object)}; NeoForge's is
  *       {@code (Identifier, Identifier, Map, Optional)}, because NeoForge's patch made the value optional and
  *       reordered the captures. Mixin rejects the class, taking the sibling injection with it.</li>
  * </ul>
@@ -63,7 +61,7 @@ import net.forbric.kernel.util.ForbricLog;
  * <h2>Why one insertion is enough</h2>
  *
  * <p>{@code ConditionalOps} has four public factories and they all funnel into
- * {@code createConditionalCodecWithConditions(Codec, String)}. A constant-pool scan of the merged base finds
+ * {@code createConditionalCodecWithConditions(Codec, String)}. A constant-pool scan of the old merged base found
  * seven classes reaching them — the datapack-registry loader, {@code SimpleJsonResourceReloadListener} (both its
  * {@code scanDirectory} and its {@code scanDirectoryWithModifier}, which is the one recipes use), loot tables,
  * recipes, advancements and the datapack generator. Wrapping the funnel covers all of them; wrapping a call site
@@ -226,61 +224,6 @@ public final class KernelFabricConditions {
 		}
 	}
 
-	private static final String TYPES = "net.fabricmc.fabric.api.resource.conditions.v1.ResourceConditions";
-
-	/** fabric-api's own type lookup, {@code ResourceConditions.getConditionType}; substitutable for the tests. */
-	private static volatile java.util.function.Predicate<String> registeredTypes = KernelFabricConditions::askFabricApi;
-	private static volatile MethodHandle typeLookup;
-	private static volatile boolean typeLookupResolved;
-
-	/**
-	 * Whether fabric-api's resource-condition registry has this type id -- false without fabric-api, and for an id that
-	 * does not parse. What MinecraftForge's leniency asks to tell a type another ecosystem owns from one nobody here owns.
-	 */
-	static boolean registers(String id) {
-		return Identifier.tryParse(id) != null && registeredTypes.test(id);
-	}
-
-	private static boolean askFabricApi(String id) {
-		MethodHandle lookup = typeLookupHandle();
-		if (lookup == null) return false;
-		try {
-			Object type = lookup.invoke(Identifier.tryParse(id));
-			return type != null;
-		} catch (Throwable t) {
-			Caught.warn(t, "[Forbric/Conditions] could not ask fabric-api whether it registers the resource condition "
-					+ "type %s — read as not registered there", id);
-			return false;
-		}
-	}
-
-	private static MethodHandle typeLookupHandle() {
-		if (typeLookupResolved) return typeLookup;
-		synchronized (KernelFabricConditions.class) {
-			if (typeLookupResolved) return typeLookup;
-			try {
-				Class<?> types = Class.forName(TYPES, false, KernelFabricConditions.class.getClassLoader());
-				typeLookup = MethodHandles.lookup().findStatic(types, "getConditionType",
-						MethodType.methodType(Class.forName("net.fabricmc.fabric.api.resource.conditions.v1.ResourceConditionType",
-								false, KernelFabricConditions.class.getClassLoader()), Identifier.class));
-			} catch (ClassNotFoundException absent) {
-				Caught.expected(absent);
-				typeLookup = null;
-			} catch (Throwable t) {
-				Caught.warn(t, "[Forbric/Conditions] fabric-api's public condition-type lookup is there but could not be "
-						+ "read; its types read as not registered");
-				typeLookup = null;
-			}
-			typeLookupResolved = true;
-			return typeLookup;
-		}
-	}
-
-	/** Test seam: fabric-api's registered condition types, replaced. */
-	static void bindRegisteredTypesForTest(java.util.function.Predicate<String> types) {
-		registeredTypes = types;
-	}
-
 	/**
 	 * Test seam: fabric-api is not on any test classpath, so the evaluator has to be substitutable — as a handle taking
 	 * {@code (JsonObject, String, Identifier, RegistryInfoLookup)}, asked with the key, no id and the lookup.
@@ -302,7 +245,7 @@ public final class KernelFabricConditions {
 	}
 
 	/**
-	 * Turns a guest mixin's private "skip this file" sentinel into the one the merged consumer understands.
+	 * Turns a guest mixin's private "skip this file" sentinel into the one NeoForge's consumer understands.
 	 *
 	 * <h2>The half-applied pair</h2>
 	 *
@@ -312,10 +255,10 @@ public final class KernelFabricConditions {
 	 * marker is a bare {@code new Object()}. The consumer is an {@code @Inject} on {@code lambda$scanDirectory$0}
 	 * that recognises the marker and cancels the map-put.
 	 *
-	 * <p>On the merged base the producer applies and the consumer does not. The merge left the class carrying TWO
-	 * methods named {@code lambda$scanDirectory$0} — NeoForge's {@code (Identifier,Identifier,Map,Optional)} and
-	 * vanilla's {@code (Codec,Identifier,Map,Object)} — and the live {@code invokedynamic} binds the first. So
-	 * fabric's {@code @Inject}, written against the second, attaches to nothing, and the bare Object flows into
+	 * <p>On NeoForge's base the producer applies and the consumer does not. The class's one
+	 * {@code lambda$scanDirectory$0} is NeoForge's {@code (Identifier,Identifier,Map,Optional)} (the old merged base also
+	 * kept vanilla's {@code (Codec,Identifier,Map,Object)}, which nothing called). So fabric's {@code @Inject}, written
+	 * against vanilla's, attaches to nothing, and the bare Object flows into
 	 * {@code DataResult.ifSuccess} whose consumer casts it to {@code Optional}: ClassCastException, datapack load
 	 * fails, "can't proceed with server load", and the server never starts.
 	 *
@@ -325,7 +268,7 @@ public final class KernelFabricConditions {
 	 *
 	 * <h2>Why Optional.empty()</h2>
 	 *
-	 * <p>Because that is the merged consumer's OWN vocabulary for "this file's conditions were not met" — it is
+	 * <p>Because that is the current consumer's OWN vocabulary for "this file's conditions were not met" — it is
 	 * what the surviving lambda already does with an empty value, and it logs exactly that. The substitution says
 	 * what fabric's unattached {@code skipData} would have said.
 	 *
@@ -363,9 +306,8 @@ public final class KernelFabricConditions {
 	private static void reportSkipMarker(Class<?> type) {
 		if (!MARKERS.add(type.getName())) return;
 		ForbricLog.warn("[Forbric/Conditions] a data file was skipped by a guest mixin that could not finish the "
-				+ "job: it produced %s where the merged reader expects Optional, because the merge left two "
-				+ "methods named lambda$scanDirectory$0 and the half that mod patches is not the half that runs. "
-				+ "Treated as 'conditions not met', which is what its other half would have done — without this "
+				+ "job: it produced %s where NeoForge's reader (lambda$scanDirectory$0) expects an Optional. "
+				+ "Treated as 'conditions not met', which is what that reader does with an empty Optional — without this "
 				+ "the datapack load dies and the server does not start", type.getName());
 	}
 }

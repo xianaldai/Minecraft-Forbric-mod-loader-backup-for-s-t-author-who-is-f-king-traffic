@@ -34,14 +34,14 @@ import net.forbric.kernel.util.ForbricLog;
 import net.forbric.kernel.util.Caught;
 
 /**
- * Gives a merged method's local back the variable-table range that covers its own uses.
+ * Gives a base method's local back the variable-table range that covers its own uses.
  *
  * <p>A compiler starts a local's range right after the store that declares it, so every read of the local is inside its
- * range. The merged base splices a carrier's statements into vanilla's body, and where it puts them between a local's
+ * range. NeoForge's base splices its statements into vanilla's body, and where it puts them between a local's
  * declaring store and the label its range starts at, the carrier's code reads and writes the local outside its range:
  * {@code ServerLevel.explode} stores {@code explosion}, then MinecraftForge's {@code if (onExplosionStart(this, explosion))
  * return;} and only then the label {@code explosion}'s range starts at; {@code BowItem.releaseUsing} stores
- * {@code timeHeld}, then both carriers' arrow-loose hooks store it again and test it, and only then its range begins.
+ * {@code timeHeld}, then the carrier's arrow-loose hook stores it again and test it, and only then its range begins.
  * Mixin and MixinExtras read locals off that table: a {@code @Local(name = "explosion")} of a {@code RETURN} handler is not
  * there at MinecraftForge's early return, and a {@code @ModifyVariable} at {@code timeHeld}'s store cannot bind the store
  * vanilla's own code makes — where, natively, the local is in scope.
@@ -53,7 +53,13 @@ import net.forbric.kernel.util.Caught;
  * frame inside it re-declare the locals. Then the stretch already holds the local as the verifier and every frame see it;
  * only the debug table said otherwise, and no instruction changes. Vanilla's own classes, compiled with whole ranges, never
  * meet the condition. The trigger is the method's bytecode alone; {@code -Dforbric.localRanges=off} leaves every table as
- * merged.
+ * the chain before it left it.
+ *
+ * <p>On NeoForge's own base the base's bytes give it nothing: no method of the base or carrier, raw, after the vanilla
+ * twins or after the compat repairs, has such a range (Stage 4 C3 scan). The kernel's own chain does: it runs at the end
+ * of the COREMOD phase, after the kernel's Fabric adapters, and {@link net.forbric.kernel.mixin.NativeTagTrackerSourceInjector}'s
+ * rewrite of {@code EntityFluidInteraction} leaves one local whose range starts after its reads (a dedicated server with
+ * {@code -Dforbric.debug} logs the widening; with {@code -Dforbric.nativeTagTrackerSource=off} it is gone). So it stays.
  */
 public final class LocalRanges implements ClassTransformer {
 	public static final String PROPERTY = "forbric.localRanges";
@@ -69,7 +75,7 @@ public final class LocalRanges implements ClassTransformer {
 		});
 	}
 
-	/** {@code mergedGameClass}: whether an internal name is a class of the merged base (one with a native body). */
+	/** {@code mergedGameClass}: whether an internal name is a class of the game base (one with a native body). */
 	LocalRanges(Predicate<String> mergedGameClass) {
 		this.mergedGameClass = mergedGameClass;
 	}
@@ -85,7 +91,7 @@ public final class LocalRanges implements ClassTransformer {
 
 	@Override
 	public AnchorSet anchors() {
-		return AnchorSet.scanned(enabled() ? "every merged game class whose variable table starts a local after its uses"
+		return AnchorSet.scanned(enabled() ? "every game class whose variable table starts a local after its uses"
 				: "switched off by -D" + PROPERTY);
 	}
 
@@ -105,7 +111,7 @@ public final class LocalRanges implements ClassTransformer {
 			ForbricLog.debug("[Forbric/LocalRanges] %s: %d local range(s) now start at the local's declaring store", className, widened);
 			return writer.toByteArray();
 		} catch (RuntimeException unreadable) {
-			Caught.warn(unreadable, "[Forbric/LocalRanges] could not widen the local ranges of %s; it is left as merged", className);
+			Caught.warn(unreadable, "[Forbric/LocalRanges] could not widen the local ranges of %s; it is left as the base has it", className);
 			return classBytes;
 		}
 	}

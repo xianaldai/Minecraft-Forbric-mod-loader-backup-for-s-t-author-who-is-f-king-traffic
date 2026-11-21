@@ -25,7 +25,31 @@ nothing:
 A gate that does not declare itself runs ALONE. That is the safe direction to be wrong in: a new gate added by
 someone who never read this file is slow, not silently broken. It says so on stderr when it happens.
 
+A gate whose verdict is a TIMING says `alone` on its line, and runs alone too. gate-m12 counts the server ticks that
+ran at twice their budget from the client's dial to the leave, against a ceiling; that count is a measure of what
+else the host was doing as much as of the server. VERIFY run 1 of C5 had it red at -j 4 (11 of 220 late, ceiling 7)
+next to gate-m0's unit suite and four server boots, green alone 5 of 5, and red alone in one of two runs under ten
+`yes` CPU hogs: the ceiling was measuring the scheduler's neighbours. Raising the ceiling would blind it to a server that really
+falls behind, so the gate keeps it and the scheduler gives it a quiet machine instead. What it cannot quiet is load
+from outside this sweep. The same holds for lib.sh's check_kept_up (vanilla's "Can't keep up!" from the client's dial on),
+which gate-m12 and gate-m16 call: side-by-side -j 5 batches had it red in two rounds of three on gate-m15 (whose checks
+gate-m16 now makes) and on m16 beside the full test suites, so those gates say `alone` too. GatesAllTest finds the gates that use either check and
+fails on one that does not say `alone`.
+
 -j 1 is exactly the old sequential behaviour: same order, same summary.txt, same exit code.
+
+LONGEST FIRST. With more than one slot the gates start in order of how long they took last time, longest first
+(gate-durations.tsv next door is the checked-in prior; each run's own timings, kept in the cache directory, win over
+it). In numerical order gate-m58 -- the longest gate -- was the last one started and then ran alone for twelve minutes
+while three slots sat idle; started first it overlaps everything else. summary.txt keeps numerical order whatever
+order the gates ran in.
+
+THE VERDICT CACHE (gate_cache.py). With --cache-dir, a gate whose inputs are byte-identical to a run that went GREEN
+is not run again: its RESULT says GREEN with `cached:` and the time of that run, and its log is the cached run's
+log, so a count of its [kernel] PASS lines still reads the real thing. --release never reads the cache.
+
+SELECTION. --only <gate> (repeatable) runs a subset; the rest are SKIP with the reason, which a --release run treats as
+any other skip.
 
 --release IS AN ACCEPTANCE, NOT A SWEEP. An ordinary sweep reports an explicit --skip as SKIP and a declared
 EXPECTED_RED as itself, and exits 0 when nothing else is red -- the right answer while developing. For a release
@@ -41,12 +65,20 @@ for an interactive run.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gate_cache  # noqa: E402
+
+DURATIONS_PRIOR = Path(__file__).resolve().parent / "gate-durations.tsv"
 
 # Port blocks are handed out one per CONCURRENT SLOT, not one per gate: slot i gets PORT_BASE + i*PORT_STRIDE.
 # A GATE_PORT already in the environment becomes the base, so `GATE_PORT=25599 gates-all.sh` still puts 25599 in
@@ -55,6 +87,8 @@ from pathlib import Path
 # The default moved off 25599 because that is also gate-m12's own default (M12_PORT). The two could never
 # collide while the gates ran one at a time; they collide on the first overlapping run.
 PORT_BASE = 25700
+# Seconds a gate has to stop after the sweep forwards it a TERM (lib.sh's _gate_exit gives what it started 2 s).
+GATE_TERM_GRACE = 20
 PORT_STRIDE = 10
 
 # The per-gate knobs that select a port, drawn from the slot's block in this order. A gate uses at most one of
@@ -63,9 +97,14 @@ PORT_STRIDE = 10
 # where that literal meets an exported one is two servers on one port -- the race this module exists to prevent.
 # test_gate_ports.py holds every gate to this tuple, so a gate that adds an M<n>_PORT fails there instead of in a
 # run whose two occupants nobody can reproduce.
-PORT_VARS = ("GATE_PORT", "M12_PORT", "M13_PORT", "M14_PORT", "M15_PORT", "M16_PORT", "M28_PORT", "M32_PORT")
+PORT_VARS = ("GATE_PORT", "M12_PORT", "M13_PORT", "M14_PORT", "M16_PORT", "M28_PORT", "M32_PORT")
 
-DECL = re.compile(r"^#\s*GATE-PARALLEL:\s*(.*)$", re.M)
+# [ \t], not \s: with re.M a \s* runs over the end of an empty line, and the NEXT line was read as the declaration
+# (HARN2 review A-4: "# GATE-PARALLEL:" over "touch x" was the unknown word 'touch').
+DECL = re.compile(r"^#[ \t]*GATE-PARALLEL:[ \t]*(.*)$", re.M)
+# A comment on the declaration line: a `#` at its start or after whitespace, to the end of the line.
+COMMENT = re.compile(r"(?:^|\s)#")
+DECL_WORDS = ("rundirs", "clone", "mem", "alone")
 
 
 class Gate:
@@ -77,32 +116,75 @@ class Gate:
         self.clone: tuple[str, str] | None = None
         self.mem = 0
         self.declared = False
+        self.alone = False
         self._parse()
 
     def _parse(self) -> None:
+        # Every word on the line is one of the four below, or the sweep refuses to start. Until C5 wave 2d an unknown
+        # word was skipped in silence, so a misspelt `alon` or `rundir=` ran the gate beside others with nothing said,
+        # and gate-m0's "(builds and runs the unit suite)" was read as five ignored words. Prose goes after ` # `:
+        #     # GATE-PARALLEL: rundirs=server-m0-definitions mem=3500  # builds and runs the unit suite
         name = self.name
-        m = DECL.search(self.source)
-        if not m:
+        found = list(DECL.finditer(self.source))
+        if not found:
             return
-        for field in m.group(1).split():
-            key, _, value = field.partition("=")
+        if len(found) > 1:
+            raise SystemExit(f"{name}: {len(found)} '# GATE-PARALLEL:' lines; one gate has one declaration")
+        body = COMMENT.split(found[0].group(1), maxsplit=1)[0]
+        if not body.split():
+            # HARN2 review A-4: an empty line, or one with only prose, was taken as a declaration of nothing -- no rundirs,
+            # 0 MB -- and the gate ran beside any other with nothing said. A gate that claims nothing says so: mem=0.
+            raise SystemExit(f"{name}: its GATE-PARALLEL line names nothing (it takes rundirs=<dir>[,<dir>...] "
+                             f"clone=<dir>:<ENV_VAR> mem=<MB> alone; prose goes after ' # ')")
+        seen: set[str] = set()
+        for field in body.split():
+            key, eq, value = field.partition("=")
+            if key not in DECL_WORDS:
+                raise SystemExit(f"{name}: unknown word {field!r} on its GATE-PARALLEL line (it takes "
+                                 f"rundirs=<dir>[,<dir>...] clone=<dir>:<ENV_VAR> mem=<MB> alone; prose goes after ' # ')")
+            if key in seen:
+                raise SystemExit(f"{name}: {key} given twice on its GATE-PARALLEL line")
+            seen.add(key)
             if key == "rundirs":
                 self.rundirs = {r for r in value.replace(",", " ").split() if r}
+                if not self.rundirs:
+                    raise SystemExit(f"{name}: rundirs= wants one or more <dir>, got {field!r}")
             elif key == "clone":
                 source, _, variable = value.partition(":")
                 if not source or not variable:
                     raise SystemExit(f"{name}: clone= wants <dir>:<ENV_VAR>, got {value!r}")
                 self.clone = (source, variable)
             elif key == "mem":
+                if not value.isdigit():
+                    raise SystemExit(f"{name}: mem= wants a whole number of MB, got {field!r}")
                 self.mem = int(value)
+            elif key == "alone":
+                if eq:
+                    raise SystemExit(f"{name}: alone takes no value, got {field!r}")
+                self.alone = True
         self.declared = True
 
     @property
     def exclusive(self) -> bool:
-        return not self.declared
+        return not self.declared or self.alone
 
     def expects_red(self) -> bool:
         return re.search(r"^# EXPECTED: RED until ", self.source, re.M) is not None
+
+
+def kill_tree(root: int) -> None:
+    """SIGKILL <root> and everything under it, each stopped before its children are listed (lib.sh's kill_tree)."""
+    try:
+        os.kill(root, signal.SIGSTOP)
+    except OSError:
+        return
+    listed = subprocess.run(["pgrep", "-P", str(root)], capture_output=True, text=True).stdout.split()
+    for child in listed:
+        kill_tree(int(child))
+    try:
+        os.kill(root, signal.SIGKILL)
+    except OSError:
+        pass
 
 
 def discover(run_dir: Path) -> list[Gate]:
@@ -180,6 +262,31 @@ def verdict_for(gate: Gate, rc: int, log_path: Path) -> str:
     return "RED"
 
 
+def load_durations(history: Path | None) -> dict[str, float]:
+    """Seconds per gate: the checked-in prior, overlaid by this machine's own last measurements."""
+    durations: dict[str, float] = {}
+    try:
+        for line in DURATIONS_PRIOR.read_text(encoding="utf-8").splitlines():
+            if line and not line.startswith("#"):
+                name, secs = line.split("\t")[:2]
+                durations[name] = float(secs)
+    except (OSError, ValueError):
+        pass
+    if history and history.is_file():
+        try:
+            durations.update({k: float(v) for k, v in json.loads(history.read_text()).items()})
+        except (OSError, ValueError):
+            pass
+    return durations
+
+
+def save_durations(history: Path | None, durations: dict[str, float]) -> None:
+    if not history:
+        return
+    history.parent.mkdir(parents=True, exist_ok=True)
+    history.write_text(json.dumps({k: round(v, 1) for k, v in sorted(durations.items())}, indent=0))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--jobs", "-j", default="auto")
@@ -190,6 +297,9 @@ def main() -> int:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--progress", action="store_true",
                     help="mirror <results>/progress.log to stderr as the run goes")
+    ap.add_argument("--only", action="append", default=[], help="run only this gate (repeatable)")
+    ap.add_argument("--cache-dir", default=None,
+                    help="verdict cache and duration history; without it nothing is cached")
     ap.add_argument("--release", action="store_true",
                     help="acceptance run: a skipped or expected-red gate fails the run")
     args = ap.parse_args()
@@ -209,6 +319,17 @@ def main() -> int:
         if s not in known:
             print(f"Unknown --skip gate: {s}", file=sys.stderr)
             return 2
+    for s in args.only:
+        if s not in known:
+            print(f"Unknown --only gate: {s}", file=sys.stderr)
+            return 2
+    # Why each gate that will not run is not running, for its RESULT line.
+    skip_reason = {s: "explicit --skip" for s in args.skip}
+    if args.only:
+        wanted = " ".join(f"--only {n}" for n in args.only)
+        for g in gates:
+            if g.name not in args.only and g.name not in skip_reason:
+                skip_reason[g.name] = f"not selected by {wanted}"
 
     port_base = int(os.environ.get("GATE_PORT") or PORT_BASE)
     budget = args.mem_budget if args.mem_budget is not None else default_budget_mb()
@@ -224,9 +345,13 @@ def main() -> int:
     else:
         jobs = max(1, int(args.jobs))
 
-    undeclared = [g.name for g in gates if g.exclusive and g.name not in args.skip]
+    undeclared = [g.name for g in gates if not g.declared and g.name not in skip_reason]
+    alone = [g.name for g in gates if g.declared and g.alone and g.name not in skip_reason]
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    # A summary is written only when the sweep finishes, so one left by an earlier sweep in the same directory would sit
+    # beside this one's progress.log as if it were its verdict (HARN2 review B-7; an interrupted sweep writes none).
+    (out_dir / "summary.txt").unlink(missing_ok=True)
     progress_file = (out_dir / "progress.log").open("w", encoding="utf-8", buffering=1)
 
     def say(line: str) -> None:
@@ -234,9 +359,37 @@ def main() -> int:
         if args.progress:
             print(line, file=sys.stderr, flush=True)
 
-    pending = [g for g in gates if g.name not in args.skip]
-    skipped = [g for g in gates if g.name in args.skip]
-    results: dict[str, tuple[str, int, float]] = {n: ("SKIP", 0, 0.0) for n in args.skip}
+    pending = [g for g in gates if g.name not in skip_reason]
+    results: dict[str, tuple[str, int, float]] = {n: ("SKIP", 0, 0.0) for n in skip_reason}
+
+    cache = None
+    keys: dict[str, str] = {}
+    cached: dict[str, dict] = {}
+    if args.cache_dir:
+        try:
+            cache = gate_cache.Cache(Path(args.cache_dir), run_dir, dict(os.environ), say,
+                                     scratch_dirs=set().union(*(g.rundirs for g in gates)))
+        except (OSError, subprocess.CalledProcessError) as e:
+            say(f"[gates] cache: could not fingerprint the inputs ({e}); every gate runs")
+    if cache:
+        for g in list(pending):
+            keys[g.name] = cache.key(g.name, g.source)
+            hit = None if args.release else cache.lookup(g.name, keys[g.name])
+            if hit:
+                pending.remove(g)
+                cached[g.name] = hit
+                shutil.copyfile(hit["log"], out_dir / f"{g.name}.log")
+                results[g.name] = ("GREEN", 0, 0.0)
+                say(f"[gates]    0s CACHED GREEN {g.name} (same inputs went GREEN at {hit['when']}, {hit['secs']:.0f}s)")
+        if cached:
+            say(f"[gates] cache: {len(cached)} of {len(cached) + len(pending)} gates already GREEN on these inputs")
+
+    # Longest first, from the last measured durations (see LONGEST FIRST above). -j 1 keeps numerical order.
+    history_path = Path(args.cache_dir) / "durations.json" if args.cache_dir else None
+    durations = load_durations(history_path)
+    if jobs > 1:
+        order = {g.name: i for i, g in enumerate(gates)}
+        pending.sort(key=lambda g: (-durations.get(g.name, 60.0), order[g.name]))
 
     running: list[Running] = []
     free_slots = list(range(jobs))
@@ -248,11 +401,17 @@ def main() -> int:
     say(f"[gates] {len(pending)} gates, -j {jobs}, budget {budget} MB, ports {port_base}+")
     if undeclared and jobs > 1:
         say("[gates] no '# GATE-PARALLEL:' line, so each of these runs ALONE: " + " ".join(undeclared))
+    if alone and jobs > 1:
+        say("[gates] declared 'alone' (a timing verdict), so each of these runs with no other gate: " + " ".join(alone))
 
     def start(gate: Gate) -> None:
         nonlocal used_mb, exclusive_running
         slot = free_slots.pop(0)
         env = dict(os.environ)
+        # A gate's control arms (lib.sh control_arm_dir) are measured afresh exactly when its verdict is: in an
+        # acceptance, and in a sweep that keeps no cache.
+        if args.release or not args.cache_dir:
+            env["FORBRIC_GATE_FRESH"] = "1"
         base = port_base + slot * PORT_STRIDE
         for i, var in enumerate(PORT_VARS):
             env[var] = str(base + i)
@@ -294,44 +453,87 @@ def main() -> int:
             return False
         return True
 
-    while pending or running:
-        progressed = False
-        for gate in list(pending):
-            if can_start(gate):
-                pending.remove(gate)
+    stopping: list[int] = []   # the signal that asked the sweep to stop, once one has
+
+    def schedule() -> None:
+        nonlocal used_mb, exclusive_running
+        while (pending or running) and not stopping:
+            progressed = False
+            for gate in list(pending):
+                if stopping:
+                    return
+                if can_start(gate):
+                    pending.remove(gate)
+                    start(gate)
+                    progressed = True
+            # Nothing runnable and nothing running: the head of the queue does not fit the budget on its own.
+            # Run it anyway rather than hang -- the budget is a throttle, not a promise.
+            if not running and pending and not stopping:
+                gate = pending.pop(0)
+                say(f"[gates] {gate.name} wants {gate.mem} MB, over the {budget} MB budget — running it alone")
                 start(gate)
                 progressed = True
-        # Nothing runnable and nothing running: the head of the queue does not fit the budget on its own.
-        # Run it anyway rather than hang -- the budget is a throttle, not a promise.
-        if not running and pending:
-            gate = pending.pop(0)
-            say(f"[gates] {gate.name} wants {gate.mem} MB, over the {budget} MB budget — running it alone")
-            start(gate)
-            progressed = True
-        if not running:
-            break
-        if progressed and pending:
-            continue
-        # Wait for whichever gate finishes first.
-        while True:
-            done = [r for r in running if r.proc.poll() is not None]
-            if done:
+            if not running:
                 break
-            time.sleep(0.25)
-        for r in done:
-            rc = r.proc.returncode
+            if progressed and pending:
+                continue
+            # Wait for whichever gate finishes first.
+            while not stopping:
+                done = [r for r in running if r.proc.poll() is not None]
+                if done:
+                    break
+                time.sleep(0.25)
+            if stopping:
+                return
+            for r in done:
+                rc = r.proc.returncode
+                r.log.close()
+                running.remove(r)
+                free_slots.append(r.slot)
+                free_slots.sort()
+                held.difference_update(r.gate.rundirs)
+                used_mb -= r.gate.mem
+                if r.gate.exclusive:
+                    exclusive_running = False
+                elapsed = time.time() - r.started
+                v = verdict_for(r.gate, rc, out_dir / f"{r.gate.name}.log")
+                results[r.gate.name] = (v, rc, elapsed)
+                say(f"[gates] +{int(time.time() - t0):4d}s {v:12s} {r.gate.name} ({elapsed:.0f}s)")
+                durations[r.gate.name] = elapsed
+                if cache:
+                    cache.record(r.gate.name, keys[r.gate.name], v, elapsed, out_dir / f"{r.gate.name}.log")
+
+    # A TERM, INT or HUP to the sweep reaches its running gates (C5 wave 2d). gates-all.sh execs this script, so when
+    # heavy.sh forwards a TERM it lands here, and until now Python died of it on the spot: every running gate went on
+    # to the end on its own, re-parented to launchd, booting servers on the slot's ports with nobody to read its verdict.
+    # Each gate is sent TERM, which runs lib.sh's _gate_exit (it stops what the gate started), and given GATE_TERM_GRACE
+    # seconds to go; a gate shell still there after that is killed. No verdict is recorded for an interrupted sweep.
+    # The handler only records the signal; the loop stops at its next step, so a gate is never half started.
+    def interrupted(signum, _frame):
+        stopping.append(signum)
+
+    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(signum, interrupted)
+    schedule()
+    if stopping:
+        signum = stopping[0]
+        say(f"[gates] +{int(time.time() - t0):4d}s {signal.Signals(signum).name}: stopping "
+            + (" ".join(r.gate.name for r in running) or "nothing (no gate was running)"))
+        for r in running:
+            if r.proc.poll() is None:
+                r.proc.send_signal(signal.SIGTERM)
+        deadline = time.time() + GATE_TERM_GRACE
+        for r in running:
+            try:
+                r.proc.wait(timeout=max(0.0, deadline - time.time()))
+            except subprocess.TimeoutExpired:
+                # A gate that traps TERM itself runs the trap only once its foreground command returns.
+                say(f"[gates] {r.gate.name} was still there {GATE_TERM_GRACE}s after its TERM; killed with its tree")
+                kill_tree(r.proc.pid)
+                r.proc.wait()
             r.log.close()
-            running.remove(r)
-            free_slots.append(r.slot)
-            free_slots.sort()
-            held.difference_update(r.gate.rundirs)
-            used_mb -= r.gate.mem
-            if r.gate.exclusive:
-                exclusive_running = False
-            elapsed = time.time() - r.started
-            v = verdict_for(r.gate, rc, out_dir / f"{r.gate.name}.log")
-            results[r.gate.name] = (v, rc, elapsed)
-            say(f"[gates] +{int(time.time() - t0):4d}s {v:12s} {r.gate.name} ({elapsed:.0f}s)")
+        progress_file.close()
+        return 128 + signum
 
     wall = time.time() - t0
     failed = 0
@@ -339,20 +541,24 @@ def main() -> int:
     for g in gates:
         v, rc, secs = results.get(g.name, ("RED", -1, 0.0))
         if v == "SKIP":
+            why = skip_reason.get(g.name, "explicit --skip")
             if args.release:
                 failed = 1
-                lines.append(f"RESULT {g.name} SKIP (explicit --skip; not run, so the release run fails)")
+                lines.append(f"RESULT {g.name} SKIP ({why}; not run, so the release run fails)")
             else:
-                lines.append(f"RESULT {g.name} SKIP (explicit --skip)")
+                lines.append(f"RESULT {g.name} SKIP ({why})")
             continue
         if v == "RED" or (v == "EXPECTED_RED" and args.release):
             failed = 1
         if v == "EXPECTED_RED" and args.release:
             lines.append(f"RESULT {g.name} {v} (exit={rc}; still red, so the release run fails)")
+        elif g.name in cached:
+            lines.append(f"RESULT {g.name} {v} (exit={rc}; cached: same inputs went GREEN at {cached[g.name]['when']})")
         else:
             lines.append(f"RESULT {g.name} {v} (exit={rc})")
     (out_dir / "summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))
+    save_durations(history_path, durations)
 
     serial = sum(r[2] for r in results.values())
     speedup = f" ({serial / wall:.1f}x)" if wall > 0 else ""

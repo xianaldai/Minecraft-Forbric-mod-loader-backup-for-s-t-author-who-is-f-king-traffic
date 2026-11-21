@@ -33,10 +33,10 @@ import net.forbric.kernel.util.ForbricLog;
  * selector cannot bind when that is two files away.
  *
  * <p>A mixin usually names its target by NAME alone — {@code @Inject(method = "handleCustomClickAction")} — because
- * on the loader it was built for there is only one method with that name. The byte merge sometimes produces two:
+ * on the loader it was built for there is only one method with that name. NeoForge's patches sometimes add a second:
  * NeoForge's patch put {@code MinecraftServer.handleCustomClickAction(Identifier, Optional, ServerPlayer, GameProfile)}
- * — fire NeoForge's event, then call vanilla's — in front of vanilla's {@code (Identifier, Optional)}, and the merge
- * kept both, NeoForge's first.
+ * — fire NeoForge's event, then call vanilla's — in front of vanilla's {@code (Identifier, Optional)}, so NeoForge's
+ * base declares both, NeoForge's first.
  *
  * <p>Mixin binds a bare name to the FIRST declared method of that name (the selector's default quantifier is one
  * match) and only then checks the handler against it. When that is the other ecosystem's overload the descriptors do
@@ -66,10 +66,10 @@ import net.forbric.kernel.util.ForbricLog;
  * read a {@code @Surrogate} as Mixin looks one up -- the handler's name, exactly the first overload's callback
  * descriptor, a visible annotation: that overload binds, and nothing is pinned.
  *
- * <p>Lambdas are left to the pruner and the shims ({@link MixinHandlerShim}, {@link InsertedLambdaArgumentShim}): a
- * lambda's name is a counter, so two bodies sharing {@code lambda$foo$0} are not two overloads of one method. When a
- * lambda selector cannot bind because the shape it was written for was a body the merge dropped, the kernel says so
- * instead, in the log and on the mod's row of the load report.
+ * <p>Lambdas are left to the shims ({@link MixinHandlerShim}, {@link InsertedLambdaArgumentShim}): a lambda's name is a
+ * counter, not an overload. When a lambda selector cannot bind because the shape it was written for is vanilla's and a
+ * carrier patch changed the lambda's captures, the kernel says so instead, in the log and on the mod's row of the load
+ * report.
  *
  * <p>Only {@code @Inject}. Its handler-compatibility rule is the one that can be checked here — the target's
  * parameters, then a {@code CallbackInfo}, then whatever locals the handler captures. The other injectors
@@ -203,7 +203,7 @@ public final class MixinOverloadPin {
 				selectors.set(j, explicit);
 				changed = true;
 				pinned++;
-				ForbricLog.warn("[Forbric/Mixin] %s.%s selects %s by name, and the merged class declares more than one "
+				ForbricLog.warn("[Forbric/Mixin] %s.%s selects %s by name, and the current class declares more than one "
 						+ "method of that name: Mixin would bind the first, which does not take this handler's arguments, "
 						+ "and fail the whole mixin. Pinned to %s, the one overload the handler was written for",
 						mixin.name, handler.name, name, explicit);
@@ -282,13 +282,13 @@ public final class MixinOverloadPin {
 	}
 
 	/**
-	 * Logs why {@code selector} cannot bind, when the kernel knows: a lambda chain the merge dropped, or overloads the
-	 * merge put side by side with the other ecosystem's first.
+	 * Logs why {@code selector} cannot bind, when the kernel knows: a lambda a carrier patch reshaped from vanilla's
+	 * ({@link LambdaShapeEvidence}), or overloads the base puts side by side with the other ecosystem's first.
 	 *
 	 * <p>Says nothing at all in every other case — including a selector that binds perfectly well, which is
 	 * almost all of them. Whether it binds is judged on the overload Mixin actually picks, the first of that name; an
 	 * earlier version accepted ANY fitting overload as "it binds" and so stayed silent about exactly the case Mixin
-	 * fails on. The conditions are deliberately all-or-nothing: the handler must fit what was dropped or what was put
+	 * fails on. The conditions are deliberately all-or-nothing: the handler must fit what was reshaped or what was put
 	 * behind, never merely fail to fit what is first. Anything less and the diagnosis would be a guess wearing a fact's
 	 * clothes.
 	 *
@@ -311,25 +311,25 @@ public final class MixinOverloadPin {
 				for (MethodNode method : named.subList(1, named.size())) if (takes(handler, method)) written.add(method.desc);
 				if (written.isEmpty()) continue;
 				String wanted = String.join(" or ", written);
-				ForbricLog.warn("[Forbric/Mixin] %s.%s cannot bind to %s.%s: the merged class declares %d methods of that "
+				ForbricLog.warn("[Forbric/Mixin] %s.%s cannot bind to %s.%s: the current class declares %d methods of that "
 						+ "name, a bare name binds the first, %s, and the handler was written for %s%s",
 						mixin.name, handler.name, targetName, selector, named.size(), named.get(0).desc, wanted,
 						written.size() > 1 ? " — more than one, so the kernel will not choose" : "");
 				REASONS.put(mixin.name, "its " + handler.name + " selects " + selector + " by name, which binds the first of "
-						+ named.size() + " methods the merged class declares with that name, " + named.get(0).desc
+						+ named.size() + " methods the current class declares with that name, " + named.get(0).desc
 						+ "; the handler was written for " + wanted);
 				return true;
 			}
 
-			for (String dropped : net.forbric.kernel.transform.DuplicateLambdaPruneInjector
-					.droppedDescriptors(targetName, selector)) {
-				if (!fits(handler.desc, dropped)) continue;
-				ForbricLog.warn("[Forbric/Mixin] %s.%s cannot bind to %s.%s: the shape it was written for, %s, was "
-						+ "a lambda of the body the byte merge did NOT keep — the merge took the other ecosystem's "
-						+ "%s, whose lambda has a different shape, so this injection has no live target here",
-						mixin.name, handler.name, targetName, selector, dropped, enclosing(selector));
-				REASONS.put(mixin.name, "its " + handler.name + " targets " + selector + ", a lambda of the "
-						+ enclosing(selector) + " body the byte merge did not keep");
+			for (LambdaShapeEvidence.Shape gone : LambdaShapeEvidence.vanished(target, selector)) {
+				String written = gone.descriptor();
+				if (!fits(handler.desc, written)) continue;
+				ForbricLog.warn("[Forbric/Mixin] %s.%s cannot bind to %s.%s: the shape it was written for, %s, is "
+						+ "vanilla's — a carrier patch changed the captures of that lambda of %s, which here takes %s, so "
+						+ "this injection has no target of its shape", mixin.name, handler.name, targetName, selector, written,
+						enclosing(selector), named.get(0).desc);
+				REASONS.put(mixin.name, "its " + handler.name + " targets " + selector + ", a lambda of "
+						+ enclosing(selector) + " whose captures a carrier patch changed from vanilla's");
 				return true;
 			}
 		}

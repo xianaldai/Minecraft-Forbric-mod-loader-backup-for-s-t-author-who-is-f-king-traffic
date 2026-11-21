@@ -32,7 +32,7 @@ import net.forbric.kernel.TestFixtures.Fixture;
 import net.forbric.kernel.ui.CompatibilityDecision;
 
 /**
- * A refusal at the client's end of loading happens inside {@code Minecraft.<init>}, where the merged game's own
+ * A refusal at the client's end of loading happens inside {@code Minecraft.<init>}, where the patched game's own
  * {@code Main.main} decides what a thrown exception becomes. These tests read that decision out of the real merged
  * base rather than assuming it: the catch-all there writes an "Initializing game" crash report and exits -1, and
  * exactly one earlier handler returns quietly.
@@ -48,8 +48,8 @@ class ClientSetupRefusalTest {
 	}
 
 	private static Path merged() {
-		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").normalize();
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "staged merged base absent");
+		Path jar = TestFixtures.stagedBase().normalize();
+		TestFixtures.requireFile(Fixture.STAGED, jar, "staged base absent");
 		return jar;
 	}
 

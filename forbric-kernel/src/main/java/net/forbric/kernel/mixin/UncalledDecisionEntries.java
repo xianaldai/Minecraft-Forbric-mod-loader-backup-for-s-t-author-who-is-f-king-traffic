@@ -36,14 +36,14 @@ import net.forbric.kernel.util.Caught;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
- * A mod's {@code HEAD} injector on a static decision method the merged game no longer calls, moved around the decision the
+ * A mod's {@code HEAD} injector on a static decision method the game no longer calls, moved around the decision the
  * carrier makes in its place, at each place the native game asked the method — so it runs where its own loader runs it, on the
  * values its own loader hands it, and its answer is the answer there.
  *
  * <p>Vanilla's {@code RedStoneWireBlock.getConnectingSide} asks the static {@code shouldConnectTo(state, direction)} whether
  * the wire connects to a neighbour — once directly and twice through {@code shouldConnectTo(state)}, which only forwards
  * {@code (state, null)}. NeoForge asks the neighbour's {@code state.canRedstoneConnectTo(level, pos, direction)} at those three
- * places instead, and nothing in the merged game calls {@code shouldConnectTo} any more. A cancellable {@code @Inject} at its
+ * places instead, and nothing in the game calls {@code shouldConnectTo} any more. A cancellable {@code @Inject} at its
  * {@code HEAD} (Create's redstone-connection hook, which answers for every block of its own that connects) binds and never
  * runs: no Create block ever connects to redstone.
  *
@@ -52,16 +52,16 @@ import net.forbric.kernel.util.ForbricLog;
  * injector nothing changes; with one, the place answers what natively the method would have answered for it.
  *
  * <p>Nothing here knows a mod, a class or a method by name. An injector moves when, read off the class the mod was compiled
- * against (the native reference of its ecosystem) and the merged one:
+ * against (the native reference of its ecosystem) and the current one:
  * <ul>
  *   <li>it is an {@code @Inject} whose one point is {@code HEAD}, with no slice, no {@code @Group} and no captured locals, its
  *       handler static and taking the method's arguments and its callback (or the callback alone);</li>
- *   <li>its selectors bind one static, value-returning method, the same natively and merged, that the census of uncalled
+ *   <li>its selectors bind one static, value-returning method, the same natively and in the current class, that the census of uncalled
  *       methods lists for the mod's ecosystem ({@link MergedBaseUncalledMethods}) and that no installed mod calls;</li>
  *   <li>every native caller the census lists is in the same class: either itself listed as uncalled (followed to its own
  *       callers — a method that only forwards to the decision with constants, read through when the callers are), or a
- *       method the merged class still has, which is a host;</li>
- *   <li>in each host, the merged body makes calls of one method the native body never makes (the carrier's decision, of the
+ *       method the current class still has, which is a host;</li>
+ *   <li>in each host, the current body makes calls of one method the native body never makes (the carrier's decision, of the
  *       decision's return type), and reads, path for path, exactly as the native body reads with every native call of the
  *       decision (inlined forwarders included) replaced by a call of the carrier's — the native call's every argument being
  *       one operand of the carrier's call, the same value on every path ({@link Symbolic}: both bodies as trees of tests over
@@ -163,7 +163,7 @@ public final class UncalledDecisionEntries {
 		return moved;
 	}
 
-	/** One host: the merged method, the carrier's call standing for the decision there, and which of its operands is which argument. */
+	/** One host: the current method, the carrier's call standing for the decision there, and which of its operands is which argument. */
 	record Entry(MethodNode host, MethodInsnNode carrier, int[] operands, int places) {
 	}
 
@@ -231,12 +231,12 @@ public final class UncalledDecisionEntries {
 
 	/**
 	 * The carrier's decision in {@code mergedHost}: the one method (and the one assignment of the decision's arguments to its
-	 * operands) under which the merged body reads as the native one with the decision replaced; null, with {@code why} told,
+	 * operands) under which the current body reads as the native one with the decision replaced; null, with {@code why} told,
 	 * when there is none or more than one.
 	 */
 	private static Entry entry(String target, MethodNode decision, MethodNode nativeHost, MethodNode mergedHost, Function<String, ClassNode> nativeCode,
 			Function<String, ClassNode> code, StringBuilder why) {
-		if (((nativeHost.access ^ mergedHost.access) & Opcodes.ACC_STATIC) != 0) return declined(why, "the native and merged " + mergedHost.name + " differ in staticness");
+		if (((nativeHost.access ^ mergedHost.access) & Opcodes.ACC_STATIC) != 0) return declined(why, "the native and current " + mergedHost.name + " differ in staticness");
 		Type answer = Type.getReturnType(decision.desc);
 		Type[] arguments = Type.getArgumentTypes(decision.desc);
 		Set<String> nativeMembers = new HashSet<>();
@@ -248,7 +248,7 @@ public final class UncalledDecisionEntries {
 			if (call.owner.equals(target) && call.name.equals(decision.name) && call.desc.equals(decision.desc)) continue;
 			candidates.putIfAbsent(member(call), call);
 		}
-		if (candidates.isEmpty()) return declined(why, "the merged " + mergedHost.name + " makes no call of its own answering " + answer.getClassName());
+		if (candidates.isEmpty()) return declined(why, "the current " + mergedHost.name + " makes no call of its own answering " + answer.getClassName());
 		List<Symbolic.Val> inputs = inputs(target, mergedHost);
 		Symbolic.Tree nativeTree = new Symbolic(nativeCode, false, null, (call, values) -> {
 			if (call.getOpcode() != Opcodes.INVOKESTATIC || !call.owner.equals(target) || !call.name.equals(decision.name) || !call.desc.equals(decision.desc)) return null;
@@ -275,14 +275,14 @@ public final class UncalledDecisionEntries {
 					AbstractInsnNode next = call.getNext();
 					while (next != null && next.getOpcode() < 0) next = next.getNext();
 					if (!reached.contains(call) || next == null || next.getOpcode() == Opcodes.POP) return declined(why, "a call of "
-							+ carrier.name + " in the merged " + mergedHost.name + " stands for no native call of the decision");
+							+ carrier.name + " in the current " + mergedHost.name + " stands for no native call of the decision");
 					places++;
 				}
-				if (found != null) return declined(why, "the merged " + mergedHost.name + " reads as the native one under more than one carrier call or assignment");
+				if (found != null) return declined(why, "the current " + mergedHost.name + " reads as the native one under more than one carrier call or assignment");
 				found = new Entry(mergedHost, carrier, assignment, places);
 			}
 		}
-		if (found == null) return declined(why, "the merged " + mergedHost.name + " does not read as the native one with the decision replaced by any call of its own");
+		if (found == null) return declined(why, "the current " + mergedHost.name + " does not read as the native one with the decision replaced by any call of its own");
 		return found;
 	}
 

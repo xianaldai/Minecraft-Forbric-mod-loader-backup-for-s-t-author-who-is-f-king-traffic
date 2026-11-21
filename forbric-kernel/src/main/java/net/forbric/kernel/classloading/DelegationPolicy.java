@@ -53,11 +53,12 @@ public final class DelegationPolicy {
 			"org.objectweb.asm.",
 			"org.spongepowered.asm.", "org.spongepowered.include.",
 			"org.apache.logging.log4j.", "org.slf4j.",
-			// NightConfig, and the reason it is pinned. The MinecraftForge runtime carrier bundles a copy at the
+			// NightConfig, and the reason it is pinned. The MinecraftForge runtime carrier (gone since Forbric stopped
+			// loading MinecraftForge; the pin stays, because any carrier or mod jar may shade it) bundled a copy at the
 			// UNSHADED package name, and in that copy StampedConfig.valueMap() is the 3.7.4 stub that throws
 			// "StampedConfig does not support valueMap() yet." Because the carrier is one of this loader's own
 			// jars, child-first handed every NightConfig class to that copy — shadowing the working 3.8.x on the
-			// parent classpath — while the merged base's NeoForge half was compiled against 3.8.x, where
+			// parent classpath — while NeoForge was compiled against 3.8.x, where
 			// valueMap() returns a real view. Any config read that descends a dotted path into a sub-config then
 			// died: a mod's config file is stored as nested tables, so `get("mixin.perf.surface")` has to descend.
 			// zfastnoise is where this surfaced (its mixin plugin reads config in its constructor, so the plugin
@@ -77,16 +78,19 @@ public final class DelegationPolicy {
 			"net.forbric.kernel.discovery.",
 			"net.forbric.kernel.fabric.",
 			"net.forbric.kernel.util.",
-			// The reflective interop hooks that GUEST bytecode calls into (PayloadInterop, ClientShutdown,
-			// ForgeRuntimeInterop). They name no game type — every game/ecosystem class they touch is reached
+			// Boot-side like the rest, and named here because the game side reads it: the Mods screen draws the rows
+			// ModListRows plans, and the compatibility screens act on CompatibilityDecision's process-wide state. A
+			// second copy defined game-side would be a second answer, and a seam type both sides cannot share.
+			"net.forbric.kernel.ui.",
+			// The reflective interop hooks that GUEST bytecode calls into (PayloadInterop, ClientShutdown). They name no game type — every game/ecosystem class they touch is reached
 			// reflectively through the loader of the object handed to them — so they are boot-side like the rest
 			// of the kernel. Pinning them here is not cosmetic: each holds process-wide state keyed by ClassLoader
-			// (PayloadInterop.MIRRORED_LOADERS, FORGE_CHANNELS_DECLARED; ClientShutdown's executor bookkeeping),
+			// (PayloadInterop.MIRRORED_LOADERS and DECLARED; ClientShutdown's executor bookkeeping),
 			// and a second copy defined game-side would start that bookkeeping over from empty while the first
 			// copy still believed it had done the work.
 			"net.forbric.kernel.interop.",
 			// The unified Forbric API. Parent-loaded for the same reason net.fabricmc.api. is: it is the
-			// vocabulary the kernel and all three compatibility layers share, so there must be exactly ONE
+			// vocabulary the kernel and both compatibility layers share, so there must be exactly ONE
 			// copy of it in the JVM. Two copies would make an Ecosystem constant handed across the boot/game
 			// boundary fail == against itself, which is the kind of defect that reads as "the branch is just
 			// wrong" for a day.

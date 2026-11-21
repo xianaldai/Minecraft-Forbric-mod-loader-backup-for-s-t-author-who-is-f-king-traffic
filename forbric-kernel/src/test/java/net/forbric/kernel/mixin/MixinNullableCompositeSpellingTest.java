@@ -173,8 +173,8 @@ class MixinNullableCompositeSpellingTest {
 	/** fabric-api's hopper mixin under other names, the merged and NeoForge classes, and vanilla as the mod was compiled against it. */
 	private static Inputs inputs() throws Exception {
 		Path api = Path.of(System.getProperty("forbric.fabricApi", TestFixtures.fabricApi().toString()));
-		Path base = Path.of(System.getProperty("forbric.predicateBase", TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").toString()));
-		Path neo = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
+		Path base = Path.of(System.getProperty("forbric.predicateBase", TestFixtures.stagedBase().toString()));
+		Path neo = TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR);
 		TestFixtures.requireFiles(TestFixtures.Fixture.STAGED, "actual API/indexed base/runtime required", api, base, neo);
 		ClassNode released = null;
 		try (ZipFile jar = new ZipFile(api.toFile())) {
@@ -206,7 +206,7 @@ class MixinNullableCompositeSpellingTest {
 			byte[] bytes = raw.apply(n + ".class");
 			return bytes == null ? runtime.apply(n) : parse(bytes);
 		});
-		NativeGameReferences originals = new NativeGameReferences(raw);
+		NativeGameReferences originals = new NativeGameReferences(raw, null, TestFixtures.launchSources(base));
 		assertNotNull(originals.get(Ecosystem.FABRIC, HOPPER), "the hopper as the mod was compiled against it");
 		ClassNode mixin = MixinCallbackSelectorSpellingTest.unrelatedNames(released);
 		assertTrue(mixin.methods.stream().filter(MixinNullableCompositeSpellingTest::hook).allMatch(m -> m.name.startsWith("respelled")), "renamed");

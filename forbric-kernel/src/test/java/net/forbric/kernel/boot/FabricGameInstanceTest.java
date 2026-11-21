@@ -55,17 +55,18 @@ class FabricGameInstanceTest {
 	}
 
 	@Test void aDedicatedServerBecomesTheGameInstanceAsItStarts() throws Exception {
-		ClassNode lifecycle = compiled("runtime", "net/forbric/kernel/runtime/KernelGameServerLifecycle");
+		ClassNode duties = compiled("runtime", "net/forbric/kernel/runtime/KernelServerDuties");
 		boolean sets = false;
-		for (MethodNode m : lifecycle.methods) {
+		for (MethodNode m : duties.methods) {
 			if (!m.name.startsWith("lambda$installGameInstance$")) continue;
 			List<String> calls = calls(m);
 			sets |= calls.contains("net/minecraft/server/MinecraftServer.isDedicatedServer")
 					&& calls.contains("net/forbric/kernel/boot/KernelFabricEcosystem.setGameInstance");
 		}
 		assertTrue(sets, "the about-to-start listener sets a dedicated server as the game instance");
-		String multiplexer = Files.readString(Path.of(System.getProperty("user.dir"), "src", "main", "java", "net", "forbric", "kernel", "boot",
-				"GameEventMultiplexer.java"));
-		assertTrue(multiplexer.contains("\"installGameInstance\")"), "and the multiplexer installs it");
+		// Installed by the kernel's own duties, whatever else is on the classpath.
+		String installer = Files.readString(Path.of(System.getProperty("user.dir"), "src", "main", "java", "net", "forbric", "kernel", "boot",
+				"KernelServerDutiesInstaller.java"));
+		assertTrue(installer.contains("getMethod(\"installGameInstance\", Object.class)"), "and the kernel's duties install it");
 	}
 }

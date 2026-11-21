@@ -60,19 +60,18 @@ import net.forbric.kernel.util.ForbricLog;
  * working. {@code readWithOptionalMeta} reads the real metadata with an unlimited supported-format range and
  * tolerates a jar with no {@code pack.mcmeta} at all, which is exactly the genuine loader's behaviour.
  *
- * <p>The two runtime carriers ({@code neoforge-runtime.jar}, {@code forge-runtime-interop.jar}) are served the
- * same way, and they are not an afterthought: the merged base carries only {@code data/minecraft/*}, so without
- * them the whole {@code c:} convention-tag skeleton — 513 tag files, the thing every cross-mod recipe is written
- * against — simply does not exist, and neither does {@code neoforge:damage_type} or either loader's data maps.
+ * <p>The runtime carrier ({@code neoforge-runtime.jar}) is served the same way, and it is not an afterthought: the
+ * game base carries only {@code data/minecraft/*}, so without it the whole {@code c:} convention-tag skeleton — 513
+ * tag files, the thing every cross-mod recipe is written against — simply does not exist, and neither does
+ * {@code neoforge:damage_type} or NeoForge's data maps.
  *
- * <p>Ordering between the two was the part that needed an answer, and the measurement gave one. Of the 746 data
- * files both carriers ship, 640 are byte-identical; the 106 that differ are 57 tags, 30 loot tables and 19 recipes.
- * Tags are additive — not one carrier tag file sets {@code "replace": true} — so for those, serving both IS the
- * answer and the union is what a genuine tri-loader instance would have. The other 49 are last-wins, and NeoForge
- * takes them: the merged base IS NeoForge with MinecraftForge spliced in, and NeoForge's versions are written
- * against its own registered ingredient types ({@code neoforge:difference} and friends), which resolve here.
+ * <p>Forbric 0.3.x and earlier also served a MinecraftForge carrier ({@code forge-runtime-interop.jar}), and ordering
+ * the two was measured then: of the 746 data files both carriers shipped, 640 were byte-identical; of the 106 that
+ * differed, the tags were additive and the 49 last-wins files went to NeoForge's, whose versions are written against
+ * its own registered ingredient types ({@code neoforge:difference} and friends). The rank digit in a carrier's pack id
+ * is what ordered them.
  *
- * <p>What this does NOT do is add recipes. Every one of the carriers' 208 and 394 recipe files overrides a vanilla
+ * <p>What this does NOT do is add recipes. Every one of the carrier's recipe files overrides a vanilla
  * recipe id — none is new — so the {@code Loaded 1585 recipes} count three gates use as their canary does not move.
  * What changes is those recipes' CONTENT: NeoForge rewrites vanilla's ingredients to be tag-based (a bundle takes
  * {@code #c:leathers} rather than {@code minecraft:leather}), which is precisely what lets a mod's own leather work
@@ -117,13 +116,14 @@ public final class KernelDataPacks {
 		// order this method hands them over is thrown away. (Measured: emitted forge, neoforge, lithostitched; the
 		// world came back with neoforge-runtime ABOVE the mod, because "n" > "l".) So the stack is spelled into the
 		// ids instead: "forbric/carrier/…" sorts before "forbric/data/…" because c < d, and the rank digit orders
-		// the carriers among themselves. Result, lowest first: MinecraftForge, NeoForge — which therefore takes the
-		// 49 last-wins files the two disagree on — then the mods, which override both. That is the stack a genuine
-		// instance has, and it is now a property of the names, which cannot be reordered out from under it.
+		// the carriers among themselves. Result, lowest first: the carrier (NeoForge's), then the mods, which override
+		// it. That is the stack a genuine instance has, and it is now a property of the names, which cannot be
+		// reordered out from under it.
 		List<Object> packs = new ArrayList<>();
 		List<String> ids = new ArrayList<>();
+		Set<String> takenCarrierIds = new java.util.LinkedHashSet<>();
 		int loaderPacks = collect(cl, packType, carriersWithData(runtimeJars), packs, ids,
-				KernelDataPacks::carrierPackId, KernelDataPacks::carrierKnownPack);
+				jar -> carrierPackId(jar, takenCarrierIds), KernelDataPacks::carrierKnownPack);
 		Set<String> takenModIds = new java.util.LinkedHashSet<>();
 		int modPacks = collect(cl, packType, forgeFamilyJarsWithData(jars), packs, ids,
 				jar -> modPackId(jar, KernelDataPacks::firstModIdIn, takenModIds), KernelDataPacks::modKnownPack);
@@ -188,9 +188,65 @@ public final class KernelDataPacks {
 	 * A carrier's pack id. The {@code carrier} segment puts every carrier below every mod pack (c &lt; d), and the
 	 * rank digit orders the carriers against each other — both by string comparison, which is the only ordering
 	 * {@link #addTo} actually gets to control.
+	 *
+	 * <p><b>NeoForge's carrier is {@link #NEO_CARRIER_ID} whatever its jar is called</b> (D43). The id used to end in
+	 * the jar's file name, which is {@code neoforge-runtime.jar} on a staged tree but the library file name on an
+	 * installed profile: {@code neoforge-runtime-26.2.jar} up to v0.3.1-beta2 and in the 0.4.0-dev builds
+	 * that still had MinecraftForge, {@code neoforge-runtime-26.2.0.93.jar} since the carrier is versioned by its NeoForge
+	 * build (4da13f7f). So every world an installed Forbric had written named a pack
+	 * the next install no longer served, and vanilla enabled the "new" one at the end of the list, above every mod
+	 * pack. Keyed on rank and family, the id no longer moves with the file; {@link #migrateCarrierIds} renames what old
+	 * worlds recorded. A carrier that is not NeoForge's has no family to name and keeps its file name.
 	 */
 	static String carrierPackId(Path jar) {
-		return "forbric/carrier/" + carrierRank(jar) + "-" + stripExtension(jar.getFileName().toString());
+		int rank = carrierRank(jar);
+		if (rank == 2) return NEO_CARRIER_ID;
+		return "forbric/carrier/" + rank + "-" + stripExtension(jar.getFileName().toString());
+	}
+
+	/**
+	 * {@link #carrierPackId(Path)}, unless an earlier carrier of this boot already has that id: then the jar's file-name
+	 * id, said out loud. Since the NeoForge carrier's id stopped naming its file (D43), a second jar with NeoForge's data
+	 * would get the same id, and two packs under one id collapse into one in the pack repository without a word. One
+	 * NeoForge carrier is all a launch passes today; this keeps a second from vanishing if that ever changes.
+	 */
+	static String carrierPackId(Path jar, Set<String> taken) {
+		String id = carrierPackId(jar);
+		if (taken.add(id)) return id;
+		String byName = "forbric/carrier/" + carrierRank(jar) + "-" + stripExtension(jar.getFileName().toString());
+		ForbricLog.warn("[Forbric/DataPacks] %s would share the carrier pack id %s with an earlier carrier; served as %s "
+				+ "instead (a world records that id, so it moves if the file is renamed)", jar.getFileName(), id, byName);
+		taken.add(byName);
+		return byName;
+	}
+
+	/** The NeoForge carrier's datapack id: rank 2 (D2), family NeoForge (D43). Worlds record it in {@code level.dat}. */
+	public static final String NEO_CARRIER_ID = "forbric/carrier/2-neoforge-runtime";
+
+	/**
+	 * {@code ids} — a world's enabled or disabled pack list — with every id an earlier install gave the
+	 * NeoForge carrier ({@link #NEO_CARRIER_ID} + {@code "-"} + the jar's version, e.g.
+	 * {@code forbric/carrier/2-neoforge-runtime-26.2}) renamed to {@link #NEO_CARRIER_ID} where it stands, so the
+	 * world keeps the order it was saved with. Should a list end up naming the carrier twice (an old id and the current
+	 * one), the first keeps its place and the later one goes. Returns null when nothing needed renaming.
+	 *
+	 * <p>MinecraftForge's carrier ids ({@code forbric/carrier/1-forge-runtime-interop…}) are left alone: nothing serves
+	 * that pack any more, and vanilla's one "Missing data pack" line per upgraded world is the honest answer.
+	 */
+	public static List<String> migrateCarrierIds(List<String> ids) {
+		if (ids == null || ids.isEmpty()) return null;
+		boolean renamed = false;
+		List<String> out = new ArrayList<>(ids.size());
+		for (String id : ids) {
+			String now = id != null && id.startsWith(NEO_CARRIER_ID + "-") ? NEO_CARRIER_ID : id;
+			renamed |= !java.util.Objects.equals(now, id);
+			if (NEO_CARRIER_ID.equals(now) && out.contains(NEO_CARRIER_ID)) {
+				renamed = true;
+				continue;
+			}
+			out.add(now);
+		}
+		return renamed ? out : null;
 	}
 
 	/**
@@ -241,7 +297,9 @@ public final class KernelDataPacks {
 			ids.add(mod.getId());
 			versions.add(String.valueOf(mod.getVersion()));
 		}
-		return knownPack(MultiLoaderArbiter.ownerOf(jar), ids, versions);
+		// NeoForge's form for a jar NeoForge owns; no other claim declares one.
+		return MultiLoaderArbiter.claimOf(jar).ownedBy(Ecosystem.NEOFORGE) ? knownPack(Ecosystem.NEOFORGE, ids, versions)
+				: null;
 	}
 
 	/**
@@ -290,10 +348,13 @@ public final class KernelDataPacks {
 		return null;
 	}
 
-	/** Higher rank = later in the sorted order = wins a last-wins collision. */
+	/**
+	 * Higher rank = later in the sorted order = wins a last-wins collision. NeoForge's carrier keeps rank 2, the number
+	 * worlds have recorded in {@code level.dat} since MinecraftForge's carrier (rank 1) was beside it (D2); a carrier
+	 * without NeoForge's data ranks 0. The rank is read off the jar, never off its name, and so is the id it gives.
+	 */
 	static int carrierRank(Path jar) {
 		if (hasNamespace(jar, "neoforge")) return 2;
-		if (hasNamespace(jar, "forge")) return 1;
 		return 0;
 	}
 
@@ -326,11 +387,14 @@ public final class KernelDataPacks {
 		}
 		List<Path> serve = new ArrayList<>();
 		for (Path jar : jars) {
-			Ecosystem owner = MultiLoaderArbiter.ownerOf(jar);
-			if (owner != Ecosystem.NEOFORGE
-					&& owner != Ecosystem.FORGE) {
-				continue;
-			}
+			// Owned by NeoForge: a Fabric jar is served by fabric-api and a library has no mod identity. No jar is owned
+			// by MinecraftForge any more. A refused jar never gets here in a boot — discovery yields no mod of one in
+			// mods/, and KernelBoot takes every refused nested jar out of the mod jars before they are handed on — so
+			// the refused arm is reached only by a test that calls this directly, and is kept so its verdict holds
+			// while the refusal is spelled as a claim instead of an owner of FORGE. A refused jar serves no data
+			// (interop-misc); the arm goes with the FORGE spelling.
+			JarClaim claim = MultiLoaderArbiter.claimOf(jar);
+			if (!claim.ownedBy(Ecosystem.NEOFORGE) && !claim.refused()) continue;
 			if (!carriesData(jar)) continue;
 			List<String> failed = failedModsOf(jar);
 			if (failed != null) {

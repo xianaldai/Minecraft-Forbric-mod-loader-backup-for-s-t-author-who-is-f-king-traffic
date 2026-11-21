@@ -57,7 +57,7 @@ class AddedCallOccurrencesTest {
 	 */
 	@Test void puzzleslibsBreedingHookCountsVanillasStoreOnly() throws Exception {
 		String animal = "net/minecraft/world/entity/animal/Animal";
-		ClassNode merged = full(net.forbric.kernel.TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar"), animal);
+		ClassNode merged = full(net.forbric.kernel.TestFixtures.stagedBase(), animal);
 		ClassNode vanilla = full(net.forbric.kernel.TestFixtures.vanillaJar(), animal);
 		java.nio.file.Path jar = java.nio.file.Path.of("build/compat-inputs/sweep90/mods/PuzzlesLib-v26.2.4-mc26.2.x-Fabric.jar");
 		net.forbric.kernel.TestFixtures.require(net.forbric.kernel.TestFixtures.Fixture.THIRD_PARTY, java.nio.file.Files.isRegularFile(jar), "sweep PuzzlesLib fixture");
@@ -73,13 +73,13 @@ class AddedCallOccurrencesTest {
 
 	/**
 	 * Architectury's CLIENT_RIGHT_CLICK_AIR is an {@code @Inject} at vanilla's second {@code ItemStack.isEmpty} in
-	 * {@code Minecraft.startUseItem} (ordinal 1, the check in front of {@code useItem}). MinecraftForge's
-	 * {@code onRightClickEmpty} and NeoForge's {@code onEmptyClick} each add an {@code isEmpty} in front of it, so ordinal 1
-	 * named MinecraftForge's check. It now names the merged body's fourth, the one in front of {@code useItem}.
+	 * {@code Minecraft.startUseItem} (ordinal 1, the check in front of {@code useItem}). NeoForge's {@code onEmptyClick}
+	 * adds an {@code isEmpty} in front of it (javap: genuine offsets 368, 418, 455; vanilla 319, 369), so ordinal 1 names
+	 * NeoForge's check. It now names the genuine body's third, the one in front of {@code useItem}.
 	 */
 	@Test void architecturysRightClickAirKeepsVanillasIsEmptyByNumber() throws Exception {
 		String minecraft = "net/minecraft/client/Minecraft";
-		ClassNode merged = full(net.forbric.kernel.TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar"), minecraft);
+		ClassNode merged = full(net.forbric.kernel.TestFixtures.stagedBase(), minecraft);
 		ClassNode vanilla = full(net.forbric.kernel.TestFixtures.vanillaJar(), minecraft);
 		java.nio.file.Path jar = java.nio.file.Path.of("run/client-popular/mods/architectury-fabric-21.1.10.jar");
 		net.forbric.kernel.TestFixtures.require(net.forbric.kernel.TestFixtures.Fixture.THIRD_PARTY, java.nio.file.Files.isRegularFile(jar), "popular Architectury fixture");
@@ -90,11 +90,11 @@ class AddedCallOccurrencesTest {
 		MixinStubRebind.noteEcosystem(mixin.name, Ecosystem.FABRIC);
 		MethodNode start = StagedFabricMixinFixture.method(merged, "startUseItem");
 		List<MethodInsnNode> isEmpty = calls(start, "Lnet/minecraft/world/item/ItemStack;isEmpty()Z");
-		assertEquals(4, isEmpty.size(), "two family checks were added");
+		assertEquals(3, isEmpty.size(), "NeoForge's onEmptyClick check was added");
 		assertTrue(AddedCallOccurrences.adapt(mixin, name -> name.equals(minecraft) ? merged : null,
 				(ecosystem, name) -> name.equals(minecraft) ? vanilla : null) >= 1);
-		assertEquals(3, MixinFit.value(StagedFabricMixinFixture.at(mixin, "rightClickAir"), "ordinal"));
-		MethodInsnNode chosen = isEmpty.get(3);
+		assertEquals(2, MixinFit.value(StagedFabricMixinFixture.at(mixin, "rightClickAir"), "ordinal"));
+		MethodInsnNode chosen = isEmpty.get(2);
 		AbstractInsnNode after = chosen;
 		while (!(after instanceof MethodInsnNode call && !call.name.equals("isEmpty"))) after = after.getNext();
 		assertEquals("useItem", ((MethodInsnNode) after).name, "the check in front of useItem");
@@ -107,7 +107,7 @@ class AddedCallOccurrencesTest {
 	 */
 	@Test void anOrdinalPickedLocalCountsVanillasStoreOnly() throws Exception {
 		String entity = "net/minecraft/world/entity/Entity";
-		ClassNode merged = full(net.forbric.kernel.TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar"), entity);
+		ClassNode merged = full(net.forbric.kernel.TestFixtures.stagedBase(), entity);
 		ClassNode vanilla = full(net.forbric.kernel.TestFixtures.vanillaJar(), entity);
 		ClassNode mixin = puzzleslib("fuzs/puzzleslib/fabric/mixin/EntityFabricMixin");
 		assertTrue(AddedCallOccurrences.adapt(mixin, name -> name.equals(entity) ? merged : null,

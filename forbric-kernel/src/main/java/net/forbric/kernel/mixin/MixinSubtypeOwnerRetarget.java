@@ -35,7 +35,7 @@ import org.objectweb.asm.tree.analysis.SourceValue;
 import net.forbric.kernel.util.Caught;
 
 /**
- * An {@code @Inject} anchored on a call the merged body now makes through another owner of the same method.
+ * An {@code @Inject} anchored on a call the current body now makes through another owner of the same method.
  *
  * <p>Mixin matches an INVOKE target by its recorded owner, so a mod compiled against vanilla — where
  * {@code RegistryLoadTask.PendingRegistration.loadFromResource} calls {@code Decoder.parse} — finds nothing in NeoForge's
@@ -51,41 +51,41 @@ import net.forbric.kernel.util.Caught;
  * within the parse scope, so the native condition funnel does not evaluate the same predicate/input twice.
  * {@code -Dforbric.mixinSubtypeOwner=off} leaves every injector as written.
  *
- * <h2>Through a field the merge widened</h2>
+ * <h2>Through a field the base widened</h2>
  *
- * <p>javac records a call's owner as the static type of its receiver, so when both carriers widened
+ * <p>javac records a call's owner as the static type of its receiver, so when NeoForge widened
  * {@code RangedBowAttackGoal.mob} from {@code Monster} to {@code Mob} (the goal takes any {@code Mob} there), every call
  * through the field changed owner with it: {@code this.mob.lookAt(target, 30, 30)} is {@code Monster.lookAt} in vanilla
- * and {@code Mob.lookAt} in the merged {@code tick}. debugify's MC-121706 fix injects AFTER {@code Monster.lookAt}; it
+ * and {@code Mob.lookAt} in the current {@code tick}. debugify's MC-121706 fix injects AFTER {@code Monster.lookAt}; it
  * attached nowhere, and its {@code require=1} miss stopped a strict launch that native Fabric runs.
  *
  * <p>That is the same method only when the receiver is the field, so the point moves only for those calls, along a
- * NARROW row of {@link WidenedFieldTwinInjector} (the ledger of fields the merge widened): the recorded owner is the
- * row's vanilla type and no class between it and the merged type redeclares the method, so a receiver that IS a vanilla
+ * NARROW row of {@link WidenedFieldTwinInjector} (the ledger of fields the base widened): the recorded owner is the
+ * row's vanilla type and no class between it and the current type redeclares the method, so a receiver that IS a vanilla
  * type dispatches exactly as before; the selected method makes no call with the recorded owner; and each call through
- * the merged type is told apart by where its receiver comes from — a {@code getfield} of the widened field on
+ * the current type is told apart by where its receiver comes from — a {@code getfield} of the widened field on
  * {@code this}, possibly through locals, or anything else. {@code tick} makes {@code Mob.lookAt} twice, once on the
  * vehicle and once on the field, and only the second was vanilla's {@code Monster.lookAt}: the point becomes
  * {@code Mob.lookAt} with the ordinal of that call (with no ordinal, exactly one such call; with ordinal n, the n-th).
  * A receiver that may come from either declines the move.
  *
- * <p>And then the handler runs only where vanilla's could. On the merged base the field may hold a {@code Mob} that is
- * no {@code Monster} — a NeoForge or MinecraftForge mod's archer built on the widened goal — and a vanilla-compiled
+ * <p>And then the handler runs only where vanilla's could. On the base the field may hold a {@code Mob} that is
+ * no {@code Monster} — a NeoForge mod's archer built on the widened goal — and a vanilla-compiled
  * handler reads the vanilla-typed twin of the field, which is null for it. The handler is renamed aside and the name,
  * descriptor and annotation go to a guard that calls it only when the field holds the vanilla type, so the other
- * ecosystems' mobs run the goal exactly as before. Only an {@code @Inject} with that one point, an instance handler with
+ * ecosystem's mobs run the goal exactly as before. Only an {@code @Inject} with that one point, an instance handler with
  * no sugar, on a final field. {@code -Dforbric.mixinSubtypeOwner.retypedField=off} leaves these points as compiled.
  */
 public final class MixinSubtypeOwnerRetarget {
 	public static final String PROPERTY = "forbric.mixinSubtypeOwner";
-	/** {@code -Dforbric.mixinSubtypeOwner.retypedField=off}: no point follows a call through a field the merge widened. */
+	/** {@code -Dforbric.mixinSubtypeOwner.retypedField=off}: no point follows a call through a field the base widened. */
 	public static final String RETYPED_FIELD_PROPERTY = "forbric.mixinSubtypeOwner.retypedField";
 	/**
 	 * The suffix a guarded handler's own body moves to, under the guard that keeps its name and annotation, before the
 	 * mixin's mark ({@link MixinHandlerShim#asideName}).
 	 */
 	static final String NARROW_SUFFIX = "$forbricnarrow";
-	/** Recorded owner → a subtype through which the merged game calls the same method (name and descriptor). */
+	/** Recorded owner → a subtype through which the game calls the same method (name and descriptor). */
 	static final Map<String, String> SAME_METHOD = Map.of("com/mojang/serialization/Decoder", "com/mojang/serialization/Codec");
 	private static final String INJECT = "Lorg/spongepowered/asm/mixin/injection/Inject;";
 	private static final String LOCAL = "Lcom/llamalad7/mixinextras/sugar/Local;";
@@ -145,7 +145,7 @@ public final class MixinSubtypeOwnerRetarget {
 		}
 		mixin.methods.addAll(guards);
 		if (moved > 0) {
-			ForbricLog.info("[Forbric/Mixin] %s: %s — the merged body makes the same call through another owner, which "
+			ForbricLog.info("[Forbric/Mixin] %s: %s — the current body makes the same call through another owner, which "
 					+ "Mixin's owner match did not see", mixin.name.replace('/', '.'), String.join(", ", described));
 		}
 		return moved;
@@ -191,7 +191,7 @@ public final class MixinSubtypeOwnerRetarget {
 		return false;
 	}
 
-	/** The move for one point, or null: the subtype pair first, then a field the merge widened. */
+	/** The move for one point, or null: the subtype pair first, then a field the base widened. */
 	private static Move decide(MethodNode handler, AnnotationNode injector, AnnotationNode at, String recorded,
 			ClassNode target, MethodNode host, Function<String, ClassNode> classes, Function<String, ClassNode> natives) {
 		String member = named(handler, at, recorded, target.name, natives);

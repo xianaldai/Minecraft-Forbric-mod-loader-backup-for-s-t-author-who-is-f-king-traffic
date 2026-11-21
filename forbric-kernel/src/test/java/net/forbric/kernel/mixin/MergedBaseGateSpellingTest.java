@@ -50,16 +50,27 @@ class MergedBaseGateSpellingTest {
 	private static final String LOAD = "L" + LOADER + ";load(L" + LOADER + "$LoaderFactory;Ljava/util/List;Ljava/util/List;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;";
 	private static final String DEFERS = "source callback repeats or defers the kernel-owned registry freeze; its tracker protocol could not be adapted";
 	private static final String UNFIT = "registry-loader: source wraps a loader call the carrier left dead, and the wrap does not fit the widened overloads that replaced it";
-	private static final BiFunction<Ecosystem, String, ClassNode> STAGED = NativeCallTestEvidence.staged();
+	/**
+	 * The staged native references, read on first use rather than when the class loads: {@link NativeCallTestEvidence#staged()}
+	 * aborts without the staged base, and an abort in a static initializer fails every case of the class instead of letting
+	 * the fixture check skip them (the unstaged CI profile).
+	 */
+	private static BiFunction<Ecosystem, String, ClassNode> staged;
+	private static final BiFunction<Ecosystem, String, ClassNode> STAGED = (family, owner) -> staged().apply(family, owner);
+
+	private static BiFunction<Ecosystem, String, ClassNode> staged() {
+		if (staged == null) staged = NativeCallTestEvidence.staged();
+		return staged;
+	}
 	/** As at discovery: the adapters ask with the mixin's family, not noted yet, and the config's family answers. */
 	private static final BiFunction<Ecosystem, String, ClassNode> NATIVES = (asked, owner) -> STAGED.apply(asked != null ? asked : Ecosystem.FABRIC, owner);
 
 	/**
-	 * Every case reads fabric-registry-sync's released mixins and judges them against the staged merged base, with the
+	 * Every case reads fabric-registry-sync's released mixins and judges them against the staged base, with the
 	 * native classes of its native-reference index; the loader cases also against vanilla's own classes.
 	 */
 	@BeforeEach void fixtures() {
-		TestFixtures.requireFiles(Fixture.STAGED, "the staged merged base", TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar"));
+		TestFixtures.requireFiles(Fixture.STAGED, "the staged base", TestFixtures.stagedBase());
 		TestFixtures.requireFiles(Fixture.MC_LIBRARIES, "vanilla Minecraft 26.2", TestFixtures.vanillaJar());
 		TestFixtures.requireFiles(Fixture.THIRD_PARTY, "fabric-registry-sync's released mixins", REGISTRY_SYNC);
 	}
@@ -244,9 +255,9 @@ class MergedBaseGateSpellingTest {
 		}
 	}
 
-	/** The staged merged base's classes, as the gate's resources read them. */
+	/** The staged base's classes, as the gate's resources read them. */
 	private static Function<String, byte[]> merged() {
-		return jar(TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar"), Fixture.STAGED);
+		return jar(TestFixtures.stagedBase(), Fixture.STAGED);
 	}
 
 	private static Function<String, ClassNode> classes(Function<String, byte[]> resources) {
@@ -256,7 +267,7 @@ class MergedBaseGateSpellingTest {
 		};
 	}
 
-	/** Vanilla's classes in place of the merged base: a game whose loader still makes the call the wrap names. */
+	/** Vanilla's classes in place of the staged base: a game whose loader still makes the call the wrap names. */
 	private static Function<String, byte[]> vanilla() {
 		return jar(TestFixtures.vanillaJar(), Fixture.MC_LIBRARIES);
 	}

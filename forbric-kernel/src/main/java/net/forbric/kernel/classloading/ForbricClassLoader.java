@@ -42,12 +42,12 @@ import net.forbric.kernel.transform.TransformContext;
  * ecosystem classes, applying the unified transform pipeline as each class is defined.
  *
  * <p>This replaces Fabric's Knot (and Forge's ModLauncher/securemodules) with one flat, JPMS-free loader. It is
- * child-first for the jars it owns (the merged base + the Forge/NeoForge runtime carriers + the kernel's game-side
+ * child-first for the jars it owns (the game base + the NeoForge runtime carrier + the kernel's game-side
  * runtime jar + mod jars) and parent-first for everything shared with the boot side (ASM, Mixin, logging, the
  * kernel boot classes) — see {@link DelegationPolicy}.
  *
  * <p>The transform hook is injected by the boot orchestrator: {@code (binaryName, classBytes) -> newBytes}. It
- * runs the {@code TransformChain} (Access, merged-base compat, the kernel redirectors) and, last, Mixin. A
+ * runs the {@code TransformChain} (Access, base compat, the kernel redirectors) and, last, Mixin. A
  * {@code null}/identity return means "unchanged".
  */
 public final class ForbricClassLoader extends URLClassLoader {
@@ -58,13 +58,6 @@ public final class ForbricClassLoader extends URLClassLoader {
 	private final ClassLoader parent;
 	private volatile ClassLoader fallbackClassLoader;
 	private final DefinedClassEvidence definitionEvidence = new DefinedClassEvidence();
-	private final RequiredAncestorCompositions ancestorCompositions = new RequiredAncestorCompositions();
-	private final PlatformAncestorBridges ancestorBridges = new PlatformAncestorBridges();
-
-	/** Registers a source-protocol proof checked against the final bytes before defining a required class. */
-	public void registerAncestorComposition(net.forbric.api.AncestorComposition proof) {
-		ancestorCompositions.register(proof);
-	}
 
 	/** One {@link ProtectionDomain} per owned jar, keyed by the jar URL's spelling. See {@link #domainFor}. */
 	private final Map<String, ProtectionDomain> domains = new ConcurrentHashMap<>();
@@ -120,7 +113,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 	@Override
 	public void close() throws IOException {
 		try { super.close(); }
-		finally { net.forbric.api.ProtocolExtensions.release(this); net.forbric.api.VirtualProperties.release(this); net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.release(this); net.forbric.kernel.mixin.MixinOperationSeamTransport.release(this); net.forbric.kernel.mixin.NativeCallInlining.release(this); net.forbric.kernel.mixin.NativeLocalMaterialization.release(this); net.forbric.kernel.mixin.NativeEntryRelay.release(this); net.forbric.kernel.mixin.NativeDecisionIsland.release(this); net.forbric.kernel.mixin.CarrierMethodReferences.release(this); }
+		finally { net.forbric.api.ProtocolExtensions.release(this); net.forbric.api.VirtualProperties.release(this); net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.release(this); net.forbric.kernel.mixin.MixinOperationSeamTransport.release(this); net.forbric.kernel.mixin.NativeCallInlining.release(this); net.forbric.kernel.mixin.NativeLocalMaterialization.release(this); net.forbric.kernel.mixin.NativeDecisionIsland.release(this); net.forbric.kernel.mixin.CarrierMethodReferences.release(this); }
 	}
 
 	/** Records the selected metadata, not package prefixes, as the source of transform provenance. */
@@ -172,7 +165,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 	/**
 	 * The ecosystem whose code a class this loader defined is: the arbitrated family of the jar it was defined from
 	 * ({@link #familyOfClass}), else the selected mod that owns its class file ({@link #ecosystemOfResource}). Null for
-	 * a class another loader defined, and for one no single ecosystem owns — the merged base, a runtime carrier, a
+	 * a class another loader defined, and for one no single ecosystem owns — the game base, a runtime carrier, a
 	 * library, a jar two ecosystems claim.
 	 */
 	public Ecosystem ecosystemOfClass(Class<?> type) {
@@ -181,7 +174,6 @@ public final class ForbricClassLoader extends URLClassLoader {
 		if (family != null) {
 			return switch (family) {
 				case FABRIC -> Ecosystem.FABRIC;
-				case FORGE -> Ecosystem.FORGE;
 				case NEOFORGE -> Ecosystem.NEOFORGE;
 			};
 		}
@@ -378,7 +370,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 
 			byte[] transformed = transformer.apply(name, raw);
 			byte[] result = transformed == null ? raw : transformed;
-			result = net.forbric.kernel.mixin.CarrierMethodReferences.transform(this, name, net.forbric.kernel.mixin.NativeDecisionIsland.transform(this, name, net.forbric.kernel.mixin.NativeEntryRelay.transform(this, name, net.forbric.kernel.mixin.NativeLocalMaterialization.transform(this, name, net.forbric.kernel.mixin.NativeCallInlining.transform(this, name, result)))));
+			result = net.forbric.kernel.mixin.CarrierMethodReferences.transform(this, name, net.forbric.kernel.mixin.NativeDecisionIsland.transform(this, name, net.forbric.kernel.mixin.NativeLocalMaterialization.transform(this, name, net.forbric.kernel.mixin.NativeCallInlining.transform(this, name, result))));
 			return net.forbric.kernel.mixin.MixinOperationSeamTransport.transform(this, name, net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.transform(this, name, result));
 		}
 
@@ -522,7 +514,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 			}
 		}
 
-		bytes = net.forbric.kernel.mixin.CarrierMethodReferences.transform(this, name, net.forbric.kernel.mixin.NativeDecisionIsland.transform(this, name, net.forbric.kernel.mixin.NativeEntryRelay.transform(this, name, net.forbric.kernel.mixin.NativeLocalMaterialization.transform(this, name, net.forbric.kernel.mixin.NativeCallInlining.transform(this, name, bytes)))));
+		bytes = net.forbric.kernel.mixin.CarrierMethodReferences.transform(this, name, net.forbric.kernel.mixin.NativeDecisionIsland.transform(this, name, net.forbric.kernel.mixin.NativeLocalMaterialization.transform(this, name, net.forbric.kernel.mixin.NativeCallInlining.transform(this, name, bytes))));
 		bytes = net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.transform(this, name, bytes);
 		bytes = net.forbric.kernel.mixin.MixinOperationSeamTransport.transform(this, name, bytes);
 		java.util.ArrayDeque<OpenWeave> open = weaving.get();
@@ -542,12 +534,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 		if (!open.isEmpty()) bytes = deferLinkTimeTypes(bytes, open.peekLast(), name);
 
 		definePackageIfNeeded(name, resource);
-		Class<?> defined = define(name, bytes, domainFor(resource));
-		// A platform carrier's class whose superclass another platform's carrier serves: the merged base's proved
-		// ancestor bridge, reported once as it takes effect. See PlatformAncestorBridges.
-		if (resource != null && !runtimeJarFamilies.isEmpty())
-			ancestorBridges.observe(bytes, familyOfUrl(resource, runtimeJarFamilies), this::carrierOfClass);
-		return defined;
+		return define(name, bytes, domainFor(resource));
 	}
 
 	/**
@@ -602,17 +589,6 @@ public final class ForbricClassLoader extends URLClassLoader {
 		}
 	}
 
-	/** The platform runtime carrier this loader serves {@code internalName} from, or null. */
-	private LoaderProbePolicy.Family carrierOfClass(String internalName) {
-		URL resource = findResource(internalName + ".class");
-		return resource == null ? null : familyOfUrl(resource, runtimeJarFamilies);
-	}
-
-	/** The cross-platform ancestor edges this loader has defined so far. */
-	java.util.List<PlatformAncestorBridges.Bridge> platformAncestorBridges() {
-		return ancestorBridges.observed();
-	}
-
 	/**
 	 * {@code defineClass}, recovering from a RE-ENTRANT definition of the same class on this thread.
 	 *
@@ -637,13 +613,6 @@ public final class ForbricClassLoader extends URLClassLoader {
 	 */
 	private Class<?> define(String name, byte[] bytes, ProtectionDomain domain) {
 		traceDefine(name);
-		ancestorCompositions.verify(name, bytes, path -> {
-			try (InputStream input = getGameResourceAsStream(path)) { return input == null ? null : input.readAllBytes(); }
-			catch (IOException unavailable) {
-				Caught.warn(unavailable, "[Forbric/Loader] could not read %s while verifying %s's ancestors", path, name);
-				return null;
-			}
-		});
 		try {
 			Class<?> defined = defineClass(name, bytes, 0, bytes.length, domain);
 			DefinedGetterFields.observe(this, name, bytes);
@@ -653,8 +622,11 @@ public final class ForbricClassLoader extends URLClassLoader {
 			net.forbric.kernel.mixin.MixinCrossHostPredicateIsland.observeDefinition(name, bytes);
 			net.forbric.kernel.mixin.MixinAbsorbedCallbackTransport.observeDefinition(this, name, bytes);
 			net.forbric.kernel.mixin.MixinOperationSeamTransport.observeDefinition(this, name, bytes);
-			net.forbric.kernel.mixin.FinalMixinApplications.onClassDefined(name, bytes);
+			// The replacement's witness first: when it is the class being defined (the furnace's and the hopper's are their
+			// mixins' own targets), the injector misses the final-class check finds next are already answered for, and are
+			// recorded resolved rather than warned about and resolved a moment later.
 			net.forbric.kernel.mixin.SupersededMixins.observeDefinition(this, name, bytes);
+			net.forbric.kernel.mixin.FinalMixinApplications.onClassDefined(name, bytes);
 			return defined;
 		} catch (LinkageError duplicate) {
 			Class<?> already = findLoadedClass(name);
@@ -716,7 +688,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 	 * Declares which owned jars belong to exactly one loader family, so {@link LoaderProbePolicy} can answer a
 	 * guest's platform probe for the loader that guest was actually loaded as. A universal jar carrying more than one
 	 * manifest belongs to the one ecosystem {@code MultiLoaderArbiter} chose for it. Jars absent from the map — the
-	 * merged base, the Forge/NeoForge runtime carriers, MC libraries, and any jar declaring no loader at all — are
+	 * game base, the NeoForge runtime carrier, MC libraries, and any jar declaring no loader at all — are
 	 * unowned and see every probe answer yes, as before. Call once, before any class loads.
 	 */
 	public void setJarFamilies(java.util.Map<java.nio.file.Path, LoaderProbePolicy.Family> byJar) {
@@ -778,7 +750,7 @@ public final class ForbricClassLoader extends URLClassLoader {
 
 	/**
 	 * The loader family of the jar {@code binaryName} is being defined from, or {@code null} if it is unowned —
-	 * the merged base, a runtime carrier, an MC library, a jar declaring no loader, or a kernel class. A universal jar
+	 * the game base, a runtime carrier, an MC library, a jar declaring no loader, or a kernel class. A universal jar
 	 * answers the ecosystem {@code MultiLoaderArbiter} chose for it.
 	 */
 	public LoaderProbePolicy.Family familyOfClass(String binaryName) {

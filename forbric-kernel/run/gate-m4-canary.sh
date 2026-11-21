@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
-# M4-CANARY gate (synthetic) — TRI-IN-ONE server: Fabric + traditional MinecraftForge + NeoForge mods run SIMULTANEOUSLY in ONE
-# instance on the merged 3-ABI base, with no genuine loader lifecycle for any of them.
+# M4-CANARY gate (synthetic) — Fabric + NeoForge mods run SIMULTANEOUSLY in ONE instance on NeoForge's patched game,
+# with no genuine loader lifecycle for either.
 #
-# The proof is three canaries, one per ecosystem, all live at once:
+# The proof is two canaries, one per shipping ecosystem, both live at once:
 #   • Fabric      forbricfabriclive — entrypoints run, JiJ nested mod runs, content registered survives the freeze
-#   • NeoForge    forbricneolive    — @Mod constructed, ServerTickEvent fires NATIVELY (Neo won the merged tick hook)
-#   • MinecraftForge forbriclive    — @Mod constructed, @EventBusSubscriber registered, ServerTickEvent fires via the
-#                                     GameEventMultiplexer (Neo→Forge 1:1 re-emission)
+#   • NeoForge    forbricneolive    — @Mod constructed, ServerTickEvent fires NATIVELY from the game's own tick hook
 #
-# Both tick canaries firing in the same server loop is the B-5 shape: the merged tick hook reaches BOTH families,
-# once each, no double-fire.
+# STAGE 3 OF DROPPING MinecraftForge (what changed and why). This gate was TRI-IN-ONE: a third canary, the
+# MinecraftForge forbriclive, was constructed here, registered its @EventBusSubscriber and counted 20 server ticks
+# re-emitted by GameEventMultiplexer. Forbric refuses a MinecraftForge-only jar, and a dedicated server stops on that
+# refusal, so the canary is no longer staged and its four checks are gone. The @EventBusSubscriber count of 1 was the
+# MinecraftForge canary's one subscriber. The NeoForge canary declares none, so the count (its line prints only for
+# N > 0) must come back empty: a subscriber appearing from nowhere is the regression this can still catch. A NeoForge
+# mod's own @EventBusSubscriber is counted by KernelEventSubscribersGenuineBaseTest. What a refused MinecraftForge jar
+# does to a server is gate-m29's.
+#
+# STAGE 4: the traditional-Forge baseline check went with the MinecraftForge carrier, and "no tick forward failure"
+# with the event multiplexer that printed it (D34: nothing can print it, so the absence proved nothing). Every Fabric
+# and NeoForge check is unchanged.
 # GATE-PARALLEL: rundirs=server-tri mem=1500
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
@@ -17,34 +25,33 @@ set -uo pipefail
 LOG="$BUILD/gate-m4-canary-boot.log"; mkdir -p "$BUILD"
 RUNDIR="$KERNEL/run/server-tri"
 FABRIC="$KERNEL/run/canary/forbricfabriclive.jar"
-FORGE="$RUN_OLD/server-merged/mods/forbriclive.jar"
-NEO="$RUN_OLD/neoforge-runtime/forbricneolive.jar"
+NEO="$NEOLIVE"
 
-step "stage one canary per ecosystem"
+step "stage one canary per shipping ecosystem"
 "$KERNEL/run/build-fabric-canary.sh" >"$BUILD/gate-m4-canary.log" 2>&1
 [ -f "$FABRIC" ] || { echo "[kernel] FAIL Fabric canary build (see $BUILD/gate-m4-canary.log)"; exit 1; }
 
+refuse_shared_rundir "$RUNDIR"
 reap_stale_server "$RUNDIR"
 rm -rf "$RUNDIR/world" "$RUNDIR/mods" "$RUNDIR/.forbric-kernel" 2>/dev/null
 mkdir -p "$RUNDIR/mods"
 miss=0
-for jar in "$FABRIC" "$FORGE" "$NEO"; do
+for jar in "$FABRIC" "$NEO"; do
   if [ -f "$jar" ]; then cp "$jar" "$RUNDIR/mods/"; else echo "[kernel] MISSING: $jar"; miss=1; fi
 done
 [ "$miss" -eq 0 ] || { echo "[kernel] FAIL a canary jar is missing"; exit 1; }
 seed_server_properties "$RUNDIR"
 echo "[kernel] staged: $(ls -1 "$RUNDIR/mods" | tr '\n' ' ')"
 
-step "boot all three ecosystems in one instance"
+step "boot both ecosystems in one instance"
 : > "$LOG"
 ( stop_when_ready "$LOG" 30 ) | RUNDIR="$RUNDIR" "$KERNEL/run/launch-kernel-server.sh" > "$LOG" 2>&1 &
 BOOTPID=$!
 record_server_pid "$RUNDIR" "$BOOTPID"
 await_server "$BOOTPID" "$LOG" 130
 
-step "all three ecosystems discovered + brought up in ONE instance (must PASS)"
-check "both Forge-family baselines"           "constructed NeoForge baseline mod" "$LOG"
-check "traditional-Forge baseline"            "constructed traditional-Forge baseline mod ForgeMod" "$LOG"
+step "both shipping ecosystems discovered + brought up in ONE instance (must PASS)"
+check "NeoForge baseline"                     "constructed NeoForge baseline mod" "$LOG"
 check "NeoForge @Mod constructed"             "constructed @Mod forbricneolive" "$LOG"
 
 # A2: NeoForge's @Mod declares which sides it belongs to, and the kernel constructed every @Mod on every side
@@ -64,16 +71,18 @@ check "a client-only @Mod is recognised as client-only" \
   "@Mod forbricneoclientonly .*declares it belongs to \[CLIENT\]" "$LOG"
 check_absent "and its constructor never runs on a server" \
   "ForbricNeoClientOnly\] client-only @Mod CONSTRUCTED" "$LOG"
-check "MinecraftForge @Mod constructed"       "constructed @Mod forbriclive" "$LOG"
-# NOT `check`: that counts LINES, so "registered 0 @EventBusSubscriber class(es)" would still pass it. The
-# subscriber wiring moved into the registration window, and the way that goes wrong is the count dropping
-# to zero while the line itself keeps being printed — so assert the NUMBER.
+# It was 1, the MinecraftForge canary's one subscriber. With that canary gone (header) nothing staged here declares
+# one, and KernelEventSubscribers prints its "registered N @EventBusSubscriber class(es) on the game bus" line only when
+# N > 0, so the count must come back empty: a subscriber appearing from nowhere — a refused jar's, say — is the
+# regression now. Read with the same grep as before; KernelEventSubscribersGenuineBaseTest pins the kernel's line
+# against this pattern, read out of this file.
 EBS=$(grep -oE 'registered [0-9]+ @EventBusSubscriber' "$LOG" | grep -oE '[0-9]+' | head -1)
-assert_eq "MinecraftForge @EventBusSubscriber classes" 1 "${EBS:-none}"
+assert_eq "no @EventBusSubscriber class registered: none of the staged mods declares one" none "${EBS:-none}"
+check_absent "no staged jar was refused" "\[Forbric/Unsupported\] refusing|\[Forbric/MultiLoader\] .* is refused" "$LOG"
 check "Fabric entrypoints ran"                "invoked [1-9][0-9]* Fabric main entrypoint\(s\) \+ [1-9][0-9]* server" "$LOG"
 check "Fabric JiJ nested mod ran"             "\[ForbricFabricLib\] JiJ nested mod initialized" "$LOG"
 
-step "BOTH game-event families tick in the same loop (must PASS — the B-5 1:1 shape)"
+step "the game loop ticks the NeoForge canary natively (must PASS)"
 check "NeoForge tick fires natively"          "\[ForbricNeoLive\] 20 server ticks observed \(NeoForge native\)" "$LOG"
 
 # ModLoadingContext.getActiveContainer() falls back to getModContainerById("minecraft").orElseThrow() when no
@@ -82,7 +91,6 @@ check "NeoForge tick fires natively"          "\[ForbricNeoLive\] 20 server tick
 # from a mod constructor the kernel has a container active and the fallback is never reached.
 check "getActiveContainer falls back to the minecraft container" \
   "\[ForbricNeoLive\] getActiveContainer\(\) with none active answered minecraft" "$LOG"
-check "MinecraftForge tick fires via multiplexer" "\[ForbricLive\] 20 server ticks observed - the game loop posts TickEvent" "$LOG"
 check "Fabric content survived the freeze"    "onInitializeServer .*registered content survives=true" "$LOG"
 
 step "the server works (must PASS)"
@@ -92,7 +100,6 @@ check "clean shutdown"                        "Stopping server" "$LOG"
 
 step "nothing quietly broken (must be ABSENT)"
 check_absent "no NoClassDefFound (the old Forge-tick blocker)" "NoClassDefFoundError" "$LOG"
-check_absent "no tick forward failure"        "forward failed" "$LOG"
 check_absent "no entrypoint failed"           "entrypoint of .* failed" "$LOG"
 check_absent "no Tags not bound"              "Tags not bound" "$LOG"
 check_absent "no genuine FancyModLoader"      "gatherAndInitializeMods|dispatchParallelEvent" "$LOG"
@@ -104,7 +111,7 @@ check_absent "no post-Done exception"         "Encountered an unexpected excepti
 
 step "M4 result"
 if [ "$FAIL" -eq 0 ]; then
-  echo "[kernel] ✅ M4 TRI-IN-ONE GATE GREEN — Fabric + MinecraftForge + NeoForge run in one instance, both families tick 1:1"
+  echo "[kernel] ✅ M4 CANARY GATE GREEN — Fabric + NeoForge run in one instance on NeoForge's patched game"
 else
   echo "[kernel] ❌ GATE RED"
 fi

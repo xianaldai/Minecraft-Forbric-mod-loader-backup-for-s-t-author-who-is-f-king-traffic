@@ -49,7 +49,7 @@ public final class MixinSharedResultTransport {
             AnnotationNode at = points.getFirst();
             if (!"INVOKE".equals(MixinFit.value(at, "value")) || MixinFit.value(at, "shift") != null
                     || MixinFit.value(at, "ordinal") instanceof Number n && n.intValue() >= 0) continue;
-            // The host is the one method Mixin binds in the merged class, and the method the redirect was written for —
+            // The host is the one method Mixin binds in the current class, and the method the redirect was written for —
             // the one it binds in the class the mod was compiled against — is that same member: however the selector
             // is spelled, never by comparing its spelling with a name.
             List<MethodNode> hosts = MixinTargetSelectors.bound(handler, current);
@@ -57,7 +57,7 @@ public final class MixinSharedResultTransport {
             MethodNode host = hosts.getFirst(), original = MixinCallbackShape.written(handler, reference);
             if (original == null || !original.name.equals(host.name) || !original.desc.equals(host.desc)) continue;
             // The point selects one call in the written method, which is then the member it names however it is
-            // written; the merged host no longer makes that call. (A shorter spelling may match another call there —
+            // written; the current host no longer makes that call. (A shorter spelling may match another call there —
             // the reason to move it: the point is rewritten to the live call in full.)
             List<MethodInsnNode> originalCalls = MixinCallbackShape.calls(at, original);
             if (originalCalls.size() != 1 || !calls(host, target(originalCalls.getFirst())).isEmpty()) continue;
@@ -93,7 +93,7 @@ public final class MixinSharedResultTransport {
             if (injecting.size() != 1 || !injecting.getFirst().desc.equals(WRAP)
                     || all.stream().anyMatch(a -> a.desc.equals("Lorg/spongepowered/asm/mixin/injection/Group;"))) continue;
             AnnotationNode injection = injecting.getFirst();
-            // On the same host: the producer binds that one method in the merged class, as the consumer does. Its
+            // On the same host: the producer binds that one method in the current class, as the consumer does. Its
             // injector is taken off below, so a producer that also binds another method is not this producer.
             if (MixinTargetSelectors.one(producer, current) != host || MixinFit.value(injection, "slice") != null) continue;
             List<AnnotationNode> points = MixinFit.atNodes(injection);
@@ -267,7 +267,7 @@ public final class MixinSharedResultTransport {
         return new Source(operation, inputs, key);
     }
 
-    /** Whether an {@code @Inject} at {@code HEAD} that also binds {@code host} in the merged class sets the share there. */
+    /** Whether an {@code @Inject} at {@code HEAD} that also binds {@code host} in the current class sets the share there. */
     private static boolean hasHeadProducer(ClassNode mixin, ClassNode current, MethodNode host, String share) {
         for (MethodNode producer : mixin.methods) {
             AnnotationNode injection = MixinFit.injectorOf(producer);

@@ -34,10 +34,10 @@ import net.forbric.kernel.util.Caught;
  * only along rows, and only when every anchor it names is one of the calls that moved.
  *
  * <p>A pair {@code method -> renamed} is in the table when: in each listed ecosystem's own jar the class declares
- * {@code method} and not {@code renamed}; the merged base declares both, with the same descriptor and static-ness;
+ * {@code method} and not {@code renamed}; the base declares both, with the same descriptor and static-ness;
  * {@code renamed} is made of that jar's {@code method} — of the calls and field accesses of whichever of the two makes
- * fewer, at least half and at least two are the other's too — and makes some of them that the merged {@code method}
- * no longer makes; and the merged class still calls {@code renamed}, from {@code method} itself (a call, or the method
+ * fewer, at least half and at least two are the other's too — and makes some of them that the current {@code method}
+ * no longer makes; and the current class still calls {@code renamed}, from {@code method} itself (a call, or the method
  * handle of a lambda it creates) or from another of its methods — or, marked {@link #UNCALLED}, {@code renamed} is
  * private and nothing in its class or its nest calls it. NeoForge's
  * {@code PersistentEntitySectionManager.addEntity} posts its event and calls vanilla's body as
@@ -47,13 +47,13 @@ import net.forbric.kernel.util.Caught;
  * and, of several renamed methods of one method, any it does not call itself (the pieces of a split, such as
  * NeoForge's four HUD layers out of {@code Hud.extractPlayerHealth}, are what it dispatches to).
  *
- * <p>Each pair has one row per call or field access that moved: one the reference's {@code method} makes, the merged
+ * <p>Each pair has one row per call or field access that moved: one the reference's {@code method} makes, the current
  * {@code method} makes less often, and {@code renamed} makes. An anchor that is not among them was not in vanilla's
  * body where the mod looked — on the reference the mod misses too — and a row is no reason to move it. A row also says
  * how often the reference's {@code method} makes its call: where {@code renamed} makes it more often, the carrier added
  * one, and an anchor that binds every match would bind that one too. And each pair is a {@link Kind#RENAME} or a
  * {@link Kind#PIECE}: whether {@code renamed} makes every call and field access of the reference's {@code method}, as
- * often, or only part of them; a piece whose result the merged method returns whenever it is an {@code Either} left is
+ * often, or only part of them; a piece whose result the current method returns whenever it is an {@code Either} left is
  * marked {@link Exit#LEFT} ({@link #returnsLefts}).
  *
  * <p>The table exists because the bytes alone were wrong in seven of the 15 moves an audit of R3 over 655 mod jars
@@ -62,7 +62,7 @@ import net.forbric.kernel.util.Caught;
  * goldenpotions' {@code CreativeModeTabs.lambda$bootstrap$21} to {@code lambda$bootstrap$24}: each a method of the same
  * shape that happened to carry the anchor and that vanilla itself declares, so no carrier renamed anything. malilib's
  * and trinkets' {@code ItemStack.addDetailsToTooltip} went to {@code addDetailsToTooltipComponents}: NeoForge's renamed
- * body, but nothing in the merged game calls it — NeoForge draws tooltips from its own appenders — so the injection
+ * body, but nothing in the game calls it — NeoForge draws tooltips from its own appenders — so the injection
  * bound, never ran, and read as fitting. That pair is now a row marked {@link #UNCALLED}: the move binds the injector
  * where the body is and says it never runs, as MixinFit and the final-class check report it ({@link #neverRuns}), so
  * malilib's required tooltip hook is a reported loss that marks its row and does not stop a strict launch.
@@ -78,19 +78,19 @@ public final class CarrierRenames {
 	/** How much of the reference's body the renamed method carries. */
 	enum Kind {
 		/**
-		 * All of it: every call and field access the reference's method makes, as often. The merged method may do more
+		 * All of it: every call and field access the reference's method makes, as often. The current method may do more
 		 * around the call, but the body a handler was written against is whole in the renamed one.
 		 */
 		RENAME,
 		/**
-		 * Part of it: the rest stayed in the merged method or went elsewhere. NeoForge's {@code addDetailsToTooltipTail}
+		 * Part of it: the rest stayed in the current method or went elsewhere. NeoForge's {@code addDetailsToTooltipTail}
 		 * is only the advanced tail of vanilla's tooltip; {@code lambda$startSleepInBed$0} is the checks before the
 		 * sleep, while {@code super.startSleepInBed} and {@code canSleepThroughNights} stayed in the method.
 		 */
 		PIECE
 	}
 
-	/** What the merged method does with a piece's result, when the piece cancels where vanilla returned from the method. */
+	/** What the current method does with a piece's result, when the piece cancels where vanilla returned from the method. */
 	enum Exit {
 		/** Nothing known: a cancel returns from the piece and the method goes on. */
 		NONE,
@@ -111,9 +111,9 @@ public final class CarrierRenames {
 	 * @param count      how many times the reference's {@code method} makes it
 	 * @param kind       the whole body or a piece of it
 	 * @param ecosystems whose own jar declares {@code method} with that body and not {@code renamed}
-	 * @param exit       for a piece, whether the merged method returns its lefts
-	 * @param called     whether the merged class calls {@code renamed}; false for a body the carrier renamed and nothing
-	 *                   in the merged game calls ({@link #UNCALLED})
+	 * @param exit       for a piece, whether the current method returns its lefts
+	 * @param called     whether the current class calls {@code renamed}; false for a body the carrier renamed and nothing
+	 *                   in the game calls ({@link #UNCALLED})
 	 */
 	record Row(String owner, String method, String renamed, String member, int count, Kind kind, Set<Ecosystem> ecosystems,
 			Exit exit, boolean called) {
@@ -147,7 +147,7 @@ public final class CarrierRenames {
 	}
 
 	/**
-	 * The marker of a pair whose renamed method nothing in the merged class calls: NeoForge's
+	 * The marker of a pair whose renamed method nothing in the current class calls: NeoForge's
 	 * {@code ItemStack.addDetailsToTooltipComponents}, vanilla's tooltip body under another name, which NeoForge keeps
 	 * and never calls (it draws tooltips from its own appenders). An injector moves there only to bind where the body it
 	 * was written against is, and is then reported as never running ({@link #neverRuns}).
@@ -202,7 +202,7 @@ public final class CarrierRenames {
 		return Exit.LEFT;
 	}
 
-	/** Whether a pair's rows say the merged class calls its renamed method (the census marks every row of an uncalled one). */
+	/** Whether a pair's rows say the current class calls its renamed method (the census marks every row of an uncalled one). */
 	static boolean called(List<Row> rows) {
 		for (Row row : rows) if (!row.called()) return false;
 		return true;
@@ -221,7 +221,7 @@ public final class CarrierRenames {
 					|| !row.ecosystems().contains(ecosystem)) continue;
 			if (called(owner, method)) return null;
 			String original = row.method().substring(0, row.method().indexOf('('));
-			return "a carrier moved " + original + "'s vanilla body into it and nothing in the merged game calls it";
+			return "a carrier moved " + original + "'s vanilla body into it and nothing in the game calls it";
 		}
 		return null;
 	}

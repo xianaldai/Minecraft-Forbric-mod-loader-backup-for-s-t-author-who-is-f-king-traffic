@@ -38,39 +38,42 @@ import net.forbric.api.Ecosystem;
 import net.forbric.api.ForeignType;
 
 /**
- * The ORDER the two carriers' {@code GameData} hooks are called in: freeze NeoForge-first, unfreeze as before.
- * Two synthetic GameData classes, named by {@link ForeignType#GAME_DATA} so a rename cannot pass silently, record
- * their calls into a system property; the kernel's private freeze/unfreeze are invoked reflectively.
+ * Which {@code GameData} the kernel's freeze and unfreeze reach: NeoForge's, once each, and nothing else.
+ *
+ * <p>The calls are reflective and a miss is quiet: an absent owner is logged at debug, and the freeze count line then
+ * stays silent because it counts no registries, so a wrong owner or method name would show only as a missing gate
+ * line. Two synthetic {@code GameData} classes record their calls into a system property: NeoForge's, named by
+ * {@link ForeignType#GAME_DATA} so a rename cannot pass silently, and a MinecraftForge one at the name the merged base's
+ * carrier used, which must never be called.
  */
 @org.junit.jupiter.api.parallel.ResourceLock("system-properties")
 class KernelLifecycleFreezeOrderTest {
 	private static final String ORDER = "forbric.test.gameDataOrder";
+	/** MinecraftForge's GameData, spelled out: the decoy must not depend on the forge column C4 removes. */
+	private static final String MINECRAFTFORGE_GAME_DATA = "net/minecraftforge/registries/GameData";
 
 	@AfterEach
 	void reset() {
 		System.clearProperty(ORDER);
-		System.clearProperty(KernelLifecycle.FREEZE_ORDER_PROPERTY);
 	}
 
 	@Test
-	void freezeIsNeoForgeFirstAndUnfreezeIsStillForgeFirst(@TempDir Path dir) throws Exception {
+	void freezeReachesOnlyNeoForgesGameDataOnce(@TempDir Path dir) throws Exception {
 		try (URLClassLoader cl = carriers(dir)) {
 			System.setProperty(ORDER, "");
 			call("freeze", cl);
-			assertEquals("neoforge,forge,", System.getProperty(ORDER), "NeoForge binds tags, freezes and snapshots while the registries are still writable");
-			System.setProperty(ORDER, "");
-			call("unfreeze", cl);
-			assertEquals("forge,neoforge,", System.getProperty(ORDER), "only freeze flipped");
+			assertEquals("neoforge,", System.getProperty(ORDER),
+					"NeoForge binds tags, freezes and snapshots; no other family's GameData is called");
 		}
 	}
 
 	@Test
-	void switchedOffFreezeIsTheOldForgeFirstOrder(@TempDir Path dir) throws Exception {
-		System.setProperty(KernelLifecycle.FREEZE_ORDER_PROPERTY, "off");
+	void unfreezeReachesOnlyNeoForgesGameDataOnce(@TempDir Path dir) throws Exception {
 		try (URLClassLoader cl = carriers(dir)) {
 			System.setProperty(ORDER, "");
-			call("freeze", cl);
-			assertEquals("forge,neoforge,", System.getProperty(ORDER));
+			call("unfreeze", cl);
+			assertEquals("neoforge,", System.getProperty(ORDER),
+					"NeoForge reopens the registries; no other family's GameData is called");
 		}
 	}
 
@@ -84,12 +87,13 @@ class KernelLifecycleFreezeOrderTest {
 	private static URLClassLoader carriers(Path dir) throws Exception {
 		Path jar = dir.resolve("carriers.jar");
 		try (OutputStream out = Files.newOutputStream(jar); ZipOutputStream zip = new ZipOutputStream(out)) {
-			for (Ecosystem eco : new Ecosystem[] { Ecosystem.FORGE, Ecosystem.NEOFORGE }) {
-				String internal = ForeignType.GAME_DATA.internal(eco);
-				zip.putNextEntry(new ZipEntry(internal + ".class"));
-				zip.write(gameData(internal, eco.name().toLowerCase()));
-				zip.closeEntry();
-			}
+			String neo = ForeignType.GAME_DATA.internal(Ecosystem.NEOFORGE);
+			zip.putNextEntry(new ZipEntry(neo + ".class"));
+			zip.write(gameData(neo, "neoforge"));
+			zip.closeEntry();
+			zip.putNextEntry(new ZipEntry(MINECRAFTFORGE_GAME_DATA + ".class"));
+			zip.write(gameData(MINECRAFTFORGE_GAME_DATA, "minecraftforge"));
+			zip.closeEntry();
 		}
 		return new URLClassLoader(new URL[] { jar.toUri().toURL() }, ClassLoader.getPlatformClassLoader());
 	}

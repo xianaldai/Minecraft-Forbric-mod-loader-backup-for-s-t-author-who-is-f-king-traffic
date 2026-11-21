@@ -22,6 +22,7 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodNode;
 
 import net.forbric.kernel.boot.KernelSharedPredicateContracts;
+import net.forbric.kernel.TestFixtures;
 
 /**
  * {@link MixinSharedPredicateSeam} reads the source pair's host and anchors as Mixin reads them: fabric-api's released

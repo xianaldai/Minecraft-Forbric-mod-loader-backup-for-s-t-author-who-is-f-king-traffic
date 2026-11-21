@@ -36,7 +36,7 @@ import net.forbric.kernel.transform.FabricFreezePointInjector;
 
 /**
  * {@link FabricFreezeHookMixinAdapter} reads a freeze observer's selectors and its {@code bootStrap()} point as Mixin reads
- * them, against the staged merged {@code BuiltInRegistries} (hooked, and without code, as the mixin service hands it over)
+ * them, against the staged base's {@code BuiltInRegistries} (hooked, and without code, as the mixin service hands it over)
  * and the vanilla one a Fabric mod is compiled against: Create Fly's released mixin under other names with its selectors
  * written every other way Mixin binds to {@code freeze()}, and an observer of {@code bootStrap()}'s call of
  * {@code freeze()} — not LiquidBounce's: another mod's names, one handler, a CallbackInfo-only body that keeps a value in
@@ -55,16 +55,27 @@ class FabricFreezeHookSpellingTest {
 	private static final String INJECT = "Lorg/spongepowered/asm/mixin/injection/Inject;";
 	private static final String CI = "Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;";
 	private static final String FREEZE_CALL = "L" + BIR + ";freeze()V";
-	private static final BiFunction<Ecosystem, String, ClassNode> STAGED = NativeCallTestEvidence.staged();
+	/**
+	 * The staged native references, read on first use rather than when the class loads: {@link NativeCallTestEvidence#staged()}
+	 * aborts without the staged base, and an abort in a static initializer fails every case of the class instead of letting
+	 * the fixture check skip them (the unstaged CI profile).
+	 */
+	private static BiFunction<Ecosystem, String, ClassNode> staged;
+	private static final BiFunction<Ecosystem, String, ClassNode> STAGED = (family, owner) -> staged().apply(family, owner);
+
+	private static BiFunction<Ecosystem, String, ClassNode> staged() {
+		if (staged == null) staged = NativeCallTestEvidence.staged();
+		return staged;
+	}
 
 	private Supplier<java.util.Set<String>> registrySync;
 
 	/**
-	 * Every case reads the staged merged {@code BuiltInRegistries}, and its native classes through the merged base's
+	 * Every case reads the staged base's {@code BuiltInRegistries}, and its native classes through the staged
 	 * native-reference index; Create Fly's mixin is its own third-party fixture.
 	 */
 	@BeforeEach void registrySyncIsInTheGame() {
-		TestFixtures.requireFiles(Fixture.STAGED, "the staged merged base", TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar"));
+		TestFixtures.requireFiles(Fixture.STAGED, "the staged base", TestFixtures.stagedBase());
 		registrySync = FabricFreezeHookMixinAdapter.deferredFreezes;
 		FabricFreezeHookMixinAdapter.deferredFreezes = () -> java.util.Set.of("ledger.mixins.json:org.quarry.ledger.mixin.StartupMixin");
 	}
@@ -271,7 +282,7 @@ class FabricFreezeHookSpellingTest {
 		assertEquals(rows, new TreeSet<>(FabricFreezeHookMixinAdapter.moved()), "no move recorded");
 	}
 
-	/** The staged merged {@code BuiltInRegistries} with the kernel's hooks, without code: what the mixin service hands the adapter. */
+	/** The staged base's {@code BuiltInRegistries} with the kernel's hooks, without code: what the mixin service hands the adapter. */
 	private static Function<String, ClassNode> merged() {
 		return read(ClassReader.SKIP_CODE);
 	}

@@ -18,7 +18,6 @@ package net.forbric.kernel.transform;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -60,25 +59,15 @@ import net.forbric.kernel.TestFixtures.Fixture;
  * one. That distinction is structural and is asserted in {@link MergedBaseParticleProvidersTest}.
  */
 class MergedBaseNoUnwrittenDuplicateFieldTest {
-	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED_BASE = TestFixtures.stagedBase();
 
 	@Test
 	void everyDuplicatedFieldNameHasAWriterForEveryOneOfItsTypes() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent — skipping whole-artifact scan");
+		TestFixtures.requireFile(Fixture.STAGED, MERGED_BASE, "staged base absent — skipping whole-artifact scan");
 
 		List<String> dead = new ArrayList<>();
 		int scanned = 0;
 		try (ZipFile jar = new ZipFile(MERGED_BASE.toFile())) {
-			var views = new ModifiableDataViewsTransformer(path -> {
-				try {
-					ZipEntry local = jar.getEntry(path);
-					if (local != null) try (InputStream in = jar.getInputStream(local)) { return in.readAllBytes(); }
-					for (Path platform : List.of(TestFixtures.stagedRoot().resolve("forge-runtime/forge-runtime.jar"),TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar"))) {
-						try (ZipFile runtime = new ZipFile(platform.toFile())) { ZipEntry entry = runtime.getEntry(path); if(entry!=null)try(InputStream in=runtime.getInputStream(entry)){return in.readAllBytes();} }
-					}
-					return null;
-				} catch(IOException error) { throw new java.io.UncheckedIOException(error); }
-			});
 			for (ZipEntry entry : jar.stream().toList()) {
 				if (!entry.getName().endsWith(".class")) continue;
 				byte[] bytes;
@@ -87,8 +76,7 @@ class MergedBaseNoUnwrittenDuplicateFieldTest {
 				}
 				scanned++;
 				String binary = entry.getName().substring(0, entry.getName().length() - 6).replace('/', '.');
-				byte[] repaired = views.transform(binary, bytes, null);
-				repaired = new ForbricMergedBaseCompatTransformer().transform(binary, repaired, null);
+				byte[] repaired = new ForbricMergedBaseCompatTransformer().transform(binary, bytes, null);
 				repaired = new WidenedFieldTwinInjector().transform(binary, repaired, null);
 
 				ClassNode node = new ClassNode();
@@ -96,7 +84,7 @@ class MergedBaseNoUnwrittenDuplicateFieldTest {
 				collectDeadVariants(node, dead);
 			}
 		}
-		assertTrue(scanned > 1000, "content drift: this does not look like a full merged base (" + scanned + " classes)");
+		assertTrue(scanned > 1000, "content drift: this does not look like a full staged base (" + scanned + " classes)");
 		assertTrue(dead.isEmpty(),
 				"these merged fields exist in more than one type and at least one of those types is never written, "
 						+ "so it is null for every reader — in the class and in every mod — and nothing throws where "

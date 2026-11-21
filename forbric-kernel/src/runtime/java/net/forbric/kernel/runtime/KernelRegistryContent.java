@@ -28,7 +28,6 @@ import net.forbric.kernel.transform.RegistryElementCallbackInjector;
 import net.forbric.kernel.util.Caught;
 import net.forbric.kernel.util.ForbricLog;
 import net.forbric.kernel.util.ForbricSwitches;
-import net.minecraft.core.IdMapper;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.BlockItem;
@@ -38,12 +37,11 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.common.CreativeModeTabRegistry;
-import net.neoforged.neoforge.registries.GameData;
 
 /**
  * The game side of everything the kernel repairs in the vanilla registries once its registration window closes.
  *
- * <p>Five jobs that share nothing but their timing — {@code KernelLifecycle.closeRegistrationWindow} decides WHEN
+ * <p>Jobs that share nothing but their timing — {@code KernelLifecycle.closeRegistrationWindow} decides WHEN
  * each runs and that ordering is hand-written, hard-won and stays boot-side. What is here is only what each one
  * DOES, which was ~20 {@code Class.forName} strings and as many {@code getMethod} names.
  *
@@ -53,89 +51,6 @@ import net.neoforged.neoforge.registries.GameData;
  */
 public final class KernelRegistryContent {
 	private KernelRegistryContent() {
-	}
-
-	/**
-	 * Refills NeoForge's blockstate→id map, which the registration window's clear callback empties.
-	 *
-	 * <p>This is also {@code Block.BLOCK_STATE_REGISTRY} — the merged {@code Block.<clinit>} reads
-	 * {@code GameData.getBlockStateIDMap()} into it — so it is what {@code Block.getId} answers from, what
-	 * {@code block_update} encodes with, and what any mod that walks every state in the game iterates.
-	 *
-	 * <p>It used to return early whenever the map was non-empty, to avoid appending a second id for every state.
-	 * On the client that skipped the wave that matters. Blocks arrive TWICE there: once in the registration
-	 * window, and again in the {@code Minecraft.<init>} window, where the Forge-family mods are constructed. On a
-	 * 97-jar pack the first pass mapped 32,367 states and the second was skipped — so the 28,713 states every
-	 * Forge-family mod had just registered carried no id at all, and {@code Block.getId} answered 0 (AIR) for all
-	 * of them.
-	 *
-	 * <p>So the pass now compares the map against the registry and, when blocks have appeared since, rebuilds it
-	 * WHOLE rather than topping it up. Appending would give the same state a different id on a client than on a
-	 * dedicated server, where one wave assigns them all in registry order; clearing first keeps both sides
-	 * deriving the same ids from the same order. Nothing has read an id yet at either call site.
-	 *
-	 * @return how many states the map holds, or -1 when it already agreed with the registry
-	 */
-	/** NeoForge's flower pot table, which its bake callback would fill and never does here. See KernelFlowerPots. */
-	public static int rebuildFlowerPotTable() {
-		return KernelFlowerPots.rebuildTable();
-	}
-
-	/** The switch that puts back the old rule: a non-empty map is left exactly as the first pass built it. */
-	static final String STATE_ID_SWITCH = "forbric.blockStateIdRefill";
-
-	public static int rebuildBlockStateIds() {
-		try {
-			IdMapper<BlockState> idMap = GameData.getBlockStateIDMap();
-			int possible = 0;
-			for (Block block : BuiltInRegistries.BLOCK) {
-				possible += block.getStateDefinition().getPossibleStates().size();
-			}
-			int had = idMap.size();
-			if (had == possible) return -1;
-			if (had > 0 && "off".equalsIgnoreCase(System.getProperty(STATE_ID_SWITCH, "on"))) return -1;
-			if (had > 0 && !clearStateIds(idMap)) return -1;
-
-			int states = 0;
-			for (Block block : BuiltInRegistries.BLOCK) {
-				for (BlockState state : block.getStateDefinition().getPossibleStates()) {
-					idMap.add(state);
-					states++;
-				}
-			}
-			if (had == 0) {
-				ForbricLog.info("[Forbric/Lifecycle] rebuilt NeoForge blockstate→id map (%d states) — the "
-						+ "registration window's clear callback had emptied it", states);
-			} else {
-				ForbricLog.info("[Forbric/Lifecycle] rebuilt NeoForge blockstate→id map (%d states, was %d) — "
-						+ "%d more state(s) were registered after the first pass, and Block.getId answered 0 (AIR) "
-						+ "for every one of them", states, had, states - had);
-			}
-			return states;
-		} catch (Throwable t) {
-			Caught.warn(t, "[Forbric/Lifecycle] could not rebuild NeoForge blockstate→id map "
-					+ "(block_update packets will fail to encode)");
-			return -1;
-		}
-	}
-
-	/**
-	 * Empties the map through NeoForge's own {@code clear()}, the one its registration callback calls.
-	 *
-	 * <p>Package-private on {@code ClearableObjectIntIdentityMap}, so it is reached reflectively. If it is not
-	 * there, the caller leaves the map alone rather than appending duplicate ids.
-	 */
-	private static boolean clearStateIds(IdMapper<BlockState> idMap) {
-		try {
-			java.lang.reflect.Method clear = idMap.getClass().getDeclaredMethod("clear");
-			clear.setAccessible(true);
-			clear.invoke(idMap);
-			return true;
-		} catch (Throwable t) {
-			Caught.warn(t, "[Forbric/Lifecycle] NeoForge's blockstate→id map has no clear() to call — leaving "
-					+ "the ids it already holds rather than appending a second id for every state");
-			return false;
-		}
 	}
 
 	/** The switch that leaves every late-registered block state's cache exactly as the registration left it. */
@@ -191,14 +106,16 @@ public final class KernelRegistryContent {
 	}
 
 	/**
-	 * Re-sorts NeoForge's creative tabs so the ones registered inside the kernel's window reach the tab strip.
+	 * Sorts NeoForge's creative tabs again once a client's Fabric entrypoints have registered theirs, so those reach the
+	 * tab strip ({@code KernelLifecycle.sortNeoCreativeTabs} says when and why).
 	 *
 	 * <p>{@code sortTabs()} REPLACES {@code SORTED_TABS} but only APPENDS to {@code DEFAULT_TABS} — it re-adds the
 	 * four special tabs (hotbar / search / op / inventory) on every call and never clears. The special tabs'
 	 * screen column is {@code indexOf % (size/2) + 5}, so a duplicated list (size 8) yields columns 5..8 and the
 	 * tab-sprite array (length 7) overflows: {@code ArrayIndexOutOfBoundsException: Index 7} in
-	 * {@code extractTabButton} the moment the creative screen renders. The baseline bring-up already sorted once,
-	 * so the kernel's re-sort is always a SECOND call — the list is cleared first to make the call idempotent.
+	 * {@code extractTabButton} the moment the creative screen renders. NeoForge's own {@code GameData.postRegisterEvents}
+	 * tail has run {@code sortTabs()} once already, so this is a SECOND call — the list is cleared first to make the call
+	 * idempotent ({@code DEFAULT_TABS} 4, as native NeoForge 26.2.0.93 has it).
 	 */
 	public static void sortCreativeTabs() {
 		try {
@@ -217,9 +134,9 @@ public final class KernelRegistryContent {
 				names.append(CreativeModeTabRegistry.getName(tab));
 			}
 			ForbricLog.info("[Forbric/Lifecycle] re-sorted NeoForge creative tabs %d -> %d (special tabs: %d, must "
-					+ "stay 4): [%s] (the creative screen's tab strip reads ONLY this list; the baseline sort "
-					+ "predates the kernel's registration window, so window-registered tabs were searchable but "
-					+ "had no tab)", before, after.size(), defaults.size(), names);
+					+ "stay 4): [%s] (the creative screen's tab strip reads ONLY this list; NeoForge sorted it at the "
+					+ "end of RegisterEvent, before the Fabric entrypoints registered their tabs)", before,
+					after.size(), defaults.size(), names);
 		} catch (Throwable t) {
 			Caught.warn(t, "[Forbric/Lifecycle] could not re-sort NeoForge creative tabs "
 					+ "(mod creative tabs may be missing from the tab strip)");
@@ -274,9 +191,9 @@ public final class KernelRegistryContent {
 	 * Fills {@code Item.BY_BLOCK} for every registered {@code BlockItem} — the block→item link.
 	 *
 	 * <p>{@code Block.asItem()} resolves through {@code Item.byBlock(this)}, which is a plain
-	 * {@code BY_BLOCK.get(block)}. The merged {@code BlockItem} constructor only stores its block; it never adds
+	 * {@code BY_BLOCK.get(block)}. NeoForge's {@code BlockItem} constructor only stores its block; it never adds
 	 * itself to that map. In Forge the map is filled by the ITEMS registry's ADD-CALLBACK
-	 * ({@code GameData.ItemCallbacks} → {@code BlockItem.registerBlocks}), and on the merged game that callback
+	 * ({@code GameData.ItemCallbacks} → {@code BlockItem.registerBlocks}), and in the game that callback
 	 * linked into its own registry's map, not the one {@code Item.byBlock} reads — so for every modded block
 	 * {@code asItem()} fell through to AIR.
 	 *
@@ -289,10 +206,8 @@ public final class KernelRegistryContent {
 	 *
 	 * <p>{@code putIfAbsent} so an entry vanilla already established always wins.
 	 *
-	 * <p>Normally this finds nothing left: since {@code BlockItemLinkInjector} the map that callback links into is
-	 * {@code Item.BY_BLOCK} itself ({@link KernelBlockItemLinks}), so every block item is linked as it registers. The
-	 * walk stays as the net under {@code -Dforbric.blockItemLinks=off} and under a merge that moves the map again; a
-	 * non-zero count here means some add did not link.
+	 * <p>The kernel's rewrite of MinecraftForge's item add-callback, which linked each block item as it registered,
+	 * went with MinecraftForge; a non-zero count here means a registration did not link its block item itself.
 	 *
 	 * @return how many links were made
 	 */

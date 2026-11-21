@@ -232,15 +232,15 @@ class MixinCollectionSourceSpellingTest {
 		assertEquals(0, real.adapt(mixin), "idempotence");
 	}
 
-	/** The staged merged base, NeoForge's runtime (the getter's holder), vanilla as fabric-api was compiled against it. */
+	/** The staged base, NeoForge's runtime (the getter's holder), vanilla as fabric-api was compiled against it. */
 	private record Real(Function<String, ClassNode> classes, Function<String, ClassNode> references, byte[] released, List<String> releasedSelectors) {
 		static final String TARGET = "net/minecraft/data/registries/RegistryPatchGenerator";
 
 		static Real open() throws Exception {
-			Path base = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
-			Path neo = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
+			Path base = TestFixtures.stagedBase();
+			Path neo = TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR);
 			Path api = TestFixtures.fabricApi();
-			TestFixtures.requireFiles(TestFixtures.Fixture.STAGED, "staged merged base, NeoForge runtime and the actual Fabric API", base, neo, api);
+			TestFixtures.requireFiles(TestFixtures.Fixture.STAGED, "staged base, NeoForge runtime and the actual Fabric API", base, neo, api);
 			Map<String, byte[]> cache = new HashMap<>();
 			Function<String, byte[]> resource = name -> cache.computeIfAbsent(name, path -> {
 				for (Path jar : List.of(base, neo)) try (ZipFile zip = new ZipFile(jar.toFile())) {
@@ -254,7 +254,7 @@ class MixinCollectionSourceSpellingTest {
 					var entry = zip.getEntry(path);
 					return entry == null ? null : zip.getInputStream(entry).readAllBytes();
 				} catch (java.io.IOException unreadable) { throw new IllegalStateException(unreadable); }
-			});
+			}, null, TestFixtures.launchSources(base));
 			Function<String, ClassNode> references = owner -> natives.get(Ecosystem.FABRIC, owner);
 			TestFixtures.require(TestFixtures.Fixture.STAGED, references.apply(TARGET) != null, "native-indexed vanilla RegistryPatchGenerator required");
 			byte[] released = null;

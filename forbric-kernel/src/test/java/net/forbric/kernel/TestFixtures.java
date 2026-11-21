@@ -46,7 +46,7 @@ public final class TestFixtures {
 
 	/** The kinds of input a clean checkout lacks, one per way a machine comes to have them. */
 	public enum Fixture {
-		/** The staged merged base and carriers under {@link #stagedRoot()}. */
+		/** The staged base and the NeoForge carrier under {@link #stagedRoot()}. */
 		STAGED("staged"),
 		/** build/classes/java/runtime, compiled only when the staged jars are present. */
 		GAME_SIDE("game-side"),
@@ -139,6 +139,14 @@ public final class TestFixtures {
 		for (Path file : files) require(kind, Files.isRegularFile(file), what + ": " + file);
 	}
 
+	/**
+	 * {@link #require(Fixture, boolean, String)} for one file, with {@code what} as given: the shape of the ~270
+	 * {@code require(kind, Files.isRegularFile(file), what)} calls this replaced.
+	 */
+	public static void requireFile(Fixture kind, Path file, String what) {
+		require(kind, Files.isRegularFile(file), what);
+	}
+
 	/** {@link #require(Fixture, boolean, String)} for a directory, such as a local mod pack. */
 	public static void requireDirectory(Fixture kind, String what, Path directory) {
 		require(kind, Files.isDirectory(directory), what + ": " + directory);
@@ -176,6 +184,36 @@ public final class TestFixtures {
 	}
 
 	/**
+	 * The game base under {@link #stagedRoot()}: NeoForge's patched game, NFRT's {@code gameJarNoRecomp} output, which
+	 * the game side compiles against and the kernel launches as {@code --gameJar}. It embeds no native-reference index;
+	 * the FABRIC references come from the vanilla-reference sidecar measured against it ({@link #vanillaReference},
+	 * {@link #launchSources}). Relative, for a test that resolves it against a root of its own.
+	 */
+	public static final String BASE_JAR = "neoforge-patched/patched-mc-neoforge-26.2.jar";
+
+	/** The NeoForge carrier, the one runtime jar a staged root has. */
+	public static final String NEO_CARRIER_JAR = "neoforge-runtime/neoforge-runtime.jar";
+
+	/** {@link #BASE_JAR} under {@link #stagedRoot()}. */
+	public static Path stagedBase() {
+		return stagedRoot().resolve(BASE_JAR);
+	}
+
+	/**
+	 * {@link #stagedBase()} with every class passed through {@code VanillaMemberTwinInjector}, the first transformer of the
+	 * launch's chain, as one jar ({@code transform.PreMixinView#twinnedBase}): the base the census generators read for a
+	 * table whose runtime consumer asks Mixin's (post-chain) view of a class. Every twin row is asserted to have landed.
+	 */
+	public static Path twinnedBase() {
+		return net.forbric.kernel.transform.PreMixinView.twinnedBase();
+	}
+
+	/** {@link #NEO_CARRIER_JAR} under {@link #stagedRoot()}. */
+	public static Path neoCarrier() {
+		return stagedRoot().resolve(NEO_CARRIER_JAR);
+	}
+
+	/**
 	 * The Minecraft directory the game-side compile read its libraries from. Gradle hands it to every test task as
 	 * {@code MC_DIR} (tools/dev.py's {@code .dev/minecraft} when prepared); outside Gradle it falls back to the
 	 * launcher's usual location on this platform, the same default build.gradle uses.
@@ -193,68 +231,69 @@ public final class TestFixtures {
 		return Path.of(home, ".minecraft");
 	}
 
+	/**
+	 * The newest jar under {@code libraries/<path>} of {@link #minecraftDir()} — {@code com/google/guava/guava}, say —
+	 * by file name, sources jars left out; {@code null} when the directory is not there. For a test that builds a class
+	 * loader from the libraries the game compiles against.
+	 */
+	public static Path newestLibrary(String path) throws IOException {
+		Path under = minecraftDir().resolve("libraries").resolve(path);
+		if (!Files.isDirectory(under)) return null;
+		try (var stream = Files.walk(under)) {
+			return stream.filter(f -> f.toString().endsWith(".jar") && !f.toString().contains("sources"))
+					.sorted(java.util.Comparator.comparing(f -> f.getFileName().toString())).reduce((a, b) -> b).orElse(null);
+		}
+	}
+
 	/** Minecraft 26.2's own client jar inside {@link #minecraftDir()}. */
 	public static Path vanillaJar() {
 		return minecraftDir().resolve("versions/26.2/26.2.jar");
 	}
 
 	/**
-	 * MinecraftForge's patched game exactly as the merged base under {@link #stagedRoot()} took it. tools/dev.py stages
-	 * the one its own merge read as {@code forge-patched/}, with the installer's build pins beside it and beside the
-	 * merged base. A tree without matching pins is forbric-loader's, whose {@code forge-patched/} is an older build:
-	 * its merge read the copy a Forbric launcher install keeps under {@code libraries/}, which is also where
-	 * run/build-merged-base.sh reads it by default.
+	 * The vanilla-reference sidecar for {@code base}, built by the installer's own writer (compiled into these tests; see
+	 * build.gradle's installerSidecarSource) from {@link #vanillaJar()}, under build/vanilla-reference/, and reused while
+	 * it records these two inputs. Built here rather than read from the staged root, because a staged root is read-only
+	 * to the tests and a staged sidecar is not known to match it. Skips (or fails, by policy) without either input.
 	 */
-    private static final java.util.Map<String,Boolean> NATIVE_INPUT_MATCHES=new java.util.concurrent.ConcurrentHashMap<>();
-    public static Path forgeMergeInput() {
-        Path staged=stagedRoot().resolve("forge-patched/patched-mc-forge-26.2.jar");
-        Path merged=stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
-        Path launcher=minecraftDir().resolve("libraries/net/forbric/patched-mc-forge/26.2-65.0.1/patched-mc-forge-26.2-65.0.1.jar");
-        try {
-            if(Files.isRegularFile(merged))try(ZipFile jar=new ZipFile(merged.toFile())){
-                var entry=jar.getEntry("META-INF/forbric/native-reference/FORGE/index.tsv");
-                if(entry!=null){
-                    String index;try(InputStream input=jar.getInputStream(entry)){index=new String(input.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);}
-                    if(nativeInputMatches(staged,index))return staged;
-                    if(nativeInputMatches(launcher,index))return launcher;
-                    if(Files.isRegularFile(staged)||Files.isRegularFile(launcher))throw new AssertionFailedError("Neither Forge fixture matches the merged base's complete native-reference input index");
-                    return staged;
-                }
-            }
-        } catch(IOException unavailable){throw new java.io.UncheckedIOException("Reading the merged base's native input proof",unavailable);}
-        if(Files.isRegularFile(staged)&&sameBuild(staged,merged))return staged;
-        return launcher;
-    }
-    private static String digest(byte[] bytes){try{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));}catch(java.security.NoSuchAlgorithmException impossible){throw new AssertionError(impossible);}}
-    private static boolean nativeInputMatches(Path candidate,String index)throws IOException{
-        if(!Files.isRegularFile(candidate))return false;
-        String key=candidate.toAbsolutePath()+":"+Files.size(candidate)+":"+Files.getLastModifiedTime(candidate)+":"+digest(index.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        Boolean known=NATIVE_INPUT_MATCHES.get(key);if(known!=null)return known;
-        boolean matches=true;String[] lines=index.split("\\R");
-        if(lines.length<2||!lines[0].equals("# forbric-native-reference-v1"))throw new AssertionFailedError("Malformed native-reference input index");
-        try(ZipFile jar=new ZipFile(candidate.toFile())){
-            for(int i=1;i<lines.length;i++){
-                if(lines[i].isBlank())continue;String[] row=lines[i].split("\\t",-1);
-                if(row.length!=2||!row[1].matches("[a-f0-9]{64}"))throw new AssertionFailedError("Malformed native-reference input row: "+lines[i]);
-                var entry=jar.getEntry(row[0]+".class");if(entry==null){matches=false;break;}
-                byte[] bytes;try(InputStream input=jar.getInputStream(entry)){bytes=input.readAllBytes();}
-                try{if(!row[1].equals(java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)))){matches=false;break;}}
-                catch(java.security.NoSuchAlgorithmException impossible){throw new AssertionError(impossible);}
-            }
-        }
-        NATIVE_INPUT_MATCHES.put(key,matches);return matches;
-    }
-
-	/** Whether both artifacts carry the same installer build pins ({@code <jar>.pins}), so came out of one build. */
-	private static boolean sameBuild(Path one, Path other) {
-		Path first = one.resolveSibling(one.getFileName() + ".pins");
-		Path second = other.resolveSibling(other.getFileName() + ".pins");
+	public static synchronized Path vanillaReference(Path base) {
+		requireFiles(Fixture.STAGED, "the base a vanilla reference is measured against", base);
+		requireFiles(Fixture.MC_LIBRARIES, "the vanilla jar a vanilla reference is built from", vanillaJar());
+		Path out = Path.of(System.getProperty("user.dir"), "build", "vanilla-reference",
+				Integer.toHexString(base.toAbsolutePath().normalize().toString().hashCode()),
+				net.forbric.installer.kernel.VanillaReference.fileName("26.2"));
 		try {
-			return Files.isRegularFile(first) && Files.isRegularFile(second)
-					&& Files.readString(first).strip().equals(Files.readString(second).strip());
-		} catch (IOException unreadable) {
-			return false;
+			return net.forbric.installer.kernel.VanillaReference.ensure(vanillaJar(), base, out).file();
+		} catch (IOException unbuildable) {
+			throw new AssertionFailedError("could not build the vanilla reference for " + base, unbuildable);
 		}
+	}
+
+	private static final java.util.Map<Path, net.forbric.kernel.mixin.NativeReferenceSources> LAUNCH_SOURCES =
+			new java.util.HashMap<>();
+
+	/**
+	 * The native-reference sources a launch on {@code base} has, for a test that builds its own
+	 * {@code NativeGameReferences} over {@code base}'s resources: {@link #vanillaReference} beside it, the sidecar every
+	 * launch path passes, from which FABRIC is answered (NEOFORGE is answered from the base's own bytes). A base that
+	 * still embeds a FABRIC index (a Forbric &le; 0.3.x merged base, which no launch accepts any more) is opened alone, as
+	 * the kernel opened it then. Without this, a reader over {@link #stagedBase()} has no FABRIC index at all and every
+	 * FABRIC answer it gives is null. Opened once per base and kept open for the JVM, as a launch keeps its own.
+	 */
+	public static synchronized net.forbric.kernel.mixin.NativeReferenceSources launchSources(Path base) {
+		requireFiles(Fixture.STAGED, "the base whose native references a launch reads", base);
+		Path key = base.toAbsolutePath().normalize();
+		var known = LAUNCH_SOURCES.get(key);
+		if (known != null) return known;
+		boolean embeds;
+		try (ZipFile jar = new ZipFile(key.toFile())) {
+			embeds = jar.getEntry("META-INF/forbric/native-reference/FABRIC/index.tsv") != null;
+		} catch (IOException unreadable) {
+			throw new AssertionFailedError("could not open the base " + base, unreadable);
+		}
+		var sources = net.forbric.kernel.mixin.NativeReferenceSources.open(key, embeds ? null : vanillaReference(key));
+		LAUNCH_SOURCES.put(key, sources);
+		return sources;
 	}
 
 	/**

@@ -40,7 +40,7 @@ import org.objectweb.asm.Opcodes;
  */
 @ResourceLock("system-properties")
 class NeoGraphicsBootstrappersTest {
-	private static final Path NEO_RUNTIME = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar")
+	private static final Path NEO_RUNTIME = TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR)
 			.toAbsolutePath().normalize();
 
 	@TempDir
@@ -267,7 +267,7 @@ class NeoGraphicsBootstrappersTest {
 	}
 
 	private ClassLoader configLoader() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEO_RUNTIME), "staged neoforge-runtime.jar absent");
+		TestFixtures.requireFile(Fixture.STAGED, NEO_RUNTIME, "staged neoforge-runtime.jar absent");
 		TestFixtures.require(Fixture.JAVA_25, Runtime.version().feature() >= 25,
 				"the carrier's classes are class-file 69, which only Java 25 links");
 		Path nightConfig = kernelNightConfig();

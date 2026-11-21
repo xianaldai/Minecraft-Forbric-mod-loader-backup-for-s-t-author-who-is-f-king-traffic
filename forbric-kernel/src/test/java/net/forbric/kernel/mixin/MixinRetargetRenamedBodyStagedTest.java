@@ -28,7 +28,7 @@ import net.forbric.kernel.TestFixtures;
 import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
- * R3 over the REAL merged base: every move it makes in the pinned Fabric API's own mixins, and the audit of its moves
+ * R3 over the REAL staged base: every move it makes in the pinned Fabric API's own mixins, and the audit of its moves
  * over 655 mod jars replayed injector for injector — each the real selector, anchor, kind and ecosystem of one mod's
  * handler — so a regression on either side shows here without the third-party jars.
  *
@@ -39,7 +39,7 @@ import net.forbric.kernel.TestFixtures.Fixture;
  * nothing calls: they move there again, now saying the injector never runs.
  */
 class MixinRetargetRenamedBodyStagedTest {
-	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedBase().normalize();
 	private static final String TOOLTIP = CarrierRenameCensusTest.TOOLTIP;
 	private static final String ITEM_STACK = "net/minecraft/world/item/ItemStack";
 
@@ -57,7 +57,7 @@ class MixinRetargetRenamedBodyStagedTest {
 			"net/fabricmc/fabric/mixin/entity/event/ServerPlayerMixin#onSetSpawnPoint -> lambda$startSleepInBed$0",
 			"net/fabricmc/fabric/mixin/entity/event/ServerPlayerMixin#redirectSleepDirection -> lambda$startSleepInBed$0",
 			"net/fabricmc/fabric/mixin/resource/ServerConfigurationPacketListenerImplMixin#filterKnownPacks -> runConfiguration");
-	/** fabric-item-api's three moves into addDetailsToTooltipComponents, which nothing in the merged game calls. */
+	/** fabric-item-api's three moves into addDetailsToTooltipComponents, which nothing in the game calls. */
 	private static final Set<String> FABRIC_API_DEAD = Set.of(
 			"net/fabricmc/fabric/mixin/item/ItemStackMixin#preAppendComponentTooltip -> addDetailsToTooltipComponents",
 			"net/fabricmc/fabric/mixin/item/ItemStackMixin#preAttributeModifiers -> addDetailsToTooltipComponents",
@@ -327,7 +327,7 @@ class MixinRetargetRenamedBodyStagedTest {
 	/** Every mixin class in the pinned Fabric API's modules. */
 	private static List<ClassNode> fabricApiMixins() throws Exception {
 		Path api = TestFixtures.fabricApi();
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(api), "actual Fabric API fixture required: " + api);
+		TestFixtures.requireFile(Fixture.STAGED, api, "actual Fabric API fixture required: " + api);
 		List<ClassNode> mixins = new java.util.ArrayList<>();
 		try (ZipFile outer = new ZipFile(api.toFile())) {
 			for (ZipEntry nested : Collections.list(outer.entries())) {
@@ -361,9 +361,9 @@ class MixinRetargetRenamedBodyStagedTest {
 		return false;
 	}
 
-	/** The staged merged base, each class read once: the Fabric API scan resolves thousands of targets and supertypes. */
+	/** The staged base, each class read once: the Fabric API scan resolves thousands of targets and supertypes. */
 	private static Function<String, byte[]> mergedResolver() {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.requireFile(Fixture.STAGED, MERGED_BASE, "staged base absent");
 		java.util.Map<String, java.util.Optional<byte[]>> read = new java.util.HashMap<>();
 		return name -> read.computeIfAbsent(name, entry -> {
 			try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {

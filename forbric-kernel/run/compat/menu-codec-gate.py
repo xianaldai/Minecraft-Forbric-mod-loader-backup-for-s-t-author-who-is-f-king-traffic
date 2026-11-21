@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Open Farmer's Delight's cooking pot on a real server, with the wrapped registries' entry events off and on."""
+"""Open Farmer's Delight's cooking pot (the Fabric build) on a real kernel server under the strict policy.
+
+A positive check, kept as a manual tool (it is not a gate). Until Stage 4 it also ran a baseline with
+-Dforbric.wrapperEntryEvents=off, which turned off the merged base's MinecraftForge-wrapper half of the registries'
+entry events, so fabric-menu-api never heard of the menu type and opening the pot threw "Codec for
+farmersdelight:cooking_pot is not registered!". That switch is retired with the merged base: on NeoForge's base the
+baseline passed all three checks (menu.extended, menu.codec, pot.opens) and its "negative control" could only fail, so
+it went. Nothing on NeoForge's base is switched off here; the fixed run must pass every check with no confirmed loss.
+"""
 import argparse
 from datetime import datetime
 import hashlib
@@ -24,7 +32,7 @@ def main():
     kernel = Path(__file__).resolve().parents[2]
     # The same defaults as the kernel build: FORBRIC_OLD, then tools/dev.py prepare's tree, then the substrate's.
     dev = kernel / '.dev'
-    staged = os.environ.get('FORBRIC_OLD') or (dev / 'staged' if (dev / 'staged/run/merged-base').is_dir() else kernel.parent / 'forbric-loader')
+    staged = os.environ.get('FORBRIC_OLD') or (dev / 'staged' if (dev / 'staged/run/neoforge-patched').is_dir() else kernel.parent / 'forbric-loader')
     stage = (args.staged_root or Path(staged) / 'run').resolve()
     # Like the build: .dev/minecraft only while it has the version JSON this script reads below.
     mc = Path(os.environ.get('MC_DIR') or (dev / 'minecraft' if (dev / 'minecraft/versions/26.2/26.2.json').is_file()
@@ -44,17 +52,17 @@ def main():
     output = (args.output or kernel / 'build/verification' / ('menu-codec-' + datetime.now().strftime('%Y%m%d-%H%M%S'))).resolve()
     output.mkdir(parents=True, exist_ok=False)
     root = kernel / 'canary/menu-codec'
-    game = stage / 'merged-base/patched-mc-merged-26.2.jar'
-    forge = stage / 'merged-base/forge-runtime-interop.jar'
+    # The game base and its NeoForge carrier, as the launcher runs them (its defaults under the stage).
+    game = stage / 'neoforge-patched/patched-mc-neoforge-26.2.jar'
     neo = stage / 'neoforge-runtime/neoforge-runtime.jar'
     # The kernel's boot jar carries Fabric Loader's API (ModInitializer); launch-kernel-server.sh rebuilds it below.
     loader = kernel / 'build/libs/forbric-kernel-0.1.0-SNAPSHOT.jar'
-    for path in (game, forge, neo, loader, delight, api):
+    for path in (game, neo, loader, delight, api):
         if not path.is_file():
             parser.error(f'Missing prerequisite: {path}')
     with tempfile.TemporaryDirectory(prefix='menu-probe-', dir=output) as temp:
         temp = Path(temp)
-        cp = [game, forge, neo, loader, delight]
+        cp = [game, neo, loader, delight]
         with zipfile.ZipFile(api) as jar:
             for name in jar.namelist():
                 if name.startswith('META-INF/jars/') and name.endswith('.jar'):
@@ -75,7 +83,7 @@ def main():
                 jar.write(path, path.relative_to(classes).as_posix())
             jar.write(root / 'fabric.mod.json', 'fabric.mod.json')
     results = {}
-    for phase in ('baseline', 'fixed'):
+    for phase in ('fixed',):
         run = output / phase
         (run / 'mods').mkdir(parents=True)
         for jar in (probe, delight, api):
@@ -84,9 +92,9 @@ def main():
             'server-ip=127.0.0.1\nserver-port=0\nlevel-name=world\nlevel-type=minecraft:flat\n'
             'generate-structures=false\nonline-mode=false\nmax-tick-time=-1\npause-when-empty-seconds=0\n'
             'view-distance=2\nsimulation-distance=2\nspawn-protection=0\n')
-        env = dict(os.environ, FORBRIC_OLD=str(stage.parent), MC_DIR=str(mc), RUNDIR=str(run),
-                   FORBRIC_COMPAT_POLICY='strict' if phase == 'fixed' else 'continue',
-                   FORBRIC_JVM='-Xmx2G' + (' -Dforbric.wrapperEntryEvents=off' if phase == 'baseline' else ''))
+        # No MC_DIR: the launcher reads the game's libraries from its own default, as every gate does.
+        env = dict(os.environ, FORBRIC_OLD=str(stage.parent), RUNDIR=str(run), FORBRIC_COMPAT_POLICY='strict',
+                   FORBRIC_JVM='-Xmx2G')
         with (run / 'console.log').open('w') as log:
             subprocess.run([str(kernel / 'run/launch-kernel-server.sh')], env=env,
                            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=300)
@@ -98,16 +106,11 @@ def main():
             raise RuntimeError(f'{phase}: expected the three menu checks, got {sorted(cases)}')
         failed = sorted(name for name, case in cases.items() if not case['pass'])
         results[phase] = {'passed': len(cases) - len(failed), 'failed': failed}
-        if phase == 'baseline':
-            # The issue's own failure: the type is registered, fabric-menu-api never heard of it, and opening throws.
-            if failed != ['menu.codec', 'pot.opens'] or 'Codec for farmersdelight:cooking_pot is not registered!' not in cases['pot.opens']['detail']:
-                raise RuntimeError(f'Negative control failed: {cases}')
-        else:
-            compatibility = json.loads((run / '.forbric-kernel/compatibility-report.json').read_text())
-            confirmed = [f for f in compatibility['findings']
-                         if f.get('modId') in ('farmersdelight', 'fabric-menu-api-v1') and f.get('confidence') == 'CONFIRMED']
-            if failed or confirmed or compatibility['policy'] != 'STRICT':
-                raise RuntimeError(f'Fixed run failed: cases={[cases[name] for name in failed]}, compatibility={confirmed}')
+        compatibility = json.loads((run / '.forbric-kernel/compatibility-report.json').read_text())
+        confirmed = [f for f in compatibility['findings']
+                     if f.get('modId') in ('farmersdelight', 'fabric-menu-api-v1') and f.get('confidence') == 'CONFIRMED']
+        if failed or confirmed or compatibility['policy'] != 'STRICT':
+            raise RuntimeError(f'Fixed run failed: cases={[cases[name] for name in failed]}, compatibility={confirmed}')
         print(f'{phase}: {len(cases) - len(failed)}/{len(cases)} menu checks passed', flush=True)
     for name, path in (('farmers_delight', delight), ('fabric_api', api),
                        ('kernel', kernel / 'build/libs/forbric-kernel-0.1.0-SNAPSHOT.jar')):

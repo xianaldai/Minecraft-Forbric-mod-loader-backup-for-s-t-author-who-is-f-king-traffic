@@ -3,11 +3,50 @@
 #   1. offline build (boot jar) succeeds
 #   1b. capture what the kernel defines with fabric-api installed (the one opt-in unit-test fixture)
 #   2. ported unit tests green (transform / access / mapping / metadata / discovery), with nothing skipped
-#   3. kernel --scan produces well-formed JSON discovering mods across all 3 ecosystems (both merged sets)
-#   4. differential oracle: kernel parser ≡ independent ground-truth parser on the real mod sets
-#   6. the evidence, soak and link-gate tools' own tests, and the transfer-engine suite, all actually executed
+#   3. kernel --scan produces well-formed JSON discovering Fabric and NeoForge mods, and no MinecraftForge mod, in both
+#      fixture sets (server-merged, client-merged: the names are the fixtures', Stage 5 renames them)
+#   4. the game links: the base and carrier as the kernel's first COREMOD pair hands them on, the kernel's game side and
+#      the helpers the step-1b launch generated -- existence, access levels and nest membership, final, a member's or
+#      class's kind (static or not, class or interface, abstract), invokedynamic handles (D32) -- against the launch's
+#      own class path, with every reference judged
+#   5. differential oracle: kernel parser ≡ independent ground-truth parser on the real mod sets, and its negative
+#      control (step 5b): with the kernel's refusals and set-asides withheld it fails on exactly those mods
+#   6. the evidence, soak and link-check tools' own tests, and the transfer-engine suite, all actually executed
 # This is the differential-oracle foundation every later milestone builds on.
-# GATE-PARALLEL: rundirs=server-m0-definitions mem=2000  (builds and runs the unit suite)
+#
+# STAGE 3 OF DROPPING MinecraftForge (what changed and why). The kernel now refuses a MinecraftForge-only jar, naming it
+# on a "[Forbric/Unsupported] refusing <jar> (<id>)" line and reporting none of its mods. Both merged sets hold such
+# jars (server-merged: forbric-bridge, forbriclive, spark; client-merged: forbric-bridge, xaerominimap), and the
+# oracle's independent reader still reads every mods.toml as FORGE, so step 5 went red with those mods "MISSED". No
+# check is dropped. diff-oracle.sh now accepts a missing FORGE mod only as an asserted divergence -- every jar declaring
+# it refused by name on the kernel's own line, naming an id that jar declares, the jar declaring no Fabric or NeoForge
+# mod, and nothing reported from it -- and its PASS line names each refused mod; every other difference (a FORGE mod
+# missing with no refusal, any Fabric or NeoForge miss, anything spurious, an unsound refusal) still fails. Step 5b is
+# new: the same scans with the refusal lines withheld must fail on exactly the mods step 5 named, so the acceptance is
+# shown to rest on the refusals.
+#
+# STAGE 4 OF DROPPING MinecraftForge (what changed and why). The base is NeoForge's own patched game; the merged base
+# and the MinecraftForge carrier are gone from the stage. Step 0 compares the base the tests read (BASE) instead of
+# MERGED. Step 3: discovery no longer reports any MinecraftForge mod (a universal jar's mods.toml half is set aside, a
+# MinecraftForge-only jar is refused), so the scan must show Fabric and NeoForge and NOT FORGE; it used to require all
+# three. Step 4 checked the merged base's links against the merged baseline, an input that no longer exists; C5 had it
+# print an explicit SKIP naming C6 (D64), and C6 reseeded it on the game base in the kernel tree (net.forbric.kernel.linkcheck,
+# D32): see step 4. Step 5: the fixture sets still
+# hold forge-runtime.jar, the old MinecraftForge carrier with a Fabric half ("forge") and a mods.toml half; the kernel
+# loads the Fabric half and sets the mods.toml half aside, so the oracle (which reads every mods.toml as FORGE) sees
+# (FORGE, forge) missing. diff-oracle accepts that too, only as an asserted divergence of its own (a set-aside half,
+# D32): the jar also declares a Fabric or NeoForge mod, every one of those the kernel reported from that jar, and the
+# jar was not refused. Step 5b withholds the set-asides with the refusals, and must fail on exactly both sets of mods.
+# Step 6's link checks (C6): the old merge tool's negative controls, the installer's packaged link gate and its bundled
+# baseline went with the old merge-tools jar. Step 6 now holds step 2 to having run the new checker's own tests, runs the
+# installer's tests (its packaged checker on synthetic jars), and checks that the installer bundles the checker the tree
+# builds.
+# The unit suite runs in up to four worker JVMs (build.gradle maxParallelForks): measured 2026-11-16 (lane OPT), every
+# java process of the suite together peaked at 3.4 GB resident in the two forked runs whose whole-java total was
+# sampled (the four workers 2.9-3.1 GB in all three), against 2.7 GB in one fork (sampled after its first minutes;
+# workers alone 2.1 GB over the whole run). mem is what the scheduler reserves beside the other gates of a sweep.
+# GATE-PARALLEL: rundirs=server-m0-definitions mem=3500  # builds and runs the unit suite
+# GATE-CACHE: tests   (runs test sources, so a test-only change re-runs it; see run/compat/gate_cache.py)
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
@@ -30,15 +69,31 @@ print(f"{len(files)} {tests} {skipped} {failures} {errors}")
 PYEOF
 }
 
+# The same verdict over the report files of one glob only (one test class or package).
+junit_summary_of() {
+  python3 - "$1" "$2" <<'PYEOF'
+import glob, os, sys, xml.etree.ElementTree as ET
+tests = skipped = failures = errors = 0
+files = glob.glob(os.path.join(sys.argv[1], sys.argv[2]))
+for f in files:
+    r = ET.parse(f).getroot()
+    tests += int(r.get("tests", 0)); skipped += int(r.get("skipped", 0))
+    failures += int(r.get("failures", 0)); errors += int(r.get("errors", 0))
+print(f"{len(files)} {tests} {skipped} {failures} {errors}")
+PYEOF
+}
+
 step "0. the base the unit tests read is the base this run checks"
-# The bytecode tests and the kernel-runtime compile read $RUN_OLD/... (build.gradle hands them that root); step 4
-# link-checks ${MERGED:-...}. With MERGED naming a candidate and FORBRIC_OLD the reference checkout they are two
-# different jars, and this gate would pass the unit tests on one base and the link check on another while the
-# evidence recorded only the second. Same bytes, or no verdict. (FORGE_RT is the interop jar, derived from the raw
-# runtime the tests read, so it has no staged twin to compare.)
-for pair in "MERGED:$RUN_OLD/merged-base/patched-mc-merged-26.2.jar" "NEO_RT:$RUN_OLD/neoforge-runtime/neoforge-runtime.jar"; do
+# The bytecode tests and the kernel-runtime compile read $RUN_OLD/... (build.gradle hands them that root); a BASE or
+# NEO_RT naming a candidate while FORBRIC_OLD names the reference checkout would be two different jars, and this gate
+# would pass the unit tests on one base while the evidence recorded the other. Same bytes, or no verdict.
+for pair in "BASE:$RUN_OLD/neoforge-patched/patched-mc-neoforge-26.2.jar" "NEO_RT:$RUN_OLD/neoforge-runtime/neoforge-runtime.jar"; do
   var="${pair%%:*}"; staged="${pair#*:}"; requested="${!var:-}"
-  [ -n "$requested" ] || { echo "[kernel] PASS $var unset: the tests and the link check both read $staged"; continue; }
+  if [ -z "$requested" ]; then
+    if [ -f "$staged" ]; then echo "[kernel] PASS $var unset: the tests read $staged"
+    else echo "[kernel] FAIL $var unset and the base the tests read is missing: $staged"; FAIL=1; fi
+    continue
+  fi
   if [ -f "$requested" ] && [ -f "$staged" ] && cmp -s "$requested" "$staged"; then
     echo "[kernel] PASS $var is the jar the unit tests read ($staged)"
   else
@@ -60,6 +115,7 @@ step "1b. capture the final definitions the opt-in replay test reads"
 # without them. Step 2 counts every skip as a failure, and nothing here produced the capture, so this gate was red on
 # every machine for two tests nobody could run. It is produced here instead: a dedicated server with fabric-api
 # alone, recording every class its loader defines (-Dforbric.definedClassEvidence).
+refuse_shared_rundir "$KERNEL/run/server-m0-definitions"   # outside the fragment: its contract test stubs lib.sh
 # M0_CAPTURE_BEGIN (AntiCheatGateLogTest's way: GateM0CaptureStepTest runs this fragment against a stubbed server)
 DEFINED="$BUILD/gate-m0-definitions"
 DRUN="$KERNEL/run/server-m0-definitions"
@@ -146,92 +202,175 @@ else
   echo "[kernel] PASS transfer tests ($tests ran, 0 skipped, 0 failed)"
 fi
 
-step "3. --scan across both merged mod sets"
+step "3. --scan across both fixture mod sets (Fabric and NeoForge, no MinecraftForge)"
 kernel_classpath
 for set in server-merged client-merged; do
   dir="$RUN_OLD/$set/mods"
   [ -d "$dir" ] || { echo "[kernel] FAIL $set (required fixture missing: $dir)"; FAIL=1; continue; }
   out="$BUILD/scan/$set.json"; mkdir -p "$BUILD/scan"
   kernel_scan "$dir" "$out" >/dev/null
-  # well-formed + non-empty + all three ecosystems represented
+  # well-formed + non-empty + both loaded ecosystems represented, and no MinecraftForge mod reported
+  # M0_SCAN_JUDGE_BEGIN (GateM0CaptureStepTest, the red control, runs this exact judge on a scan JSON with a FORGE row)
   python3 - "$out" "$set" <<'PY'
 import json,sys
 o=json.loads(open(sys.argv[1]).read()); s=sys.argv[2]
 ecos={m["ecosystem"] for m in o["mods"]}
-ok = o["count"]>0 and {"FABRIC","FORGE","NEOFORGE"}<=ecos
+ok = o["count"]>0 and {"FABRIC","NEOFORGE"}<=ecos and "FORGE" not in ecos
 print(f"[kernel] {'PASS' if ok else 'FAIL'} scan {s}: {o['count']} mods, ecosystems={sorted(ecos)}")
 sys.exit(0 if ok else 1)
 PY
   [ $? -eq 0 ] || FAIL=1
+  # M0_SCAN_JUDGE_END
 done
 
-step "4. the merged base links (against the committed baseline)"
-# The link check lived only in build-merged-base.sh, which runs when someone rebuilds the base -- so between
-# rebuilds nothing ever asked whether the artifact every test and every gate reads still resolves. That is the
-# same shape as the check whose exit code was thrown away: present, and never consulted.
-#
-# Here it costs one pass over three staged jars and answers the only question that matters between rebuilds:
-# is this the base the tree was calibrated against. This is an integration gate: missing inputs FAIL.
-# A clean checkout can still run `gradlew jar test` independently without staged game artifacts.
-# The baseline and the TOOL are SOURCE (committed, in this tree); the jars are ARTIFACTS (staged, wherever
-# FORBRIC_OLD says). Resolving source through RUN_OLD sends a second worktree to another checkout for both --
-# which it did on the first run here, compiling that checkout's copy of the tool, which had no --baseline flag
-# and read the flag as a jar path.
-LINK_BASELINE="${LINK_BASELINE:-$KERNEL/../forbric-loader/src/test/resources/merge/link-check-baseline.txt}"
-LINKLOG="$BUILD/gate-m0-linkcheck.log"
-if LINK_BASELINE="$LINK_BASELINE" bash "$KERNEL/../forbric-loader/run/check-merged-links.sh" \
-    "${MERGED:-$RUN_OLD/merged-base/patched-mc-merged-26.2.jar}" \
-    "${NEO_RT:-$RUN_OLD/neoforge-runtime/neoforge-runtime.jar}" \
-    "${FORGE_RT:-$RUN_OLD/merged-base/forge-runtime-interop.jar}" > "$LINKLOG" 2>&1; then
-  check "the merged base links no worse than the baseline" "dangling references: [0-9]+ \(known [0-9]+, new 0\)" "$LINKLOG"
+step "4. the game links (base, carrier, the kernel's game side, the helpers it generated)"
+# The link check of the game a launch assembles, reseeded on the genuine stage in C6 (D32): every reference the base, the
+# NeoForge carrier, the kernel's game side and the helper classes the step-1b launch generated make to one another must
+# link as the JVM links it -- the class and member exist, are accessible from the referring class (a nestmate only when
+# its host lists it), a final member is not written or overridden, a member or class is still of the kind the reference
+# expects (IncompatibleClassChangeError, InstantiationError), every invokedynamic bootstrap and method-handle constant
+# resolves. A helper Mixin synthesised is its target's nest member only in the target as Mixin wove it, so that one
+# attribute is taken from the capture's bytes of the target (GameLinkCheck). The base and carrier are
+# read as the kernel's first COREMOD pair (the vanilla twins, then the compat repairs) hands them on, so a reference to a
+# twin is judged against the twin as the game has it (Hud.extractHotbarAndDecorations exists there, and is private).
+# Helpers are the classes the capture holds that no input jar, library, the kernel's boot jar or fabric-api provides.
+# The checker's own controls (red on each check, the JVM agreeing with every verdict, false-positive controls) are
+# LinkCheckTest and GameLinkStagedTest in step 2; step 6 holds step 2 to having run them.
+LINKLOG="$BUILD/gate-m0-link.log"
+[ -n "${KERNEL_CP:-}" ] || kernel_classpath
+# The libraries are the ones the step-1b launch put on the game's class path, never a whole libraries folder (one folder
+# can hold several versions of a library and older Forbric jars, and the first one read would win): the Minecraft dir
+# that launch read (launch-kernel-server.sh's own default), whose version JSON GameLinkCheck resolves as that script does
+# (--minecraft), and the kernel's boot class path, which the launch puts on the same parent class path.
+GAME_MC="${MC_DIR:-$HOME/Library/Application Support/minecraft}"
+BOOT_LIBS=()
+IFS=: read -ra BOOT_ENTRIES <<<"$KERNEL_CP"
+for entry in "${BOOT_ENTRIES[@]}"; do [ -n "$entry" ] && BOOT_LIBS+=(--lib "$entry"); done
+GAME_SIDE_JAR="$(ls "$BUILD"/libs/forbric-kernel-runtime-*.jar 2>/dev/null | head -1)"
+CAPTURE="$(ls -d "$DEFINED"/definitions-* 2>/dev/null | head -1)"
+if [ -z "$GAME_SIDE_JAR" ] || [ -z "$CAPTURE" ] || [ ! -f "$GAME_MC/versions/26.2/26.2.json" ] || [ "${#BOOT_LIBS[@]}" -eq 0 ]; then
+  echo "[kernel] FAIL the link check has no inputs: game side '${GAME_SIDE_JAR}', capture '${CAPTURE}', version JSON" \
+    "'$GAME_MC/versions/26.2/26.2.json', boot class path entries ${#BOOT_LIBS[@]}"
+  FAIL=1
 else
-  echo "[kernel] FAIL link check — missing inputs or new dangling references (see $LINKLOG)"; FAIL=1
-  tail -15 "$LINKLOG"
+  java -cp "$KERNEL_CP" net.forbric.kernel.linkcheck.game.GameLinkCheck \
+      --base "$RUN_OLD/neoforge-patched/patched-mc-neoforge-26.2.jar" \
+      --carrier "$RUN_OLD/neoforge-runtime/neoforge-runtime.jar" \
+      --sidecar "$RUN_OLD/vanilla-reference/vanilla-reference-26.2.jar" \
+      --game-side "$GAME_SIDE_JAR" --minecraft "$GAME_MC" "${BOOT_LIBS[@]}" \
+      --definitions "$CAPTURE" --known "$BUILD/libs/forbric-kernel-0.1.0-SNAPSHOT.jar" \
+      --known "$KERNEL/run/client-merged-pack/mods/fabric-api-0.155.2+26.2.jar" 2>&1 | filter_noise > "$LINKLOG"
+  grep -aE '^\[(MISSING_|CLASS_ACCESS|MEMBER_ACCESS|FINAL|INCOMPATIBLE|INDY_)' "$LINKLOG" | head -20
+  grep -aE '^\[link-check\] (view|missing|loaded|generated helper|nest member)' "$LINKLOG"
+  check_exactly "the game links: nothing missing, inaccessible, final, of another kind or unresolved in a method handle" \
+    '^\[link-check\] loaded [0-9]+ classes .*; dangling references: 0$' "$LINKLOG" 1
+  # With the launch's own class path every supertype is readable, so every reference is judged: a library the check was
+  # not given (or one the launch lacks) shows here as references it could only count.
+  check_exactly "every reference was judged: no supertype the launch's class path lacks" \
+    '^\[link-check\] loaded [0-9]+ classes .* 0 unresolvable through an unread supertype, .*; dangling references: [0-9]+$' "$LINKLOG" 1
+  check_exactly "the view is the launch's: every vanilla twin landed (at least one) and every class was viewed" \
+    '^\[link-check\] view: [0-9]+ class\(es\) .* twins landed ([1-9][0-9]*) of \1; generated helpers scanned [1-9][0-9]*$' "$LINKLOG" 1
+  check "the launch's generated helpers were read from its capture and judged" '^\[link-check\] generated helper: ' "$LINKLOG"
 fi
 
 step "5. differential oracle (kernel parser vs independent ground truth)"
-"$KERNEL/run/diff-oracle.sh" "$RUN_OLD/server-merged/mods" "$RUN_OLD/client-merged/mods" || FAIL=1
+ORACLELOG="$BUILD/gate-m0-oracle.log"
+"$KERNEL/run/diff-oracle.sh" "$RUN_OLD/server-merged/mods" "$RUN_OLD/client-merged/mods" >"$ORACLELOG" 2>&1 || FAIL=1
+cat "$ORACLELOG"
 
-step "6. the evidence, soak and link-gate tools' own tests"
+step "5b. negative control: the same sets with the refusals and set-asides withheld (must FAIL on exactly those mods)"
+# Step 5 accepts a MinecraftForge mod the kernel left out only on the kernel's own refusal of its jar, or as the
+# set-aside half of a jar whose Fabric or NeoForge half the kernel reported. Withhold both and the same scans must turn
+# into misses -- exactly the mods step 5 named as refused or set aside, in each set, and nothing else. If the oracle
+# still passed, its acceptance would not be reading them at all; and with no refused or no set-aside mod in the sets
+# that acceptance (and this control) would be measuring nothing, which is a failure here too.
+CONTROLLOG="$BUILD/gate-m0-oracle-control.log"
+if ORACLE_CONTROL=unrefused "$KERNEL/run/diff-oracle.sh" "$RUN_OLD/server-merged/mods" "$RUN_OLD/client-merged/mods" \
+    >"$CONTROLLOG" 2>&1; then
+  echo "[kernel] FAIL the oracle passed with the refusal lines withheld — see $CONTROLLOG"; FAIL=1
+fi
+python3 - "$ORACLELOG" "$CONTROLLOG" <<'PY' || FAIL=1
+import ast, re, sys
+main, control = (open(p, errors="replace").read().splitlines() for p in sys.argv[1:3])
+refused = {}  # set -> {(FORGE, id)} step 5 accepted as refused by name or as a set-aside half
+kinds = {"refused": 0, "set aside": 0}
+for line in main:
+    m = re.match(r"\[oracle\] PASS (\S+): (.*)$", line)
+    if not m:
+        continue
+    for note in m.group(2).split("; "):
+        for marker, kind in (("refused them by name: ", "refused"), ("set aside beside a loaded Fabric or NeoForge half: ", "set aside")):
+            if marker in note:
+                ids = {("FORGE", part.split(" (")[0]) for part in note.split(marker, 1)[1].split(", ")}
+                refused.setdefault(m.group(1), set()).update(ids)
+                kinds[kind] += len(ids)
+missed, other = {}, []
+for line in control:
+    m = re.match(r"\[oracle\] FAIL (\S+): kernel MISSED (\[.*?\]) \(", line)
+    if m:
+        missed[m.group(1)] = set(ast.literal_eval(m.group(2)))
+    elif line.startswith("[oracle] FAIL"):
+        other.append(line)
+ok = all(kinds.values()) and missed == refused and not other
+total = sum(len(v) for v in refused.values())
+if ok:
+    print(f"[kernel] PASS withholding the refusals and set-asides fails the oracle on exactly the {total} mod(s) "
+          f"({kinds['refused']} refused, {kinds['set aside']} set aside) of {len(refused)} set(s), and on nothing else")
+else:
+    print(f"[kernel] FAIL withholding the refusals and set-asides did not fail the oracle on exactly those mods ({kinds}): "
+          f"refused={sorted((s, sorted(v)) for s, v in refused.items())} "
+          f"control missed={sorted((s, sorted(v)) for s, v in missed.items())} other={other}")
+sys.exit(0 if ok else 1)
+PY
+
+step "6. the evidence, soak and link-check tools' own tests"
 # These tools decide what a release is. Their tests used to run only by hand, so a regression in the recorder
-# or the link gate would have been found by the release it waved through.
+# or the link gate would have been found by the release it waved through. test_gate_locale holds every gate to
+# handing its game JVMs the caller's FORBRIC_JVM: without it a sweep run in another language tests the host's.
+# test_gate_cache and test_control_arm hold the verdict cache and lib.sh's control arms to what they must see: every
+# gate that runs tests keys on them, every fixture a gate stages is hashed, every environment knob a script reads is
+# in the key. They ran only under toolTest and CI before, so a sweep could reuse a stale GREEN they would have caught
+# (review OPT wave 2d, both lenses).
 TOOLLOG="$BUILD/gate-m0-tooling.log"
-if (cd "$KERNEL/run/compat" && python3 -m unittest -v test_evidence test_soak test_world_parity) >"$TOOLLOG" 2>&1; then
+if (cd "$KERNEL/run/compat" && python3 -m unittest -v test_evidence test_soak test_world_parity test_gate_locale \
+      test_gate_cache test_control_arm) >"$TOOLLOG" 2>&1; then
   ran=$(grep -aoE '^Ran [0-9]+ tests?' "$TOOLLOG" | grep -oE '[0-9]+' | tail -1)
   if [ "${ran:-0}" -gt 0 ] && grep -aqE '^OK$' "$TOOLLOG"; then
-    echo "[kernel] PASS evidence and soak tool tests ($ran ran, none skipped)"
+    echo "[kernel] PASS evidence, soak, locale and cache tool tests ($ran ran, none skipped)"
   else
-    echo "[kernel] FAIL evidence and soak tool tests — ${ran:-0} ran, or some were skipped; see $TOOLLOG"; FAIL=1
+    echo "[kernel] FAIL evidence, soak, locale and cache tool tests — ${ran:-0} ran, or some were skipped; see $TOOLLOG"; FAIL=1
   fi
 else
-  echo "[kernel] FAIL evidence and soak tool tests — see $TOOLLOG"; FAIL=1
+  echo "[kernel] FAIL evidence, soak, locale and cache tool tests — see $TOOLLOG"; FAIL=1
 fi
-LINKTESTLOG="$BUILD/gate-m0-link-selftest.log"
-if bash "$KERNEL/../forbric-loader/run/test-link-check.sh" >"$LINKTESTLOG" 2>&1; then
-  check "the link checker's own negative controls" "ALL GREEN" "$LINKTESTLOG"
+# The link checker's own controls ran in step 2, from its XML: each check red on its own cases, the JVM throwing what each
+# verdict predicts, the false-positive controls, the Hud-shaped and narrowed-carrier controls on the real stage. A test
+# filter or a skipped class would otherwise leave the step-4 verdict resting on a checker nobody exercised.
+read -r xmls tests skipped failures errors <<<"$(junit_summary_of "$RESULTS" 'TEST-net.forbric.kernel.linkcheck.*.xml')"
+if [ "${xmls:-0}" -ge 2 ] && [ "${tests:-0}" -gt 0 ] && [ "${skipped:-0}" -eq 0 ] && [ "${failures:-0}" -eq 0 ] \
+    && [ "${errors:-0}" -eq 0 ]; then
+  echo "[kernel] PASS the link checker's own controls ran in step 2 ($xmls classes, $tests tests, none skipped or failed)"
 else
-  echo "[kernel] FAIL the link checker's own negative controls — see $LINKTESTLOG"; FAIL=1
+  echo "[kernel] FAIL the link checker's own controls did not all run in step 2 ($xmls classes, $tests tests, $skipped skipped,"
+  echo "[kernel]      $failures failed, $errors errored) -- see $TESTLOG"; FAIL=1
 fi
-# The installer's gate runs the PACKAGED tool and baseline, so it is exercised on the jar the installer ships.
-INSTALLERLOG="$BUILD/gate-m0-installer-link.log"
-if "$KERNEL/../forbric-loader/gradlew" --offline -q -p "$KERNEL/../forbric-loader" mergeToolsJar >"$INSTALLERLOG" 2>&1 \
-    && python3 "$KERNEL/../forbric-kernel-installer/run/test-link-gate.py" >>"$INSTALLERLOG" 2>&1; then
-  check "the installer's link gate, on the packaged tools" "PASS installer gate" "$INSTALLERLOG"
+# The installer's tests, on the checker jar it carries: a missing or narrowed member of either jar stops the install, a
+# supplied set is checked before anything is written, and every other installer *Test main.
+INSTALLERLOG="$BUILD/gate-m0-installer-tests.log"
+if "$KERNEL/gradlew" --offline -q -p "$KERNEL" linkCheckJar >"$INSTALLERLOG" 2>&1 \
+    && "$KERNEL/../forbric-kernel-installer/gradlew" --offline -q -p "$KERNEL/../forbric-kernel-installer" \
+       installerTest -x buildLinkCheck >>"$INSTALLERLOG" 2>&1; then
+  check "the installer's link check, on the checker it carries" "^\[installer-test\] PASS LinkCheckToolTest$" "$INSTALLERLOG"
+  check "every installer test ran and passed" "^\[installer-test\] [0-9]+ test classes ran, 0 failed$" "$INSTALLERLOG"
 else
-  echo "[kernel] FAIL the installer's link gate — see $INSTALLERLOG"; FAIL=1
+  echo "[kernel] FAIL the installer's tests — see $INSTALLERLOG"; FAIL=1
 fi
-# And the installer build bundles the tracked baseline, not the one it bundled last (in a throwaway copy).
-BUNDLELOG="$BUILD/gate-m0-bundled-baseline.log"
-bash "$KERNEL/../forbric-kernel-installer/run/test-bundled-baseline.sh" >"$BUNDLELOG" 2>&1
-BUNDLE_RC=$?
-if [ "$BUNDLE_RC" -eq 0 ]; then
-  check "the installer bundles the tracked link baseline" "ALL GREEN" "$BUNDLELOG"
-elif [ "$BUNDLE_RC" -eq 3 ]; then
-  # Exit 3 is the script saying it could not run (no ../fabric-loader substrate, or no copy of the sources) — not a
-  # verdict on the baseline. The first nightly reported a worktree without the substrate as "a stale link baseline".
-  echo "[kernel] FAIL could not check the installer's bundled link baseline: $(tail -1 "$BUNDLELOG")"; FAIL=1
+# And the installer bundles the checker this tree builds, not the one it bundled last (in a throwaway copy).
+BUNDLELOG="$BUILD/gate-m0-bundled-checker.log"
+if bash "$KERNEL/../forbric-kernel-installer/run/test-bundled-checker.sh" >"$BUNDLELOG" 2>&1; then
+  check "the installer bundles the link checker the tree builds" "ALL GREEN" "$BUNDLELOG"
 else
-  echo "[kernel] FAIL the installer bundles a stale link baseline — see $BUNDLELOG"; FAIL=1
+  echo "[kernel] FAIL the installer bundles a stale link checker, or the check could not run — see $BUNDLELOG"; FAIL=1
 fi
 # And -Pforbric.stagedRoot keeps its documented use (a root that does not exist still configures the boot-jar
 # build) while the test task still refuses a root its tests cannot resolve.

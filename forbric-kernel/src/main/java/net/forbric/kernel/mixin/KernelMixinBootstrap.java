@@ -82,7 +82,7 @@ public final class KernelMixinBootstrap {
 		ForbricMixinService.bind(loader, side);
 
 		// Every config here came from a discovered guest mod (the kernel authors no mixins), so relax them all:
-		// guest mixins are written against vanilla bytecode and the base is byte-merged, so any of them can meet a
+		// guest mixins are written against vanilla bytecode and the base is NeoForge's patched game, so any of them can meet a
 		// moved anchor. Without this, only `fabric-*` was relaxed and one unpatchable injector in any other real mod
 		// (e.g. collective's collective_fabric.mixins.json) aborted the launch instead of soft-skipping.
 		ForbricMixinService.setGuestConfigs(configs);
@@ -123,13 +123,17 @@ public final class KernelMixinBootstrap {
 		// added after that sits out until it prepares again.
 		if (transformer.getExtensions() instanceof Extensions extensions) {
 			extensions.add(new MixinCaptureLanding());
+			// MixinExtras registered its late applicator above (initMixinExtras); one guest's late injector failing must
+			// cost that injection, not every mod's mixins on the class.
+			LateInjectionIsolation.install(extensions, loader);
 		} else {
 			ForbricLog.warn("[Forbric/Mixin] Mixin's extension registry is a %s, not Mixin's own: a moved locals capture "
-					+ "gets no NOP to land on, and at 0.9.2 Mixin may skip it", String.valueOf(transformer.getExtensions()));
+					+ "gets no NOP to land on, and at 0.9.2 Mixin may skip it; a late injector that fails costs its target "
+					+ "class every mixin", String.valueOf(transformer.getExtensions()));
 		}
 		// Mixin is handed pre-mixin bytes, and null for a class in no owned jar — which is its class-GENERATION
 		// request (org.spongepowered.asm.synthetic.*). transformClassBytes handles both. PostMixinFixups then repairs
-		// the handful of classes a guest mixin wove wrong because the byte-merge restructured the target (e.g.
+		// the handful of classes a guest mixin wove wrong because the carrier restructured the target (e.g.
 		// PackMixin's field initializer mis-woven into NeoForge's recursive Pack ctor).
 		// Two unrelated interfaces each supplying the same default is an error the IMPLEMENTOR must settle, and
 		// only after weaving is the second interface on the class at all — so this is the one point where it can
@@ -154,23 +158,25 @@ public final class KernelMixinBootstrap {
 		loader.knotDelegate().attach();
 		var codecReturns = new net.forbric.kernel.transform.PostMixinCodecReturnArbitration();
 		var callbackPriority = new net.forbric.kernel.transform.PostMixinCallbackPriority();
-		// The transfer audit proves an interface-default delegate against the same raw game classes the merged-base
-		// repair read when it dropped the ones it could prove (KernelBoot hands it this lookup).
-		java.util.function.Function<String, byte[]> gameClasses = path -> {
-			try (var in = loader.getGameResourceAsStream(path)) {
-				return in == null ? null : in.readAllBytes();
-			} catch (java.io.IOException unreadable) {
-				Caught.warn(unreadable, "[Forbric/Mixin] could not read game resource %s; taken as absent", path);
-				return null;
-			}
-		};
-		// UncalledValueRelay after the fixups: a vanilla method the merged game never calls, into which guest hooks were woven, gets
+		// UncalledValueRelay after the fixups: a vanilla method the game never calls, into which guest hooks were woven, gets
 		// a relay of its woven body the carrier's own place runs (Block.tryDropExperience, from NeoForge's drops event). It needs
 		// the bytes Mixin was handed, to tell what was woven.
-		loader.setMixinTransformer((name, bytes) -> net.forbric.kernel.transform.ForgeTransferShapeAudit.certify(name,
-				callbackPriority.transform(name, codecReturns.transform(name, conflicts.transform(name, bytes, UncalledValueRelay.apply(name, bytes,
-						PostMixinFixups.apply(name, net.forbric.kernel.transform.NativeCoremodParity.apply(name,
-								MixinWeaverSlot.currentOr(transformer).transformClassBytes(name, name, bytes))))), null), null), gameClasses));
+		//
+		// One step per line, in the order they run.
+		loader.setMixinTransformer((name, bytes) -> {
+			byte[] woven = net.forbric.kernel.transform.NativeCoremodParity.apply(name,
+					MixinWeaverSlot.currentOr(transformer).transformClassBytes(name, name, bytes));
+			woven = PostMixinFixups.apply(name, woven);
+			// After every mixin on NeoForge's GameData.postRegisterEvents has bound to the calls it names: the kernel's needs
+			// at those calls (RegisterEventsSeam). Not behind PostMixinFixups' switch: without it the method's dispatch is
+			// NeoForge's own, unguarded.
+			woven = net.forbric.kernel.transform.RegisterEventsSeam.afterMixin(name, woven);
+			woven = UncalledValueRelay.apply(name, bytes, woven);
+			woven = conflicts.transform(name, bytes, woven);
+			woven = codecReturns.transform(name, woven, null);
+			woven = callbackPriority.transform(name, woven, null);
+			return woven;
+		});
 
 		// Leave PREINIT so the registered configs are prepared and their targets become weavable.
 		gotoPhase(MixinEnvironment.Phase.INIT);

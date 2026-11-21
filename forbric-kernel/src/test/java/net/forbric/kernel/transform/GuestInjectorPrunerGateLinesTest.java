@@ -31,7 +31,7 @@ import org.objectweb.asm.tree.ClassNode;
 @ResourceLock("system-properties")
 class GuestInjectorPrunerGateLinesTest {
 	private static final Path GATE = Path.of("run/gate-m9-client.sh");
-	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED_BASE = TestFixtures.stagedBase();
 	private static final Path CLIENT_MODS = Path.of(System.getProperty("user.dir"), "run", "client-kernel", "mods").normalize();
 	private static final String MODEL_MANAGER_MIXIN = "net.fabricmc.fabric.mixin.client.model.loading.ModelManagerMixin";
 	private static final String ITEM_STACK_MIXIN = "net.fabricmc.fabric.mixin.item.ItemStackMixin";
@@ -95,17 +95,17 @@ class GuestInjectorPrunerGateLinesTest {
 		byte[] bytes = readFromNestedJar(fabricApi, module, entry);
 		TestFixtures.require(Fixture.THIRD_PARTY, bytes != null, mixin + " absent from the nested " + module + " module");
 		// The pruner proves each protocol against the merged target it lands in, so without the base it rightly prunes nothing.
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent: " + MERGED_BASE);
+		TestFixtures.requireFile(Fixture.STAGED, MERGED_BASE, "staged base absent: " + MERGED_BASE);
 		net.forbric.kernel.mixin.MixinStubRebind.noteEcosystem(mixin.replace('.', '/'), net.forbric.api.Ecosystem.FABRIC, module + ".mixins.json");
 		return bytes;
 	}
 
-	/** The pruner reading the staged merged base, NeoForge's carrier appenders as the kernel splices them, and fabric-api's providers. */
+	/** The pruner reading the staged base, NeoForge's carrier appenders as the kernel splices them, and fabric-api's providers. */
 	private static GuestInjectorPruner pruner() {
 		return new GuestInjectorPruner(owner -> {
 			try {
 				if (owner.equals("net/neoforged/neoforge/common/tooltip/ItemTooltipHandler")) {
-					byte[] bytes = readFromJar(TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar"), owner + ".class");
+					byte[] bytes = readFromJar(TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR), owner + ".class");
 					return bytes == null ? null : read(new NeoTooltipAppendersInjector().transform(owner.replace('/', '.'), bytes, null));
 				}
 				if (owner.equals("net/fabricmc/fabric/impl/item/ItemComponentTooltipProviderRegistryImpl")) {

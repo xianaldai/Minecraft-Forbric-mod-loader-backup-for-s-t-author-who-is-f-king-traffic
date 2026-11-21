@@ -25,7 +25,6 @@ import net.fabricmc.api.ModInitializer;
 import net.forbric.api.CompatibilityFindings;
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ModCatalog;
-import net.forbric.kernel.ExpectCaught;
 import net.forbric.kernel.fabric.FabricModMetadataParser;
 import net.forbric.kernel.fabric.KernelFabricLoader;
 import net.forbric.kernel.fabric.KernelModContainer;
@@ -43,7 +42,7 @@ public class InitializationFailureProjectionTest {
 		constructorAttempts = entrypointAttempts = healthyRuns = 0;
 	}
 
-	@ExpectCaught("main entrypoint of bad")
+	// Each entrypoint's throw is handed to the stage's error, which stops the boot: not a Caught failure site (A-7).
 	@Test void actualEntrypointConstructionAndInvocationFailuresBecomeRequiredAtTheReportingBoundary() throws Exception {
 		var constructor = KernelFabricLoader.class.getDeclaredConstructor(EnvType.class, Path.class, Path.class, String[].class, String.class);
 		constructor.setAccessible(true);
@@ -57,7 +56,14 @@ public class InitializationFailureProjectionTest {
 		String shim = System.getProperty(KernelForeignShimContext.SWITCH);
 		try {
 			active.set(null, loader); System.setProperty(KernelForeignShimContext.SWITCH, "off");
-			assertEquals(1, KernelFabricEcosystem.invokeEntrypoints("main", ModInitializer.class, ModInitializer::onInitialize));
+			// Native Fabric Loader (FabricLoaderImpl.invokeEntrypoints): every entrypoint of the stage runs, then the stage throws
+			// one RuntimeException naming the first failing mod, its failure the cause, every later one suppressed; that takes
+			// the game down (D87). Until D87 the kernel returned the count of the healthy ones (1) and the boot carried on.
+			RuntimeException stage = assertThrows(RuntimeException.class,
+					() -> KernelFabricEcosystem.invokeEntrypoints("main", ModInitializer.class, ModInitializer::onInitialize));
+			assertTrue(stage.getMessage().startsWith("Could not execute entrypoint stage 'main' due to errors, provided by 'badctor' at '"),
+					stage.getMessage());
+			assertEquals(1, stage.getSuppressed().length, "the second failure is suppressed on the first's stage error");
 			assertEquals(1, constructorAttempts); assertEquals(1, entrypointAttempts); assertEquals(1, healthyRuns);
 			assertTrue(CompatibilityFindings.all().isEmpty(), "the per-mod catches only record raw status, without prompting or callbacks");
 			assertEquals(2, ModCatalog.failures().size());

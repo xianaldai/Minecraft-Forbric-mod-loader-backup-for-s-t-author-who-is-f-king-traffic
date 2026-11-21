@@ -31,12 +31,12 @@ import net.forbric.kernel.TestFixtures;
 import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
- * The carrier-helper rules over the REAL mixins of the sweep90 pack and the REAL merged base: the mods that paid for
+ * The carrier-helper rules over the REAL mixins of the sweep90 pack and the REAL staged base: the mods that paid for
  * them, and fabric-rendering-v1's HudMixin, whose four R3 moves out of the same dispatcher must not change.
  */
 class MixinRetargetCarrierHelperStagedTest {
-	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").normalize();
-	private static final Path NEO_RUNTIME = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
+	private static final Path MERGED_BASE = TestFixtures.stagedBase().normalize();
+	private static final Path NEO_RUNTIME = TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR).normalize();
 	private static final Path SWEEP = Path.of(System.getProperty("user.dir"), "build", "compat-inputs", "sweep90", "mods").normalize();
 	private static final String G = "(Lnet/minecraft/client/gui/GuiGraphicsExtractor;)V";
 
@@ -68,7 +68,7 @@ class MixinRetargetCarrierHelperStagedTest {
 		assertEquals("extractPlayerHealth", plan.rewrites().get(0).from());
 		assertEquals("extractFoodLevel" + G, plan.rewrites().get(0).to());
 		// What still does not run is the other hook, the XP redirect in Hud.extractHotbarAndDecorations, which nothing in
-		// the merged game calls; the food redirect's own anchors all resolve in live code.
+		// the patched game calls; the food redirect's own anchors all resolve in live code.
 		MixinFit.Result after = MixinFit.evaluate(MixinRetarget.rewritten(mixin, plan), resolver);
 		assertEquals(MixinFit.Verdict.PARTIAL, after.verdict(), "after: " + after.unresolved());
 		assertEquals(1, after.unresolved().size(), "after: " + after.unresolved());
@@ -88,7 +88,7 @@ class MixinRetargetCarrierHelperStagedTest {
 		Function<String, byte[]> resolver = mergedResolver();
 		String entry = "com/anthonyhilyard/highlighter/forge/mixin/AbstractContainerScreenMixin";
 		byte[] mixin = fromJar(SWEEP.resolve("Highlighter-26.2-forge-1.2.2.jar"), entry + ".class");
-		MixinStubRebind.noteEcosystem(entry, Ecosystem.FORGE);
+		MixinStubRebind.noteEcosystem(entry, Ecosystem.FABRIC);
 		MixinFit.Result before = MixinFit.evaluate(mixin, resolver);
 		assertEquals(MixinFit.Verdict.PARTIAL, before.verdict(), "premise: " + before.unresolved());
 
@@ -122,7 +122,7 @@ class MixinRetargetCarrierHelperStagedTest {
         assertTrue((callback.access&Opcodes.ACC_STATIC)!=0,"the released callback observes arguments without a host receiver");assertTrue((nativeHost.access&Opcodes.ACC_STATIC)==0,"the actual native host is an instance method");
         assertEquals(MixinFit.Verdict.PARTIAL,MixinFit.evaluate(bytes,resolver).verdict());
         assertTrue(NativeCallTestEvidence.plan(original,resolver).rewrites().stream().noneMatch(r->r.handler().equals(callback.name)),"AFTER the entire carrier helper would move this callback beyond fluid and event writes");
-        java.util.function.Function<String,List<ClassNode>> peers=n->java.util.stream.Stream.of(Ecosystem.FORGE,Ecosystem.NEOFORGE).map(e->NativeCallTestEvidence.staged().apply(e,n)).filter(java.util.Objects::nonNull).toList();
+        java.util.function.Function<String,List<ClassNode>> peers=n->java.util.stream.Stream.of(Ecosystem.NEOFORGE).map(e->NativeCallTestEvidence.staged().apply(e,n)).filter(java.util.Objects::nonNull).toList();
         var seam=NativeCallbackSeam.derive(source,peers.apply(owner),current,nativeHost,member,classes);assertNotNull(seam);assertEquals(seam.sourcePrefix(),seam.currentPrefix());assertEquals(6,seam.hostParameters().length);
         // A merged prefix that is no native body's — one constant changed on the way — proves nothing, peers or not.
         ClassNode drifted=expanded(resolver.apply(owner+".class"));MethodNode drift=NativeCallChanges.method(drifted,seam.method());
@@ -171,11 +171,16 @@ class MixinRetargetCarrierHelperStagedTest {
 
 	// ---------------------------------------------------------------------------------------------------------------
 
+	/**
+	 * MixinFit's resolver as the game hands it ({@code ForbricMixinService.readAdapterClass}): a game class's pre-Mixin
+	 * bytes ({@link net.forbric.kernel.transform.PreMixinView}), so a member the vanilla twins add back is there.
+	 */
 	static Function<String, byte[]> mergedResolver() {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.requireFile(Fixture.STAGED, MERGED_BASE, "staged base absent");
 		return name -> {
 			try {
-				return readFromJar(MERGED_BASE, name);
+				byte[] raw = readFromJar(MERGED_BASE, name);
+				return name.endsWith(".class") ? net.forbric.kernel.transform.PreMixinView.of(name.substring(0, name.length() - 6), raw) : raw;
 			} catch (Exception e) {
 				return null;
 			}

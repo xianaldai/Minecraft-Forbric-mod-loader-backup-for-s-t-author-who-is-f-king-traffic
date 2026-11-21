@@ -1,40 +1,66 @@
 #!/usr/bin/env bash
 # M14 gate — a Forbric client on a PURE Fabric server, with a mod set that differs from the server's.
 #
-# WHY THIS EXISTS. gate-m12 syncs registries between two Forbric ends, where NeoForge's registry sync runs and
-# the kernel applies it to the seventeen MinecraftForge-wrapped registries. Against a pure Fabric server only
-# fabric-api's sync runs, and its remap was a silent no-op on those wrappers: it rewrites MappedRegistry fields the
-# wrapper never fills. With identical mod sets that costs nothing — the ids already agree — so the only way to see
-# it is a client whose registry order DIFFERS from the server's. This gate builds that difference on purpose and
-# then asks the one question that matters: does a block the server places decode to the same block on the client?
+# WHY THIS EXISTS. gate-m12 syncs registries between two Forbric ends, where NeoForge's registry sync runs. Against a
+# pure Fabric server only fabric-api's sync runs, and on NeoForge's base it has to remap NeoForge's registries: the
+# kernel keeps fabric-registry-sync's bootstrap tracker and post-freeze callbacks alive
+# (FabricRegistryInitializationMixinAdapter), and puts the pre-connection ids back at the disconnect, because the kernel
+# owns the freeze and NeoForge's own snapshot is never taken (KernelRegistryRevert). With identical mod sets none of that
+# shows -- the ids already agree -- so the only way to see it is a client whose registry order DIFFERS from the
+# server's. This gate builds that difference on purpose and then asks the one question that matters: does a block the
+# server places decode to the same block on the client?
 #
 # THE DIFFERENCE. Both ends run fabric-api + Macaw's Bridges (303 blocks/items). The client ALSO carries the
 # kernel's Fabric canary, which registers one block and one item before any other Fabric mod's, so every mcwbridges
 # block and item on the client is one id further along than on the server. The gate places a bridge block and
-# GIVES the player a bridge item, and the client reads both back by name. The item is the sharp one: an item id off
-# by one is a different item, full stop. A block-STATE id off by one usually lands on a neighbouring state of the
-# same block — which is how the first negative-control run read the right block name without any remap at all —
-# so the block probe reads back the full state, and the vanilla block next to it is the control that must ALWAYS
-# match (vanilla ids agree with or without a remap).
+# GIVES the player a bridge item, and the client reads both back by name. A block-STATE id off by one usually lands on
+# a neighbouring state of the same block, so the block probe reads back the full state, and the vanilla block next to
+# it is the control that must ALWAYS match (vanilla ids agree with or without a remap). The item's raw id is logged
+# before connecting, in the world and after the disconnect: the sync must move it and the revert must move it back.
 #
-# The remap has to have actually moved something, and lost nothing: the kernel's own summary line is asserted for
-# "N id(s) moved" with N > 0 and "0 entr(ies) lost" — the canary block is client-only, and Forge's loadIds must keep
-# it (after the server's ids) rather than drop it. It did drop it on the first run; the kernel now places local-only
-# entries after the server's ids itself, which is fabric-api's REMOTE-mode rule.
+# THE NEGATIVE CONTROL (D48): M14_EXTRA_JVM=-Dforbric.fabricRegistryInitialization=off keeps fabric-registry-sync's
+# BootstrapMixin / MainMixin / client MinecraftMixin suppressed, so fabric-api's sync never tracks the block-state id
+# list. Measured on NeoForge's base (C5, 2026-11-11, lane K1's review, c5/k1/gates/rf-m14-*): 33 PASS / 1 FAIL, exactly
+# one red, "the shared mod's block reads back as itself, state and all": the client reads
+# mcwbridges:andesite_bridge[connection=base] where the server holds [connection=middle_ns] (the server confirms its
+# state, "Test passed"), with the item, the vanilla control, the join, the capture line, the id move and put-back, the
+# revert and the clean leave green; the same gate without the switch is 34 PASS / 0 FAIL. That is the expected outcome of
+# an unsynced list: the client's own block-state list is native (vanilla, then the canary, then mcwbridges), so the
+# server's id lands on a neighbouring state of the SAME block, which a name-only check passed (33/0 at lane K1, review
+# A-1); hence the full state. The same 33/1 and [connection=base] at the stage tip 7aaebbec, before lane K1's clear, so
+# what changed the read-back since the 2026-11-09 measurement (32/1, a VANILLA block, minecraft:note_block[...], when the
+# client's own list put a NeoForge mod's states at vanilla ids) is lane S's clear before the client window's freeze
+# (835ec80c; inferred, not measured without it). (A C5 planning run's 32/5 against the gate before this rewrite counted
+# the four MinecraftForge-wrapper checks deleted below; its log was lost with the old scratchpad, D67.)
+# (On the merged base the control was -Dforbric.forgeWrapperSync=off and the red was the item, held as a MOSSY
+# COBBLESTONE bridge: seventeen of the registries were MinecraftForge wrappers whose fields fabric-api's remap never
+# filled. The wrappers, their sync and its four checks went with MinecraftForge in Stage 4.)
 #
-# WHAT THE NEGATIVE CONTROL SHOWED (M14_EXTRA_JVM=-Dforbric.forgeWrapperSync=off, the old behaviour minus the
-# crash): the server gave the player an andesite bridge and the client held a MOSSY COBBLESTONE bridge — the item
-# one id along — and the placed block read back with the wrong connection state. With the remap: 303 ids moved,
-# 0 lost, 34393 block states re-numbered, and both read back as themselves.
+# A FORGE+FABRIC UNIVERSAL JAR (Stage 3 of dropping MinecraftForge). Forbric no longer loads MinecraftForge mods, and a
+# jar that carries a MinecraftForge half beside a usable Fabric half -- the Architectury-style universal build -- must
+# load through its Fabric half, not be refused and not be half-loaded as MinecraftForge. A pure Fabric server is the
+# oracle for that: it loads only the Fabric half, so a Forbric client that loaded anything else would disagree with it on
+# the wire. No such jar is in the local corpora (the census of 188 jars with a mods.toml found none whose only other half
+# is Fabric's), so the gate derives one from FallingTree, a real three-loader jar: the same bytes without
+# META-INF/neoforge.mods.toml, which leaves a real MinecraftForge half (its mods.toml and @Mod) and a real Fabric half
+# (its fabric.mod.json, entrypoints and mixins). It rides on both ends, and the client must say it set the MinecraftForge
+# half aside and loaded the jar as FABRIC only; the server must list it among its Fabric mods. RED, measured 2026-10-30:
+# M14_UNIVERSAL_KEEP_NEO=1 keeps neoforge.mods.toml in the derived jar. The client then loads it as NEOFORGE (its
+# preference), so the two "as FABRIC" checks go red -- and the oracle says why it matters: the client disconnects
+# right after configuring, so the join, the probe read-backs, the id remap and the clean-leave checks go red with them
+# (fourteen in all). The "as FABRIC" pair is the arbitration, not a coincidence of the jar's shape.
 #
 # Port 25602, not the default — a developer or another agent session may have a server on 25565.
+# Rundirs: M14_SERVER_RUNDIR / M14_CLIENT_RUNDIR (default run/fab-server, run/fab-client, which the gate wipes).
 # GATE-PARALLEL: rundirs=fab-server,fab-client mem=3500
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 PORT="${M14_PORT:-25602}"
-SRV="$KERNEL/run/fab-server"
-CLI="$KERNEL/run/fab-client"
+SRV="${M14_SERVER_RUNDIR:-$KERNEL/run/fab-server}"
+CLI="${M14_CLIENT_RUNDIR:-$KERNEL/run/fab-client}"
+refuse_shared_rundir "$SRV"
+refuse_shared_rundir "$CLI"
 SLOG="$BUILD/gate-m14-server.log"
 CLOG="$BUILD/gate-m14-client.log"
 mkdir -p "$BUILD"
@@ -43,17 +69,46 @@ DL="$RUN_OLD/downloads"
 LAUNCHER="$DL/fabric-server-26.2/fabric-server-mc26.2-loader0.19.5-launcher1.1.2.jar"
 FABRIC_API="$DL/fabric-26.2/fabric-api-0.154.0+26.2.jar"
 SHARED="$DL/fabric-26.2/mcw-bridges-3.1.2-mc26.2fabric.jar"
+# The three-loader jar the Forge+Fabric universal jar is derived from (header).
+UNIVERSAL_SOURCE="$DL/forge-26.2/FallingTree-26.2-25.jar"
+UNIVERSAL="$BUILD/gate-m14/FallingTree-26.2-25-forge+fabric.jar"
 CANARY="$KERNEL/run/canary/forbricfabriclive.jar"
 PLAYER="ForbricKernel"
 # A block the shared mod registers, and a vanilla control. Placed by the server, read back by the client.
 MOD_BLOCK="mcwbridges:andesite_bridge"
+# The full state the server holds after the setblock (its shape update gives the bridge a connection). The block probe
+# compares it whole: an unsynced state id usually lands on a neighbouring state of the SAME block, which a name-only check
+# passes (K1's review A-1). The server is asked whether it holds exactly this state, so the expectation is measured on the
+# server, not assumed.
+MOD_STATE="[connection=middle_ns]"
 MOD_ITEM="mcwbridges:andesite_bridge"
 VANILLA_BLOCK="minecraft:diamond_block"
-for f in "$LAUNCHER" "$FABRIC_API" "$SHARED" "$CANARY"; do
-  [ -f "$f" ] || { echo "[kernel] SKIP-FATAL: missing $f (run/build-fabric-canary.sh builds the canary)" >&2; exit 3; }
+# Built here, as every other gate that stages it builds it: this gate used to read whatever an earlier gate had left in
+# run/canary, so it went SKIP-FATAL in a tree where none had (the verdict cache can run it alone).
+"$KERNEL/run/build-fabric-canary.sh" >"$BUILD/gate-m14-canary.log" 2>&1
+for f in "$LAUNCHER" "$FABRIC_API" "$SHARED" "$CANARY" "$UNIVERSAL_SOURCE"; do
+  [ -f "$f" ] || { echo "[kernel] SKIP-FATAL: missing $f (the Fabric canary's build: $BUILD/gate-m14-canary.log)" >&2; exit 3; }
 done
 
 kernel_jar
+
+step "derive a Forge+Fabric universal jar: FallingTree without its NeoForge manifest"
+mkdir -p "$(dirname "$UNIVERSAL")"
+python3 - "$UNIVERSAL_SOURCE" "$UNIVERSAL" "${M14_UNIVERSAL_KEEP_NEO:-0}" <<'PY_UNIVERSAL' || exit 3
+from pathlib import Path
+import sys, zipfile
+source, target, keep_neo = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3] == '1'
+with zipfile.ZipFile(source) as original, zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as derived:
+    names = original.namelist()
+    for manifest in ('fabric.mod.json', 'META-INF/mods.toml'):
+        if manifest not in names:
+            raise SystemExit(f'{source.name} has no {manifest}: it is not the universal jar this gate derives from')
+    for entry in original.infolist():
+        if entry.filename == 'META-INF/neoforge.mods.toml' and not keep_neo:
+            continue
+        derived.writestr(entry, original.read(entry))
+print(f'[kernel] derived {target.name} from {source.name}' + (' (neoforge.mods.toml KEPT: the RED control)' if keep_neo else ''))
+PY_UNIVERSAL
 
 step "stage a pure Fabric server (fabric-loader 0.19.5 + fabric-api + Macaw's Bridges) and a Forbric client with one mod more"
 reap_stale_server "$SRV"
@@ -62,8 +117,8 @@ stash_downloads "$SRV" fab-server .fabric
 rm -rf "$SRV" "$CLI"
 mkdir -p "$SRV/mods" "$CLI/mods" "$CLI/quickPlay"
 restore_downloads "$SRV" fab-server .fabric
-cp "$FABRIC_API" "$SHARED" "$SRV/mods/"
-cp "$FABRIC_API" "$SHARED" "$CANARY" "$CLI/mods/"
+cp "$FABRIC_API" "$SHARED" "$UNIVERSAL" "$SRV/mods/"
+cp "$FABRIC_API" "$SHARED" "$UNIVERSAL" "$CANARY" "$CLI/mods/"
 printf 'eula=true\n' > "$SRV/eula.txt"
 printf 'server-port=%s\nonline-mode=false\nlevel-type=minecraft\\:flat\nlevel-name=FabWorld\ngamemode=survival\ndifficulty=peaceful\nspawn-monsters=false\nspawn-protection=0\nview-distance=6\nsimulation-distance=6\nenforce-secure-profile=false\nmax-players=5\nmotd=forbric-fabric-gate\n' "$PORT" > "$SRV/server.properties"
 cp "$KERNEL/run/client-merged-pack/options.txt" "$CLI/options.txt" 2>/dev/null \
@@ -98,7 +153,7 @@ done
 
 step "connect the client, let the server place the two probe blocks, read them back"
 # The probe reads at world tick 160; the blocks are placed as soon as the client reports it joined (well before).
-FORBRIC_JVM="-Dforbric.clientSmoke=true -Dforbric.clientSmokeWorld=127.0.0.1:$PORT -Dforbric.clientSmokeReadyTicks=60 -Dforbric.clientSmokeDisconnectTicks=260 -Dforbric.clientSmokeProbe=0,-57,4;0,-57,6 -Dforbric.clientSmokeProbeIds=item:mcwbridges:andesite_bridge ${M14_EXTRA_JVM:-}" \
+FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.clientSmoke=true -Dforbric.clientSmokeWorld=127.0.0.1:$PORT -Dforbric.clientSmokeReadyTicks=60 -Dforbric.clientSmokeDisconnectTicks=260 -Dforbric.clientSmokeProbe=0,-57,4;0,-57,6 -Dforbric.clientSmokeProbeIds=item:mcwbridges:andesite_bridge ${M14_EXTRA_JVM:-}" \
 RUNDIR="$CLI" "$KERNEL/run/launch-kernel-client.sh" \
   --quickPlayPath "$CLI/quickPlay/log.json" --quickPlayMultiplayer "127.0.0.1:$PORT" > "$CLOG" 2>&1 &
 CLIENT_PID=$!
@@ -111,7 +166,8 @@ for i in $(seq 1 300); do
   if [ "$PLACED" -eq 0 ] && grep -q 'ClientSmoke\] joined world' "$CGAME" 2>/dev/null; then
     echo "setblock 0 -57 4 $MOD_BLOCK" >&9; sleep 0.3
     echo "setblock 0 -57 6 $VANILLA_BLOCK" >&9; sleep 0.3
-    echo "give $PLAYER $MOD_ITEM 1" >&9
+    echo "give $PLAYER $MOD_ITEM 1" >&9; sleep 0.3
+    echo "execute if block 0 -57 4 $MOD_BLOCK$MOD_STATE" >&9
     PLACED=1; echo "[kernel] placed $MOD_BLOCK and $VANILLA_BLOCK, gave $MOD_ITEM at ~${i}s"
   fi
   grep -qE 'ClientSmoke\] clean disconnect observed|Game crashed|Mod Loading has failed|Network Protocol Error|Failed to connect|Client disconnected with reason' \
@@ -121,9 +177,8 @@ done
 
 step "let vanilla's post-main watchdog speak before killing anything"
 for i in $(seq 1 25); do kill -0 "$CLIENT_PID" 2>/dev/null || break; sleep 1; done
-for pid in $(pgrep -P "$CLIENT_PID" 2>/dev/null) "$CLIENT_PID"; do kill "$pid" 2>/dev/null; done
-sleep 2
-for pid in $(pgrep -P "$CLIENT_PID" 2>/dev/null) "$CLIENT_PID"; do kill -9 "$pid" 2>/dev/null; done
+stop_tree "$CLIENT_PID"   # the whole tree: lib.sh says why children-only orphans a JVM
+wait "$CLIENT_PID" 2>/dev/null
 cat "$CGAME" >> "$CLOG" 2>/dev/null || true
 
 step "stop the server"
@@ -134,7 +189,7 @@ rm -f "$FIFO" "$(_pidfile "$SRV")"
 
 echo "[kernel] the client's read-back:"
 grep -a 'ClientSmoke\] block at\|ClientSmoke\] hotbar' "$CGAME" | sed 's/^/[kernel]   /' | cut -c1-220
-grep -a 'Forbric/RegistrySync\] .* followed the server' "$CGAME" | sed 's/^/[kernel]   /' | cut -c1-260
+grep -a 'Forbric/RegistrySync\] \(captured\|reverted\)' "$CGAME" | sort -u | sed 's/^/[kernel]   /' | cut -c1-260
 
 step "a Forbric client joined a pure Fabric server (must PASS)"
 check "it is a real Fabric server"     "Fabric Loader 0.19.5"                              "$SLOG"
@@ -155,17 +210,28 @@ check "fabric-item-api's tooltip order scraped on the client" "ForbricFabricLive
 check_absent "…and found component types"     "Found no component types"                            "$CLOG"
 check_absent "block models still parse"       "JSON data was null or empty"                "$CLOG"
 
+step "the Forge+Fabric universal jar loads as Fabric on the Forbric client, as the Fabric server loads it (must PASS)"
+check "client: its MinecraftForge half is set aside, the Fabric half chosen" \
+  "FallingTree-26\.2-25-forge\+fabric\.jar: its MinecraftForge half is set aside — Forbric no longer loads MinecraftForge mods — choosing among its usable \[FABRIC\] half" "$CLOG"
+check "client: it loads as FABRIC only" \
+  "FallingTree-26\.2-25-forge\+fabric\.jar declares 2 loaders — loading it as FABRIC only, suppressing \[FORGE\]" "$CLOG"
+check_absent "client: it is not refused" "\[Forbric/Unsupported\] refusing" "$CLOG"
+check "server: the pure Fabric server lists it among its mods" "[-] fallingtree [0-9]" "$SLOG"
+
 step "the difference was real and the remap corrected it (must PASS)"
 check "the canary shifted the client's block ids" "ForbricFabricLive\] registered block forbricfabriclive:canary_block" "$CLOG"
 check "the canary shifted the client's item ids"  "ForbricFabricLive\] registered item forbricfabriclive:canary_block"  "$CLOG"
 check "the probe blocks were placed"   "Changed the block"                                 "$SLOG" 2
 check "the probe item was given"       "Gave 1"                                            "$SLOG"
-check "Forge-wrapped registries followed the server's ids" "Forge-wrapped registr.* followed the server's ids" "$CGAME"
-check "…and some ids actually moved"   "followed the server's ids .* [1-9][0-9]* id\(s\) moved" "$CGAME"
-check "…and no entry was lost"         "followed the server's ids .* 0 entr\(ies\) lost"   "$CGAME"
-check_absent "no entry reported lost"  "LOST .* in the remap"                              "$CGAME"
-check "fabric-api's remap listeners were told" "told fabric-api's remap listeners"         "$CGAME"
-check "the shared mod's block reads back as itself" "block at \(0 -57 4\) is $MOD_BLOCK"   "$CGAME"
+# The kernel took the client's own ids before fabric-api's sync replaced them, so the disconnect can put them back.
+# (The four MinecraftForge-wrapper checks that stood here -- "Forge-wrapped registries followed the server's ids", the
+# moved/lost counts of that line, and "fabric-api's remap listeners were told" -- read KernelForgeWrapperSync's lines,
+# deleted with MinecraftForge in Stage 4; the read-backs below and the id move/put-back are what they were for.)
+check "the client's pre-connection ids were captured" \
+  "Forbric/RegistrySync\] captured the pre-connection ids of [1-9][0-9]* synced registr\(ies\)" "$CGAME"
+check "the server holds the shared mod's block in the expected state" "Test passed" "$SLOG"
+check "the shared mod's block reads back as itself, state and all" \
+  "block at \(0 -57 4\) is $MOD_BLOCK .*state Block\{$MOD_BLOCK\}$(printf '%s' "$MOD_STATE" | sed 's/[][]/\\&/g')$" "$CGAME"
 check "the shared mod's item reads back as itself"  "hotbar slot 0 holds $MOD_ITEM "        "$CGAME"
 check "the vanilla control reads back as itself"    "block at \(0 -57 6\) is $VANILLA_BLOCK" "$CGAME"
 
@@ -189,7 +255,7 @@ check_absent "no thread leaked past main" "Client shutdown from post-main"      
 
 step "M14 result"
 if [ "$FAIL" -eq 0 ]; then
-  echo "[kernel] ✅ M14 GATE GREEN — on a pure Fabric server with a different mod set, the Forge-wrapped registries followed the server's ids and its blocks decode as its own"
+  echo "[kernel] ✅ M14 GATE GREEN — on a pure Fabric server with a different mod set, the client followed the server's ids and its blocks decode as its own"
 else
   echo "[kernel] ❌ M14 GATE RED — server $SLOG / client $CLOG"
 fi

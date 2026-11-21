@@ -33,7 +33,7 @@ import net.forbric.kernel.TestFixtures.Fixture;
 @ResourceLock("system-properties")
 class FabricFluidModelsInjectorTest {
 	private static final Path NEO_RT = TestFixtures.stagedRoot()
-			.resolve("neoforge-runtime/neoforge-runtime.jar");
+			.resolve(TestFixtures.NEO_CARRIER_JAR);
 	private static final String HOOKS = "net/neoforged/neoforge/client/ClientHooks";
 	/** fabric-rendering-fluids' public registration API, as a mod calls it. */
 	private static final String FABRIC_API = "net/fabricmc/fabric/api/client/render/fluid/v1/FluidRenderingRegistry";
@@ -44,7 +44,7 @@ class FabricFluidModelsInjectorTest {
 	@AfterEach void reset() { System.clearProperty(FabricFluidModelsInjector.PROPERTY); }
 
 	@Test void theWarningsCheckAsksTheKernelAndOnlyIt() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEO_RT), NEO_RT + " absent");
+		TestFixtures.requireFile(Fixture.STAGED, NEO_RT, NEO_RT + " absent");
 		byte[] original = NativeCoremodParityTest.read(NEO_RT, HOOKS);
 		byte[] out = new FabricFluidModelsInjector().transform(FabricFluidModelsInjector.HOOKS, original, null);
 		assertNotSame(original, out);

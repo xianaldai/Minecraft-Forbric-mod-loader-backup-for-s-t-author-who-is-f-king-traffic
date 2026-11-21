@@ -11,6 +11,7 @@ import org.junit.jupiter.api.parallel.ResourceLock;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.*;
+import net.forbric.kernel.TestFixtures;
 
 @ExecutesInjector(AxeStripCallbacksInjector.class)
 @ResourceLock("system-properties")
@@ -44,10 +45,11 @@ class AxeStripCallbacksInjectorTest {
             assertSame(block,call.invoke(null,block,other)); assertEquals(2,axe.getField("callbacks").getInt(null)); assertEquals(1,axe.getField("nativeCalls").getInt(null));
         }
     }
-    @Test void bothNativeCarriersRouteOnlyTheStrippingDecision()throws Exception {
+    @Test void neoForgesCarrierRoutesOnlyTheStrippingDecision()throws Exception {
         var repair=new AxeStripCallbacksInjector();
         Path staged=Path.of(System.getProperty("forbric.stagedRoot","../forbric-loader/run"));
-        for(var entry:Map.of("net.neoforged.neoforge.common.extensions.IBlockExtension",staged.resolve("neoforge-runtime/neoforge-runtime.jar"),"net.minecraftforge.common.extensions.IForgeBlock",staged.resolve("merged-base/forge-runtime-interop.jar")).entrySet()) {
+        // Sorted: the first carrier read decides a skip's reason, and the skip baselines compare reasons exactly.
+        for(var entry:new java.util.TreeMap<>(Map.of("net.neoforged.neoforge.common.extensions.IBlockExtension",staged.resolve(TestFixtures.NEO_CARRIER_JAR))).entrySet()) {
             byte[] original=NativeCoremodParityTest.read(entry.getValue(),entry.getKey().replace('.','/')); byte[] bytes=repair.transform(entry.getKey(),original,null);
             assertNotSame(original,bytes); ClassNode node=new ClassNode();new ClassReader(bytes).accept(node,0);
             MethodNode tool=node.methods.stream().filter(m->m.name.equals("getToolModifiedState")).findFirst().orElseThrow();new Analyzer<>(new BasicVerifier()).analyze(node.name,tool);

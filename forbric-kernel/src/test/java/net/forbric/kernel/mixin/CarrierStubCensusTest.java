@@ -24,27 +24,24 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodNode;
 
 /**
- * Re-derives {@code carrier-stubs.txt} — every merged-base method that is a pure delegating stub to a same-name overload
+ * Re-derives {@code carrier-stubs.txt} — every method of the base, as Mixin sees it after the vanilla twins
+ * ({@link TestFixtures#twinnedBase()}), that is a pure delegating stub to a same-name overload
  * the CARRIER added (vanilla has the stub's signature and not the overload's), and one that works an argument out first
  * where the carrier only pointed vanilla's own calls of that signature at the overload — and asserts the shipped table
  * equals it.
  * MixinStubRebind moves an injector only along a row here: where vanilla has both overloads itself, a mod that chose the
- * short one meant it. Each row also says, per Forge family, what that carrier's OWN patched class has at the stub's
- * signature ({@link MixinStubRebind.Shape}) — whether a mod of that family was compiled against code there or against the
- * same stub.
+ * short one meant it. Each row also says what NeoForge's OWN patched class (the raw base, before the twins) has at the
+ * stub's signature ({@link MixinStubRebind.Shape}) — whether a NeoForge mod was compiled against code there or against the
+ * same stub. Only a twin can make the two differ: AxeItem's evaluateNewBlockState is vanilla's signature delegating to
+ * NeoForge's widened overload in the twinned class, and that overload alone, a body, in NeoForge's own.
  */
 class CarrierStubCensusTest {
-	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path BASE = TestFixtures.stagedBase();
 	private static final Path MC = TestFixtures.minecraftDir();
-	/**
-	 * The two jars the merge merged. For MinecraftForge that is {@link TestFixtures#forgeMergeInput}, never whatever sits
-	 * in forge-patched/: forbric-loader's is an older build, and its LivingEntity differs from the one the merge took.
-	 */
-	private static final Path FORGE = TestFixtures.forgeMergeInput();
-	private static final Path NEO = TestFixtures.stagedRoot().resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
+	/** NeoForge's patched game, the reference a NeoForge mod was compiled against (on the genuine base, the base itself). */
+	private static final Path NEO = TestFixtures.stagedBase();
 	private static final Path VANILLA = MC.resolve("versions/26.2/26.2.jar");
-	private static final Path INTEROP = TestFixtures.stagedRoot().resolve("merged-base/forge-runtime-interop.jar");
-	private static final Path NEO_RUNTIME = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
+	private static final Path NEO_RUNTIME = TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR);
 	private static final Path KERNEL_MAIN = mainClasses();
     private static Path mainClasses(){
         try{return Path.of(MixinStubRebind.class.getProtectionDomain().getCodeSource().getLocation().toURI());}
@@ -53,17 +50,17 @@ class CarrierStubCensusTest {
 	private static final Path KERNEL_RUNTIME = Path.of(System.getProperty("forbric.test.runtimeClasses", "build/classes/java/runtime"));
 
 	@Test void theShippedTableIsExactlyWhatTheArtifactsSay() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "merged base and vanilla jar required");
-		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(VANILLA), "merged base and vanilla jar required");
-		// The rows themselves need only the merged base and vanilla; each row's forge=/neo= columns need both carriers.
-		boolean carriers = Files.isRegularFile(FORGE) && Files.isRegularFile(NEO);
+		TestFixtures.requireFile(Fixture.STAGED, BASE, "the base and the vanilla jar required");
+		Path twinned = TestFixtures.twinnedBase();
+		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(VANILLA), "staged base and vanilla jar required");
+		// The rows themselves need only the base and vanilla; each row's neo= column needs NeoForge's patched game.
+		boolean carriers = Files.isRegularFile(NEO);
 		Map<String, ClassNode> vanilla = read(VANILLA, true);
-		// Who calls what, by name and descriptor whatever the owner: in vanilla, and in the merged game the kernel runs.
+		// Who calls what, by name and descriptor whatever the owner: in vanilla, and in the patched game the kernel runs.
 		Map<String, Set<String>> vanillaCalls = callers(List.of(VANILLA));
 		Map<String, Set<String>> mergedCalls = null;   // read on the first stub that works an argument out
 		TreeSet<String> rows = new TreeSet<>();
-		try (ZipFile zip = new ZipFile(MERGED.toFile()); ZipFile forge = carriers ? new ZipFile(FORGE.toFile()) : null;
-				ZipFile neo = carriers ? new ZipFile(NEO.toFile()) : null) {
+		try (ZipFile zip = new ZipFile(twinned.toFile()); ZipFile neo = carriers ? new ZipFile(NEO.toFile()) : null) {
 			for (ZipEntry entry : Collections.list(zip.entries())) {
 				if (!entry.getName().endsWith(".class") || !entry.getName().startsWith("net/minecraft/")) continue;
 				ClassNode merged = new ClassNode();
@@ -76,13 +73,13 @@ class CarrierStubCensusTest {
 					MixinStubRebind.Delegation delegation = MixinStubRebind.delegation(merged, stub);
 					if (delegation == null) continue;
 					// A stub that works an argument out heads a row only where the carrier pointed vanilla's own calls at
-					// the body and nothing else: every caller of the body in the merged game is a method that calls the
+					// the body and nothing else: every caller of the body in the patched game is a method that calls the
 					// stub's signature in vanilla. There a mod's injector runs exactly where it runs on vanilla; left on
 					// the stub, nothing reaches it (see MixinStubRebind.Delegation).
 					if (delegation.computed()) {
 						if (mergedCalls == null) {
-							TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(KERNEL_RUNTIME), "the merged game's callers include the kernel's");
-							mergedCalls = callers(List.of(MERGED, INTEROP, NEO_RUNTIME, KERNEL_MAIN, KERNEL_RUNTIME));
+							TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(KERNEL_RUNTIME), "the patched game's callers include the kernel's");
+							mergedCalls = callers(List.of(twinned, NEO_RUNTIME, KERNEL_MAIN, KERNEL_RUNTIME));
 						}
 						String self = merged.name + "#" + stub.name + stub.desc;
 						Set<String> fromVanilla = vanillaCalls.getOrDefault(stub.name + stub.desc, Set.of());
@@ -95,7 +92,6 @@ class CarrierStubCensusTest {
 					if (!declares(original, stub.name, stub.desc) || declares(original, delegation.delegate().name, delegate)) continue;
 					String row = merged.name + "#" + stub.name + stub.desc + " -> " + delegate;
 					rows.add(!carriers ? row : row
-							+ " forge=" + MixinStubRebind.Shape.of(entry(forge, merged.name), stub.name, stub.desc, delegate).token
 							+ " neo=" + MixinStubRebind.Shape.of(entry(neo, merged.name), stub.name, stub.desc, delegate).token);
 				}
 			}
@@ -108,38 +104,49 @@ class CarrierStubCensusTest {
 			}
 		}
 		if (!carriers) {
-			assertEquals(rows, new TreeSet<>(shipped.stream().map(line -> line.replaceAll(" (forge|neo)=\\S+", "")).toList()),
-					"carrier-stubs.txt's rows must equal what the staged merged base and vanilla say");
-			// Both are merge inputs, so staged: no vanilla install has either.
-			TestFixtures.require(Fixture.STAGED, carriers, "both carriers' patched game jars required for the forge=/neo= columns");
+			assertEquals(rows, new TreeSet<>(shipped.stream().map(line -> line.replaceAll(" neo=\\S+", "")).toList()),
+					"carrier-stubs.txt's rows must equal what the staged base and vanilla say");
+			TestFixtures.require(Fixture.STAGED, carriers, "NeoForge's patched game jar required for the neo= column");
 		}
 		if (System.getenv("FORBRIC_WRITE_CARRIER_STUBS") != null) {
 			Path out = Path.of("src/main/resources" + MixinStubRebind.TABLE);
-			Files.writeString(out, "# Generated by CarrierStubCensusTest (FORBRIC_WRITE_CARRIER_STUBS=1): merged-base delegating stubs to a\n"
-					+ "# same-name overload the carrier added. MixinStubRebind moves an injector only along these rows: a Fabric mod's\n"
-					+ "# on every row; a MinecraftForge (forge=) or NeoForge (neo=) mod's only where its own carrier's patched class\n"
+			Files.writeString(out, "# Generated by CarrierStubCensusTest (FORBRIC_WRITE_CARRIER_STUBS=1): delegating stubs of the base (after\n"
+					+ "# the vanilla twins) to a same-name overload the carrier added. MixinStubRebind moves an injector only along these\n"
+					+ "# rows: a Fabric mod's on every row; a NeoForge (neo=) mod's only where NeoForge's own patched class\n"
 					+ "# ran that selector on code - body (vanilla's signature is the body there, first of its name), descriptor-body\n"
 					+ "# (a body, declared after another overload: a descriptor selector only), overload-body (only the widened\n"
 					+ "# overload is there: a name-only selector only). stub (the carrier keeps the same stub) and absent never move.\n"
 					+ String.join("\n", rows) + "\n");
 		}
-		assertEquals(rows, new TreeSet<>(shipped), "carrier-stubs.txt must equal what the staged merged base, vanilla and "
-				+ "both carriers say; regenerate with FORBRIC_WRITE_CARRIER_STUBS=1 after a base rebuild");
-		// What fusion (MinecraftForge) was built against: MinecraftForge's ModelManager has both as bodies, NeoForge added
-		// the overloads. The mirror: NeoForge kept PackDetector's signature as the body where MinecraftForge forwards.
-		assertRow(rows, "net/minecraft/client/resources/model/ModelManager#loadModels(", "forge=body neo=stub");
-		assertRow(rows, "net/minecraft/client/resources/model/ModelManager#discoverModelDependencies(", "forge=body neo=stub");
-		assertRow(rows, "net/minecraft/server/packs/repository/PackDetector#detectPackResources(", "forge=stub neo=body");
-		assertRow(rows, "net/minecraft/client/renderer/block/dispatch/multipart/MultiPartModel#collectParts(", "forge=stub neo=absent");
-		assertRow(rows, "net/minecraft/world/level/ServerExplosion#hurtEntities(", "forge=overload-body neo=stub");
-		assertRow(rows, "net/minecraft/world/item/AxeItem#evaluateNewBlockState(", "forge=stub neo=overload-body");
-		assertRow(rows, "net/minecraft/client/multiplayer/ClientLevel#addBreakingBlockEffect(", "forge=descriptor-body neo=stub");
-		assertRow(rows, "net/minecraft/world/entity/player/Player#getDestroySpeed(", "forge=stub neo=stub");
-		// Stubs that work an argument out, which nothing in the merged game calls: LiquidBounce's sweep-attack sound, and
+		assertEquals(rows, new TreeSet<>(shipped), "carrier-stubs.txt must equal what the staged base, vanilla and NeoForge's "
+				+ "patched game say; regenerate with FORBRIC_WRITE_CARRIER_STUBS=1 after a base rebuild");
+		// NeoForge added the overloads, so a Fabric mod (compiled against vanilla's bodies) moves and a NeoForge mod does not.
+		assertRow(rows, "net/minecraft/client/resources/model/ModelManager#loadModels(", "neo=stub");
+		assertRow(rows, "net/minecraft/client/resources/model/ModelManager#discoverModelDependencies(", "neo=stub");
+		assertRow(rows, "net/minecraft/world/level/ServerExplosion#hurtEntities(", "neo=stub");
+		assertRow(rows, "net/minecraft/client/multiplayer/ClientLevel#addBreakingBlockEffect(", "neo=stub");
+		assertRow(rows, "net/minecraft/world/entity/player/Player#getDestroySpeed(", "neo=stub");
+		// The one row a twin makes: VanillaMemberTwinInjector gives AxeItem vanilla's evaluateNewBlockState back as a stub
+		// over NeoForge's widened overload, which NeoForge's own class has alone, as a body. A NeoForge mod's name-only
+		// selector ran there; read post-twin it would say stub, and such a selector would bind the twin.
+		assertRow(rows, "net/minecraft/world/item/AxeItem#evaluateNewBlockState(", "neo=overload-body");
+		// MinecraftForge's stubs are not NeoForge's: NeoForge kept PackDetector's and MultiPartModel's signatures as bodies.
+		for (String gone : List.of("net/minecraft/server/packs/repository/PackDetector#detectPackResources(",
+				"net/minecraft/client/renderer/block/dispatch/multipart/MultiPartModel#collectParts(")) {
+			assertTrue(rows.stream().noneMatch(r -> r.startsWith(gone)), gone);
+		}
+		// Stubs that work an argument out, which nothing in the game calls: LiquidBounce's sweep-attack sound, and
 		// ViaFabricPlus' old fluid physics and collision bounce, hang on the vanilla signature.
-		assertRow(rows, "net/minecraft/world/entity/player/Player#doSweepAttack(", "forge=body neo=stub");
-		assertRow(rows, "net/minecraft/world/entity/EntityFluidInteraction#update(", "forge=body neo=stub");
-		assertRow(rows, "net/minecraft/world/entity/Entity#restituteMovementAfterCollisions(", "forge=body neo=stub");
+		assertRow(rows, "net/minecraft/world/entity/player/Player#doSweepAttack(", "neo=stub");
+		assertRow(rows, "net/minecraft/world/entity/EntityFluidInteraction#update(", "neo=stub");
+		assertRow(rows, "net/minecraft/world/entity/Entity#restituteMovementAfterCollisions(", "neo=stub");
+		// The rows gate-m46 and gate-m9 G1 rebind end to end.
+		for (String gated : List.of("net/minecraft/world/entity/LivingEntity#randomTeleport(", "net/minecraft/locale/Language#loadFromJson(",
+				"net/minecraft/locale/Language#parseTranslations(", "net/minecraft/client/resources/language/ClientLanguage#appendFrom(",
+				"net/minecraft/world/entity/LivingEntity#canGlide(", "net/minecraft/world/SimpleContainer#setItem(",
+				"net/minecraft/world/level/block/entity/BaseContainerBlockEntity#setItem(")) {
+			assertTrue(rows.stream().anyMatch(r -> r.startsWith(gated)), gated);
+		}
 		// Not one whose body NeoForge's own code calls besides: its registry snapshot calls MappedRegistry.register(int, …)
 		// directly, and fabric-registry-sync's add-entry callback stays on register(ResourceKey, …), where it fires on Fabric.
 		assertTrue(rows.stream().noneMatch(r -> r.startsWith("net/minecraft/core/MappedRegistry#register(")), rows.toString());

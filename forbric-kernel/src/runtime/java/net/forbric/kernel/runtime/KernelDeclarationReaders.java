@@ -260,6 +260,8 @@ public final class KernelDeclarationReaders {
 		for (DiscoveredMod mod : fabric) {
 			String id = mod.getId();
 			if (id == null || id.isBlank() || !CrossEcosystemDeclarations.mayDeclare(mod)) continue;
+			// The public constructor: a Fabric mod's file is its own, even in a universal jar whose NeoForge half shares
+			// the jar's one file (KernelModFileInfo.forMod).
 			KernelModInfo info = new KernelModInfo(id, jarOf(mod), mod);
 			built.add(new Declarer(id, ModPresence.spellingKey(id), info, new KernelModContainer(info, null)));
 		}

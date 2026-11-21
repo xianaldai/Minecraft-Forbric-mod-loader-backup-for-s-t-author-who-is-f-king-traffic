@@ -41,13 +41,13 @@ import net.forbric.kernel.util.Caught;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
- * Names every installed jar, and its mod, that reads a vanilla field with a descriptor the merged base no longer
+ * Names every installed jar, and its mod, that reads a vanilla field with a descriptor the base no longer
  * has ({@link MergedBaseFieldDrift#KNOWN}) — at boot, statically, so the finding is complete before
  * {@code load-report.txt} is written rather than a {@code NoSuchFieldError} whenever the access runs.
  *
- * <p>Same shape as {@link CapabilityUseAudit}: a {@link ByteScan} needle over each class for the owner names
+ * <p>Same shape as the retired {@code CapabilityUseAudit}: a {@link ByteScan} needle over each class for the owner names
  * (cheap, no inflate beyond the bytes), then an ASM confirm on the hit — the field reference must carry the
- * VANILLA descriptor. A class that names {@code KeyMapping} only as a type, or reads {@code MAP} with the merged
+ * VANILLA descriptor. A class that names {@code KeyMapping} only as a type, or reads {@code MAP} with the base's
  * descriptor (a NeoForge build), is not a finding. {@code -Dforbric.fieldDriftAudit=off} skips the scan.
  */
 public final class FieldDriftAudit {
@@ -129,7 +129,7 @@ public final class FieldDriftAudit {
 			for (var e : HITS.entrySet()) hits.put(e.getKey(), Set.copyOf(e.getValue()));
 			scanned = scannedJars;
 		}
-		ForbricLog.info("[Forbric/FieldDrift] scanned %d jar(s): %d reference a vanilla field the merge re-typed", scanned,
+		ForbricLog.info("[Forbric/FieldDrift] scanned %d jar(s): %d reference a vanilla field the base re-typed", scanned,
 				hits.size());
 		if (hits.isEmpty()) return;
 		List<ModCatalog.Entry> catalog = ModCatalog.everything();
@@ -138,7 +138,7 @@ public final class FieldDriftAudit {
 			for (ModCatalog.Entry entry : catalog) {
 				if (entry.jar() == null || !entry.jar().equals(e.getKey())) continue;
 				ModCatalog.mark(entry.modId(), ModCatalog.Status.DEGRADED, "reads " + String.join(", ", simple(e.getValue()))
-						+ " with vanilla's descriptor, which the merged base no longer declares — NoSuchFieldError at that access");
+						+ " with vanilla's descriptor, which the base no longer declares — NoSuchFieldError at that access");
 				named.add(entry.modId());
 			}
 			for (String key : e.getValue()) {

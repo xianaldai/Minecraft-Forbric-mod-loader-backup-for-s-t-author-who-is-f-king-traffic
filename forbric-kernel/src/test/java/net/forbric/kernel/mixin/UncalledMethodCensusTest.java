@@ -36,27 +36,25 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 import net.forbric.api.Ecosystem;
-import net.forbric.kernel.transform.ForgeOverlayNeuterInjector;
 
 /**
- * Re-derives {@code uncalled-methods.txt} — every merged-base method that an ecosystem's own game calls and nothing in the
- * merged game calls — and asserts the shipped table equals it. MixinFit reads an injector bound only to such a method,
- * for a mod of a listed ecosystem, as one that never runs.
+ * Re-derives {@code uncalled-methods.txt} — every method of the base, as Mixin sees it after the vanilla twins
+ * ({@link TestFixtures#twinnedBase()}), that an ecosystem's own game calls and nothing in the game calls — and asserts the
+ * shipped table equals it. MixinFit reads an injector bound only to such a method, for a mod of a listed ecosystem, as
+ * one that never runs.
  *
- * <p>The merged game is what the kernel puts on the game classpath: the merged jar, {@code forge-runtime-interop.jar},
- * {@code neoforge-runtime.jar}, and the kernel's own boot and game-side classes (a repair may call a vanilla method, or
- * synthesize a call by name). The references are the jars each kind of mod was compiled against: stock 26.2 for
- * Fabric, MinecraftForge's and NeoForge's patched clients plus their runtime for theirs.
+ * <p>The game is what the kernel puts on the game classpath: the base (post-twin: the twins add back vanilla members
+ * NeoForge's patches no longer call, Hud's extractHotbarAndDecorations first among them, and every consumer of this table
+ * reads Mixin's post-chain view), {@code neoforge-runtime.jar}, and the kernel's own boot and game-side classes (a repair
+ * may call a vanilla method, or synthesize a call by name). The references are the jars each kind of mod was compiled
+ * against: stock 26.2 for Fabric, NeoForge's patched client (the raw base) plus its runtime for NeoForge's.
  */
 class UncalledMethodCensusTest {
 	private static final Path STAGED = TestFixtures.stagedRoot();
-	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
-	private static final Path INTEROP = STAGED.resolve("merged-base/forge-runtime-interop.jar");
-	private static final Path NEO_RUNTIME = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
-	private static final Path FORGE_RUNTIME = STAGED.resolve("forge-runtime/forge-runtime.jar");
+	private static final Path BASE = STAGED.resolve(TestFixtures.BASE_JAR);
+	private static final Path NEO_RUNTIME = STAGED.resolve(TestFixtures.NEO_CARRIER_JAR);
 	private static final Path VANILLA = TestFixtures.vanillaJar();
-	private static final Path FORGE = STAGED.resolve("forge-patched/patched-mc-forge-26.2.jar");
-	private static final Path NEOFORGE = STAGED.resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
+	private static final Path NEOFORGE = STAGED.resolve(TestFixtures.BASE_JAR);
 	private static final Path KERNEL_MAIN = mainClasses();
 	private static final Path KERNEL_RUNTIME = Path.of(System.getProperty("forbric.test.runtimeClasses", "build/classes/java/runtime"));
     private static Path mainClasses() {
@@ -110,26 +108,25 @@ class UncalledMethodCensusTest {
 	}
 
 	@Test void theShippedTableIsExactlyWhatTheArtifactsSay() throws Exception {
-		for (Path jar : List.of(MERGED, INTEROP, NEO_RUNTIME, FORGE_RUNTIME, VANILLA, FORGE, NEOFORGE)) {
-			TestFixtures.require(jar == VANILLA ? Fixture.MC_LIBRARIES : Fixture.STAGED, Files.isRegularFile(jar), jar + " required");
+		for (Path jar : List.of(BASE, NEO_RUNTIME, VANILLA, NEOFORGE)) {
+			TestFixtures.requireFile(jar == VANILLA ? Fixture.MC_LIBRARIES : Fixture.STAGED, jar, jar + " required");
 		}
 		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(KERNEL_RUNTIME), "the game-side classes are compiled only with staged jars");
 
-		// The merged game: what it declares, where it names each method (name+desc, and owner#name+desc → the methods naming
+		// The patched game: what it declares, where it names each method (name+desc, and owner#name+desc → the methods naming
 		// it), and the strings it holds.
 		Map<String, Shape> game = new HashMap<>();
 		Map<String, Shape> mergedOnly = new LinkedHashMap<>();
 		Names named = new Names();
-		scan(MERGED, (c, m) -> {}, game, mergedOnly, named);
-		for (Path code : List.of(INTEROP, NEO_RUNTIME, KERNEL_MAIN, KERNEL_RUNTIME)) scan(code, (c, m) -> {}, game, null, named);
+		scan(TestFixtures.twinnedBase(), (c, m) -> {}, game, mergedOnly, named);
+		for (Path code : List.of(NEO_RUNTIME, KERNEL_MAIN, KERNEL_RUNTIME)) scan(code, (c, m) -> {}, game, null, named);
 		Set<String> gameClasses = Set.copyOf(game.keySet());
 
-		// Code the kernel keeps from ever running: the leaves MinecraftForge's builder puts in its vanilla HUD tree, each
-		// replaced before the tree bakes (KernelForgeOverlayLayers.neuterVanillaLeaves).
-		Set<String> silenced = ForgeOverlayNeuterInjector.silencedLeafBodies(node(INTEROP, ForgeOverlayNeuterInjector.TARGET));
-		assertFalse(silenced.isEmpty(), "MinecraftForge's vanilla HUD tree builder registers no leaf this census can read");
+		// Code the kernel keeps from ever running: none. On the merged base these were the leaves MinecraftForge's builder put
+		// in its vanilla HUD tree, which the kernel silenced (the `!` sites); NeoForge's own base has no such tree.
+		Set<String> silenced = Set.of();
 
-		// Uncalled: every place the merged game names it is itself uncalled, or silenced — a fixpoint, so a method only an
+		// Uncalled: every place the game names it is itself uncalled, or silenced — a fixpoint, so a method only an
 		// uncalled method calls is uncalled too (NeoForge's layers replaced vanilla's only call of extractHotbarAndDecorations,
 		// and with it the only call of what that method alone calls). Only what the merged jar declares is a candidate; no
 		// string may spell it, and nothing outside the game may reach it through a supertype.
@@ -146,7 +143,6 @@ class UncalledMethodCensusTest {
 		// Each reference: which of those it calls, from where, through a type that reaches the declaring class.
 		Map<Ecosystem, List<Path>> references = new EnumMap<>(Ecosystem.class);
 		references.put(Ecosystem.FABRIC, List.of(VANILLA));
-		references.put(Ecosystem.FORGE, List.of(FORGE, FORGE_RUNTIME));
 		references.put(Ecosystem.NEOFORGE, List.of(NEOFORGE, NEO_RUNTIME));
 		TreeMap<String, Set<Ecosystem>> ecosystems = new TreeMap<>();
 		Map<String, TreeSet<String>> callers = new HashMap<>();
@@ -170,7 +166,7 @@ class UncalledMethodCensusTest {
 			Set<String> referenceClasses = Set.copyOf(shapes.keySet());
 			// A caller that never runs in its own game does not make the method run there either: the same fixpoint over the
 			// reference. A method only such callers call runs natively no more than it does here, and is no loss — unless a mod
-			// can still make it run there and not here: a caller that is not private (a mod may call it), when the merged game
+			// can still make it run there and not here: a caller that is not private (a mod may call it), when the patched game
 			// does not keep that same caller calling the method (a mod calling it here would then reach it too).
 			Set<String> referenceDead = fixpoint(shapes, new HashMap<>(shapes), referenceClasses, referenceNamed, Set.of(), new TreeMap<>());
 			Set<String> referencePrivateDead = fixpoint(privateOnly(shapes), new HashMap<>(shapes), referenceClasses, referenceNamed, Set.of(), new TreeMap<>());
@@ -197,7 +193,7 @@ class UncalledMethodCensusTest {
 		}
 		TreeSet<String> rows = new TreeSet<>();
 		ecosystems.forEach((head, which) -> {
-			// The places the merged game names it, every one of them uncalled or silenced: the run-time re-check leaves exactly
+			// The places the patched game names it, every one of them uncalled or silenced: the run-time re-check leaves exactly
 			// these out, and a call from anywhere else makes it live again.
 			TreeSet<String> sites = new TreeSet<>();
 			for (String site : named.sites(head, candidates.get(head), game)) {
@@ -216,11 +212,11 @@ class UncalledMethodCensusTest {
 		}
 		if (System.getenv("FORBRIC_WRITE_UNCALLED_METHODS") != null) {
 			Files.writeString(Path.of("src/main/resources" + MergedBaseUncalledMethods.TABLE),
-					"# Generated by UncalledMethodCensusTest (FORBRIC_WRITE_UNCALLED_METHODS=1): a merged-base method nothing in the\n"
-					+ "# merged game (merged jar, carriers, kernel) calls or names, that each listed ecosystem's own game calls from the\n"
-					+ "# listed methods. MixinFit reads an injector bound only to one as never running, for a mod of a listed ecosystem.\n"
-					+ "# The last column, when there is one, is every place the merged game names the method — each itself uncalled, or\n"
-					+ "# (marked !) code the kernel silences (MinecraftForge's vanilla HUD leaves): a call from anywhere else makes it live.\n"
+					"# Generated by UncalledMethodCensusTest (FORBRIC_WRITE_UNCALLED_METHODS=1): a method of the base (after the vanilla\n"
+					+ "# twins) nothing in the game (base, NeoForge carrier, kernel) calls or names, that each listed ecosystem's own game\n"
+					+ "# calls from the listed methods. MixinFit reads an injector bound only to one as never running, for a mod of a\n"
+					+ "# listed ecosystem. The last column, when there is one, is every place the game names the method — each itself\n"
+					+ "# uncalled (or, marked !, code the kernel silences; none today): a call from anywhere else makes it live.\n"
 					+ "# <class>#<method> | <ecosystems> | <callers in those games> [| <uncalled or silenced places naming it>]\n"
 					+ String.join("\n", rows) + "\n");
 		}
@@ -229,11 +225,13 @@ class UncalledMethodCensusTest {
 				+ "calls or names one of these methods");
 		for (String row : shipped) assertNotNull(MergedBaseUncalledMethods.Row.parse(row), "unreadable row: " + row);
 		assertTrue(shipped.stream().anyMatch(r -> r.startsWith("net/minecraft/client/gui/Hud#extractHotbarAndDecorations(")),
-				"the case this table exists for: NeoForge's HUD layers replaced vanilla's only call");
-		// …and what only that method calls, with MinecraftForge's own caller silenced by the kernel: the split health block.
+				"the case this table exists for: NeoForge's HUD layers replaced vanilla's only call (the method is the twin "
+						+ "VanillaMemberTwinInjector adds back, so this row needs the post-twin base)");
+		// …and what only that method calls: the split health block, whose four pieces NeoForge's layers draw instead.
 		assertTrue(shipped.stream().anyMatch(r -> r.startsWith("net/minecraft/client/gui/Hud#extractPlayerHealth(")),
-				"vanilla calls extractPlayerHealth only from the uncalled extractHotbarAndDecorations, MinecraftForge only from a "
-						+ "leaf of its vanilla tree, which the kernel silences");
+				"vanilla calls extractPlayerHealth only from the uncalled extractHotbarAndDecorations, NeoForge not at all");
+		assertTrue(shipped.stream().noneMatch(r -> r.contains(" " + MergedBaseUncalledMethods.SILENCED) || r.contains("|" + MergedBaseUncalledMethods.SILENCED)),
+				"nothing is silenced on NeoForge's own base");
 	}
 
 	/** The same classes, each with only its private methods. */
@@ -359,6 +357,14 @@ class UncalledMethodCensusTest {
 	 * Reads every class of a jar or class directory: shapes into {@code shapes} (and {@code merged}), and, when asked, what the
 	 * code names into {@code named}.
 	 */
+	/**
+	 * Kernel classes whose strings name game members to copy, not to call: {@code VanillaMemberTwinInjector}'s rows spell
+	 * vanilla's {@code Hud.extractHotbarAndDecorations}, {@code AxeItem.evaluateNewBlockState} and the rest so it can add
+	 * them where a base lacks them, and it adds nothing where the base declares them (the merged base). Read as names,
+	 * they would make every twinned member, and what only it calls, look live; nothing in them calls a game method.
+	 */
+	private static final Set<String> COPIES_ONLY = Set.of("net/forbric/kernel/transform/VanillaMemberTwinInjector");
+
 	private static void scan(Path code, Visitor visitor, Map<String, Shape> shapes, Map<String, Shape> merged, Names named) throws IOException {
 		List<byte[]> classes = new ArrayList<>();
 		if (Files.isDirectory(code)) {
@@ -385,9 +391,10 @@ class UncalledMethodCensusTest {
 			if (merged != null) merged.put(c.name, shape);
 			Set<String> held = new HashSet<>();
 			boolean looksUp = false;
+			boolean copiesOnly = COPIES_ONLY.contains(c.name.contains("$") ? c.name.substring(0, c.name.indexOf('$')) : c.name);
 			for (MethodNode m : c.methods) {
 				visitor.method(c, m);
-				if (named == null) continue;
+				if (named == null || copiesOnly) continue;
 				String site = c.name + "#" + m.name + m.desc;
 				for (AbstractInsnNode insn : m.instructions) {
 					for (Call call : calls(c, m, insn)) {
@@ -478,4 +485,5 @@ class UncalledMethodCensusTest {
 		}
 		return false;
 	}
+
 }

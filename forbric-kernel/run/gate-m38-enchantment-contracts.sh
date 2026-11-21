@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # M38: actual command, loot and table decisions through the unmodified Fabric item module.
+# Each phase boots in a rundir of its own (build/enchantment-runs/<uuid>) on the scheduler's GATE_PORT and writes
+# its evidence to build/verification/m38-entity, which no other gate touches; its canary builder writes only its
+# own files under run/canary. So it runs beside other gates: undeclared, it ran alone in every sweep (lane OPT).
+# GATE-PARALLEL: mem=2000
 set -euo pipefail
 GATE_PORT="${GATE_PORT:-25598}"
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
@@ -18,7 +22,7 @@ PY
 fi
 kernel_jar
 bash "$KERNEL/run/build-enchantment-contracts-canary.sh"
-python3 - <<'PY'
+python3 - <<'PY' || { echo "[kernel] FAIL M38 — the driver stopped on the assertion above"; exit 1; }
 import json, os, pathlib, shutil, subprocess, uuid, signal
 kernel=pathlib.Path(os.environ['KERNEL']);root=kernel.parent;results=kernel/'build/verification/m38-entity';results.mkdir(parents=True,exist_ok=True)
 inputs=json.loads((kernel/'run/canary/m38-build-inputs.json').read_text());port=os.environ['GATE_PORT']
@@ -28,15 +32,18 @@ for phase in ('positive','off'):
  (run/'server.properties').write_text(f'server-ip=127.0.0.1\nserver-port={port}\nonline-mode=false\nlevel-name=world\nlevel-type=minecraft:flat\nlevel-seed=8035262\nmax-tick-time=-1\npause-when-empty-seconds=0\nview-distance=2\nsimulation-distance=2\n')
  for item in [inputs['mod'],*inputs['modules']]:source=pathlib.Path(item['path']);shutil.copy2(source,run/'mods'/source.name)
  env=os.environ.copy();env.update(RUNDIR=str(run),FORBRIC_COMPAT_POLICY='strict' if phase=='positive' else 'continue',M38_RESULT_COMPATIBILITY=str(results/(phase+'-compatibility.json')),
-   FORBRIC_JVM=f'-Dforbric.fabricItemContracts={"on" if phase=="positive" else "off"} -Dforbric.enchantPhase={phase} -Dforbric.enchantNonce={nonce} -Dforbric.enchantRoot={run}'
+   FORBRIC_JVM=os.environ.get('FORBRIC_JVM','')+f' -Dforbric.fabricItemContracts={"on" if phase=="positive" else "off"} -Dforbric.enchantPhase={phase} -Dforbric.enchantNonce={nonce} -Dforbric.enchantRoot={run}'
    # The command, loot and anvil redirects move onto the carrier's supportsEnchantment by CarrierDecisions, and the table's
    # primary-item redirect onto the carrier's isPrimaryItemFor method reference by CarrierMethodReferences (the native lambda
    # runs there with fabric-api's handler, its "|| isBook" kept); both know no mod and have their own switches: the negative
    # control turns them off too, or a deciding listener still lands without the contracts.
    +(' -Dforbric.carrierDecisions=off -Dforbric.carrierMethodReferences=off' if phase=='off' else ''))
- for key,role in [('MERGED','merged'),('FORGE_RT','forge'),('NEO_RT','neo')]:env[key]=inputs[role]['path']
+ # The game base (NeoForge's patched game) and its one carrier the canary was built and recorded against, handed to the
+ # launcher as BASE and NEO_RT and attested under the neo-patched / neo-runtime roles. (Stage 4: no merged base, no
+ # MinecraftForge carrier.)
+ for key,role in [('BASE','base'),('NEO_RT','neo')]:env[key]=inputs[role]['path']
  command=['python3',str(kernel/'run/compat/evidence.py'),'run','--source',str(root),'--mods',str(run/'mods'),'--output',str(results/(phase+'.json'))]
- for role,path in [('merged',env['MERGED']),('forge-interop',env['FORGE_RT']),('neo-runtime',env['NEO_RT']),('fabric-api',inputs['fabricApi']['path']),('kernel',str(kernel/'build/libs/forbric-kernel-0.1.0-SNAPSHOT.jar')),('kernel-runtime',str(kernel/'build/libs/forbric-kernel-runtime-0.1.0-SNAPSHOT.jar'))]:command+=['--artifact',role+'='+path]
+ for role,path in [('neo-patched',env['BASE']),('neo-runtime',env['NEO_RT']),('fabric-api',inputs['fabricApi']['path']),('kernel',str(kernel/'build/libs/forbric-kernel-0.1.0-SNAPSHOT.jar')),('kernel-runtime',str(kernel/'build/libs/forbric-kernel-runtime-0.1.0-SNAPSHOT.jar'))]:command+=['--artifact',role+'='+path]
  command+=['--','bash',str(kernel/'run/gate-m38-enchantment-contracts.sh'),'--execute']
  (results/(phase+'.log')).unlink(missing_ok=True)  # the lost-port check below must not read an earlier run's log
  with (results/(phase+'-driver.log')).open('w') as output:
@@ -62,6 +69,6 @@ for phase in ('positive','off'):
  if phase=='positive':assert report['confirmedRequired']==0,report
  else:assert report['confirmedRequired']>0,report
  text=(results/(phase+'.log')).read_text();assert 'Done (' in text and 'Preparing crash report' not in text and 'All dimensions are saved' in text
- print('[M38] PASS',phase,'sixteen actual enchantment cases with expected verdicts',flush=True)
-print('[M38] GATE GREEN')
+ print('[kernel] PASS M38',phase,'sixteen actual enchantment cases with expected verdicts',flush=True)
+print('[kernel] M38 GATE GREEN')
 PY

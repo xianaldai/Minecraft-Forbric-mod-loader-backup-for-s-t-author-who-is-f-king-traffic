@@ -24,7 +24,7 @@ public final class FinalMixinApplications {
  /** MixinExtras' injectors are built on Mixin's InjectionInfo, so require/defaultRequire mean the same thing, and
   * each successful injection is a direct call to the merged handler too: zero references still proves the handler
   * did not attach. Left out, the kernel's defaultRequire relaxation made their misses silent. What zero references
-  * does not settle is whether the feature is lost. Stock fabric-api misses this way on the merged base in many
+  * does not settle is whether the feature is lost. Stock fabric-api misses this way on the base in many
   * places, and the kernel supplies some of those features outside any mixin (a fuel or hopper bridge, a tooltip bridge
   * over NeoForge's appenders). None of those replacements is a
   * structural proof here yet. Confirming them would stop every dedicated server carrying fabric-api at boot, so an
@@ -41,7 +41,7 @@ public final class FinalMixinApplications {
  private record Plan(String mixin, Config config, List<String> targets, List<Injector> injectors, boolean complete) { }
  record Renamed(String name, String desc) { }
  interface Renames { List<Renamed> find(String mixin, String name, String desc); }
- /** NEVER_RUNS: attached, but only in methods nothing in the merged game calls (MergedBaseUncalledMethods). */
+ /** NEVER_RUNS: attached, but only in methods nothing in the game calls (MergedBaseUncalledMethods). */
  private enum Outcome { ATTACHED, OPTIONAL, EQUIVALENT, MISSING, NEVER_RUNS, UNKNOWN }
  private static final Map<String, Set<Config>> CONFIGS = new ConcurrentHashMap<>();
  private static final Map<String, Plan> PLANS = new ConcurrentHashMap<>();
@@ -141,7 +141,7 @@ public final class FinalMixinApplications {
     List<MethodNode> candidates=merged.get(mixin).stream().filter(m->rename.stream().anyMatch(n->n.name().equals(m.name)&&n.desc().equals(m.desc))).toList();
     Outcome state=Outcome.UNKNOWN;
     int references=candidates.size()==1?references(target,candidates.getFirst()):-1;
-    // Attached is not run: every call of the handler in a method nothing in the merged game calls. Judged whatever the
+    // Attached is not run: every call of the handler in a method nothing in the game calls. Judged whatever the
     // injector's shape, because a call in dead code is dead however it is counted; a mandatory one is then a loss.
     String dead=references>0?neverRuns(plan,target,candidates.getFirst()):null;
     if(dead!=null)
@@ -156,9 +156,9 @@ public final class FinalMixinApplications {
     String replacement=lost||optionalMiss||state==Outcome.UNKNOWN&&references==0
       ?MixinEquivalentImplementations.proof(mixin,injector.name(),injector.desc(),injector.bodyHash(),target):null;
     if(replacement!=null)state=Outcome.EQUIVALENT;
-    // Attached, but only inside a forwarding stub the merge kept for vanilla's signature, where the mod's own platform
+    // Attached, but only inside a forwarding stub the base kept for vanilla's signature, where the mod's own platform
     // ran code: it runs only when something still calls that old signature. torrential's fuel hook stays on
-    // FuelValues.vanillaBurnTimes' stub (its captures need the stub's arguments), which the merged server never called
+    // FuelValues.vanillaBurnTimes' stub (its captures need the stub's arguments), which the server never calls
     // until the kernel's fuel bridge began handing its table through it (KernelFabricFuel.throughVanillaReturnHooks).
     // Still a reference, so not a loss; not a discharge either.
     String stub=references>0?stubOnlyHost(target,candidates.getFirst(),plan.config().name()):null;
@@ -176,7 +176,7 @@ public final class FinalMixinApplications {
     if(superseded!=null)CompatibilityFindings.record(new CompatibilityFinding(id,mod,
       "Mixin injection "+injector.name(),"mixin-application:"+plan.config().name(),CompatibilityFinding.Confidence.RESOLVED,
       plan.config().required()||injector.minimum()>=1,superseded,List.of("target="+binary,"handler="+injector.symbol(),superseded)));
-    // Proved from the final class and the merged game's census, not observed: a guest mod calling the dead method itself
+    // Proved from the final class and the game's census, not observed: a guest mod calling the dead method itself
     // is outside both. So it marks the mod's row and never asks the player to quit or stops a STRICT server; the author's
     // requirement stays in the evidence. MixinExtras kinds stay SUSPECTED, as for MISSING (a kernel bridge serves some).
     else if(state==Outcome.NEVER_RUNS)CompatibilityFindings.record(new CompatibilityFinding(id,mod,
@@ -200,7 +200,7 @@ public final class FinalMixinApplications {
       required,"The missing injector is replaced by a verified implementation",List.of("target="+binary,replacement)));
     else if(stub!=null)CompatibilityFindings.record(new CompatibilityFinding(id,mod,
       "Mixin injection "+injector.name(),"mixin-application:"+plan.config().name(),CompatibilityFinding.Confidence.SUSPECTED,
-      required,"Attached only inside a forwarding stub the merged base keeps for the old signature; it runs only when something still calls that signature",
+      required,"Attached only inside a forwarding stub the base keeps for the old signature; it runs only when something still calls that signature",
       List.of("target="+binary,"mixin="+mixin,"handler="+injector.symbol(),"stub="+stub,"final handler references="+references)));
     else if(state==Outcome.ATTACHED||state==Outcome.OPTIONAL)CompatibilityFindings.resolve(id,mod,
       state==Outcome.ATTACHED?"final defined class contains a reference to the exact merged handler":"original injector explicitly permits zero attachments");
@@ -214,7 +214,9 @@ public final class FinalMixinApplications {
         injector.understood()?"partial count":"grouped, sugar or several injector annotations")));
     // Register after the finding exists: a replacement witness arriving here must resolve this observation,
     // rather than resolve nothing and then leave a newly recorded loss behind.
-    if(unattached&&superseded==null&&SupersededMixins.replacementFor(mixin)!=null)SupersededMixins.awaitProof(plan.config().name(),mixin);
+    // Also when already proved (its witness can be this very class, observed first): awaitProof then resolves the
+    // mixin-level row beside this one at once, which nothing else would.
+    if(unattached&&SupersededMixins.replacementFor(mixin)!=null)SupersededMixins.awaitProof(plan.config().name(),mixin);
     if(SupersededMixins.provedReplacement(mixin)==null&&replacement==null
       &&(lost||optionalMiss||state==Outcome.UNKNOWN&&injector.minimum()>=1&&references<injector.minimum())) {
      String reason=dead!=null?"attached only in "+dead+", so the injector never runs"
@@ -266,9 +268,9 @@ public final class FinalMixinApplications {
   }
   return result;
  }
- /** "Hud.extractHotbarAndDecorations (nothing in the merged game calls it; …)" when every method of the final class that
+ /** "Hud.extractHotbarAndDecorations (nothing in the game calls it; …)" when every method of the final class that
   * calls {@code handler} is one MergedBaseUncalledMethods lists for the config's ecosystem, or a body a carrier renamed
-  * that nothing in the merged game calls (CarrierRenames: malilib's tooltip hook, which R3 moves where vanilla's
+  * that nothing in the game calls (CarrierRenames: malilib's tooltip hook, which R3 moves where vanilla's
   * tooltip body is); null when any may run. */
  private static String neverRuns(Plan plan,ClassNode target,MethodNode handler) {
   if(!MixinFit.asksLiveness()||!MergedBaseUncalledMethods.lists(target.name)&&!CarrierRenames.listsUncalled(target.name))return null;

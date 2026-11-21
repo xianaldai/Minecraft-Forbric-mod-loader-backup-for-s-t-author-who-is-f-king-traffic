@@ -28,7 +28,7 @@ import net.forbric.kernel.util.ForbricLog;
  * The access directives — MinecraftForge/NeoForge {@code accesstransformer.cfg} lines and Fabric access-widener
  * entries — that named a member their target class does not have.
  *
- * <p>Both transformers apply by visiting a class and widening what they meet; a directive for a member the merge
+ * <p>Both transformers apply by visiting a class and widening what they meet; a directive for a member the base
  * renamed or dropped meets nothing and says nothing, and the mod that needed the access dies later on an
  * {@code IllegalAccessError} that names neither the directive nor the mod. Each transformer records such a
  * directive here as it finishes the class, with the jar the directive came from; {@link #report} says how many,
@@ -43,7 +43,7 @@ public final class AccessCensus {
 	 * is there with another descriptor. That distinction is the whole judgement: a name the class does not have
 	 * at all is a line the mod's file carries for another Minecraft version — a native loader ignores it just the
 	 * same, and a real pack has two dozen (journeymap's SRG-named fields, old overloads) — while a name that IS
-	 * there under another descriptor is a member the merge re-typed, and only that one costs the mod something
+	 * there under another descriptor is a member NeoForge re-typed, and only that one costs the mod something
 	 * it would have had on its own loader.
 	 */
 	public record Unmatched(String kind, String source, String directive, boolean retyped, boolean namePresent,
@@ -57,8 +57,12 @@ public final class AccessCensus {
 		}
 	}
 
-	/** The two ecosystems' own packages: a descriptor naming one is a type this Minecraft does not ship. */
-	private static final List<String> CARRIER_TYPES = List.of("Lnet/minecraftforge/", "Lnet/neoforged/");
+	/**
+	 * The carrier's own package: a descriptor naming it is a type this Minecraft does not ship. NeoForge's only: the
+	 * game base and carrier name no {@code net/minecraftforge/} class at all (0 of their classes, Stage 4 C5), so a
+	 * MinecraftForge prefix here could never match a field this instance declares.
+	 */
+	private static final List<String> CARRIER_TYPES = List.of("Lnet/neoforged/");
 
 	/**
 	 * Whether a field the widener missed is one an ECOSYSTEM re-typed, judged from what it is now.
@@ -69,8 +73,8 @@ public final class AccessCensus {
 	 * native loader ignores in exactly the same way — and it was being reported as a merge re-typing that marked
 	 * the mod.
 	 *
-	 * <p>What distinguishes the real case is that the descriptor now names a CARRIER type: NeoForge's or
-	 * MinecraftForge's own class, which stock Minecraft does not ship, so no version of the game ever declared it
+	 * <p>What distinguishes the real case is that the descriptor now names a CARRIER type: NeoForge's own class,
+	 * which stock Minecraft does not ship, so no version of the game ever declared it
 	 * that way. That is a cost this instance introduced for the mod. Restored members stop counting only after
 	 * their actual access rule has visited them.
 	 */
@@ -113,9 +117,9 @@ public final class AccessCensus {
 	}
 
 	/**
-	 * @param retyped	 judged re-typed by the merge: an access-widener FIELD whose name is there under another
+	 * @param retyped	 judged re-typed by the base: an access-widener FIELD whose name is there under another
 	 *					descriptor — a Fabric widener is written against the exact vanilla version and field names
-	 *					are never overloaded, so that is a merge re-typing and nothing else
+	 *					are never overloaded, so that is a base re-typing and nothing else
 	 * @param namePresent the name is there under another descriptor but the case is NOT judged: a method (an
 	 *					overload this Minecraft lacks is at least as likely — bagus_lib's Model.animate, YACL's
 	 *					Tooltip constructor — and a Forge AT is carried across versions unchanged)

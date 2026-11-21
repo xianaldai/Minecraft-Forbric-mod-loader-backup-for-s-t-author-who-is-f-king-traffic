@@ -51,7 +51,7 @@ import org.objectweb.asm.tree.MethodNode;
  */
 class KernelBusSupportTest {
 	private static final Path NEOFORGE =
-			TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
+			TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR).normalize();
 
 	/** The four calls makeModBus makes, two of which fail silently if they are gone. */
 	@Test
@@ -100,7 +100,7 @@ class KernelBusSupportTest {
 
 	/** The class, or null when the carrier, which must be staged, no longer has it. */
 	private static ClassNode carrier(String internalName) throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE), "staged NeoForge carrier absent");
+		TestFixtures.requireFile(Fixture.STAGED, NEOFORGE, "staged NeoForge carrier absent");
 		try (ZipFile zip = new ZipFile(NEOFORGE.toFile())) {
 			ZipEntry e = zip.getEntry(internalName + ".class");
 			if (e == null) return null;

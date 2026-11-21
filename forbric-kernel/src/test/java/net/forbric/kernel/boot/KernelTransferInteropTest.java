@@ -63,7 +63,8 @@ class KernelTransferInteropTest {
 	 */
 	@Test void aBuiltGameSideAlwaysCarriesTheTransferComponent() {
 		Path classes = Path.of("build/classes/java/runtime");
-		boolean gameSide = Files.isRegularFile(classes.resolve("net/forbric/kernel/runtime/KernelGameLookupHelper.class"));
+		// Any game-side class that is there whatever the base: the mod datapack source every NeoForge mod's data/ rides on.
+		boolean gameSide = Files.isRegularFile(classes.resolve("net/forbric/kernel/runtime/KernelDataPackSource.class"));
 		TestFixtures.require(Fixture.GAME_SIDE, gameSide, "no staged game jars, so no game side was built");
 		for (String name : List.of(KernelTransferInterop.BRIDGE, KernelTransferInterop.ISSUES, KernelTransferInterop.TRANSACTIONS,
 				KernelTransferInterop.ENERGY, KernelTransferInterop.HOPPER)) {
@@ -97,7 +98,7 @@ class KernelTransferInteropTest {
 	/** A kernel without the Reborn half is recorded, but it is not a necessary loss: the pack runs as it did before. */
 	@Test void rebornWithoutTheKernelsEnergyHalfIsRecordedButNotNecessary() throws Exception {
 		try (var loader = loader(true, true, true, false)) {
-			assertTrue(KernelTransferInterop.configure(loader), "items, fluids and Forge/NeoForge energy stay connected");
+			assertTrue(KernelTransferInterop.configure(loader), "items, fluids and NeoForge energy stay connected");
 			assertFalse(KernelTransferInterop.energyActive());
 			assertFalse(KernelRuntimeClasses.compiled().contains(KernelTransferInterop.ENERGY));
 			assertTrue(CompatibilityFindings.confirmedRequired().isEmpty());
@@ -122,7 +123,7 @@ class KernelTransferInteropTest {
 	}
 	/**
 	 * The game side names Team Reborn Energy in exactly two classes, which only the boot seam loads and only when Reborn
-	 * is installed. Any other class naming it (BlockTransferBridge above all, which every NeoForge and Forge energy query
+	 * is installed. Any other class naming it (BlockTransferBridge above all, which every NeoForge energy query
 	 * reaches) would make a pack without Reborn fail to link that class.
 	 */
 	@Test void onlyTheRebornHalfOfTheGameSideNamesTeamRebornEnergy() throws Exception {
@@ -140,25 +141,17 @@ class KernelTransferInteropTest {
 		for (String name : naming) assertTrue(name.startsWith("net/forbric/kernel/runtime/transfer/RebornEnergyAdapters")
 				|| name.startsWith("net/forbric/kernel/runtime/transfer/RebornEnergyBridge"), name + " names Team Reborn Energy");
 	}
-	/** The bridge is told what boot decided about the Forge fallback, and looks for it only when boot registered it. */
-	@Test void installHandsTheBridgeBootsForgeFallbackDecision() throws Exception {
-		try {
-			for (boolean registered : new boolean[] { false, true }) {
-				try (var loader = loader(true, true)) {
-					assertTrue(KernelTransferInterop.configure(loader));
-					KernelTransferInterop.forgeFallback(registered);
-					ClassLoader game = new GameSide();
-					KernelTransferInterop.install(game);
-					Class<?> bridge = Class.forName(KernelTransferInterop.BRIDGE, false, game);
-					assertEquals(1, bridge.getField("calls").getInt(null));
-					assertEquals(registered, bridge.getField("forgeFallback").getBoolean(null));
-				}
-			}
-		} finally {
-			KernelTransferInterop.forgeFallback(false);
+	/** Install reaches the bridge once. */
+	@Test void installCallsTheBridgeOnce() throws Exception {
+		try (var loader = loader(true, true)) {
+			assertTrue(KernelTransferInterop.configure(loader));
+			ClassLoader game = new GameSide();
+			KernelTransferInterop.install(game);
+			Class<?> bridge = Class.forName(KernelTransferInterop.BRIDGE, false, game);
+			assertEquals(1, bridge.getField("calls").getInt(null));
 		}
 	}
-	/** A game side with only what install calls: TransferIssues.setReporter and a bridge that records its argument. */
+	/** A game side with only what install calls: TransferIssues.setReporter and a bridge that counts its calls. */
 	private static final class GameSide extends ClassLoader {
 		GameSide() { super(KernelTransferInteropTest.class.getClassLoader()); }
 		@Override protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
@@ -175,15 +168,12 @@ class KernelTransferInteropTest {
 			ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
 			writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, self, null, "java/lang/Object", null);
 			writer.visitField(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "calls", "I", null, null).visitEnd();
-			writer.visitField(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "forgeFallback", "Z", null, null).visitEnd();
-			var install = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "install", "(Z)V", null, null);
+			var install = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "install", "()V", null, null);
 			install.visitCode();
 			install.visitFieldInsn(Opcodes.GETSTATIC, self, "calls", "I");
 			install.visitInsn(Opcodes.ICONST_1);
 			install.visitInsn(Opcodes.IADD);
 			install.visitFieldInsn(Opcodes.PUTSTATIC, self, "calls", "I");
-			install.visitVarInsn(Opcodes.ILOAD, 0);
-			install.visitFieldInsn(Opcodes.PUTSTATIC, self, "forgeFallback", "Z");
 			install.visitInsn(Opcodes.RETURN);
 			install.visitMaxs(0, 0);
 			install.visitEnd();
@@ -204,15 +194,123 @@ class KernelTransferInteropTest {
 		}
 	}
 	/** TransferIssues.Issue's shape, which recordIssue reads by its accessors across the game loader boundary. */
-	record Issue(String code, String providerClass, String detail) { }
+	record Issue(String code, String providerClass, String detail, Class<?> source) {
+		Issue(String code, String providerClass, String detail) { this(code, providerClass, detail, null); }
+	}
 	@Test void aFindingWithNoProviderIsTheKernelsOwnAndLooksUpNoClass() {
-		// A finding with no provider object (the Forge fallback hook missing) has no class to attribute. It used to be
-		// looked up as a class named "unknown", which never exists, so every such finding was also a failure.
-		KernelTransferInterop.recordIssue(getClass().getClassLoader(), new Issue("FORGE_QUERY_HOOK_MISSING", null, "detail"));
+		// A finding with no provider object has no class to attribute (the code here is a live one; on the merged base
+		// MinecraftForge's missing fallback hook was the case that had none). It used to be looked up as a class named
+		// "unknown", which never exists, so every such finding was also a failure.
+		KernelTransferInterop.recordIssue(getClass().getClassLoader(), new Issue("FABRIC_FALLBACK_ORDER", null, "detail"));
 		CompatibilityFinding finding = CompatibilityFindings.all().stream()
-				.filter(f -> f.id().equals("transfer:FORGE_QUERY_HOOK_MISSING:unknown")).findFirst().orElseThrow();
+				.filter(f -> f.id().equals("transfer:FABRIC_FALLBACK_ORDER:unknown")).findFirst().orElseThrow();
 		assertEquals("forbric", finding.modId());
-		assertEquals(List.of("FORGE_QUERY_HOOK_MISSING", "unknown"), finding.evidence());
+		assertEquals(List.of("FABRIC_FALLBACK_ORDER", "unknown"), finding.evidence());
+	}
+	/**
+	 * gate-m39's proxy item handler, as the boot side saw it before the runtime carried the handler across: the name
+	 * of a jdk.proxy class, which resolves but was defined from no jar. Looking up its code source threw an NPE on
+	 * every run, reported as a kernel failure and attributed to forbric. A class that came from no jar names no mod;
+	 * that is the answer, and no failure is reported (CaughtErrorsExtension fails this test if one is).
+	 */
+	@Test void aProxyReportedByNameIsNoModsAndNoFailure() {
+		Object proxy = java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[] { Runnable.class }, (p, m, a) -> null);
+		String name = proxy.getClass().getName();
+		KernelTransferInterop.recordIssue(getClass().getClassLoader(), new Issue("ROLLBACK_FAILED", name, "detail"));
+		assertEquals("forbric", attributed("transfer:ROLLBACK_FAILED:" + name));
+		assertEquals("forbric", KernelTransferInterop.owner(getClass().getClassLoader(), "java.lang.String", null), "a JDK class names no mod either");
+		assertEquals("forbric", KernelTransferInterop.owner(getClass().getClassLoader(), name, String.class));
+	}
+	/** The class the runtime says answers for a provider -- a proxy's handler, a lambda -- is attributed to its jar's mod. */
+	@Test void theProvidersSourceIsAttributedToTheModWhoseJarHoldsIt() throws Exception {
+		Path jar = directory.resolve("handler mod.jar");
+		try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar))) {
+			add(out, "p/Handler");
+			out.putNextEntry(new JarEntry("p/Anchor.class"));
+			out.write(lambdaFactory("p/Anchor"));
+			out.closeEntry();
+		}
+		net.forbric.api.ModCatalog.publish(List.of(new net.forbric.api.ModCatalog.Entry(net.forbric.api.Ecosystem.FABRIC,
+				"handlermod", "Handler Mod", "1", "", List.of(), "handler mod.jar", "", "")));
+		try (var loader = new java.net.URLClassLoader(new java.net.URL[] { jar.toUri().toURL() }, null)) {
+			Class<?> handler = loader.loadClass("p.Handler");
+			KernelTransferInterop.recordIssue(getClass().getClassLoader(),
+					new Issue("ROLLBACK_FAILED", "jdk.proxy9.$Proxy1", "detail", handler));
+			assertEquals("handlermod", attributed("transfer:ROLLBACK_FAILED:jdk.proxy9.$Proxy1 via p.Handler"),
+					"the source is used as it is: the name is never looked up");
+			Class<?> lambda = loader.loadClass("p.Anchor").getMethod("make").invoke(null).getClass();
+			assertTrue(lambda.isHidden(), "the shape this case is about");
+			assertEquals("handlermod", KernelTransferInterop.owner(getClass().getClassLoader(), lambda.getName(), lambda),
+					"a lambda (hidden class) is its definer's");
+		} finally {
+			net.forbric.api.ModCatalog.publish(List.of());
+		}
+	}
+	/**
+	 * One proxy class, two mods' handlers: the JDK defines a single jdk.proxyN.$ProxyM per class loader and interface
+	 * list, so the offered name is the same for both. Each finding is its handler's -- its own id, its own mod -- and
+	 * neither stands in for the other.
+	 */
+	@Test void twoModsHandlersBehindOneProxyClassAreTwoFindingsEachItsOwnMods() throws Exception {
+		Path first = directory.resolve("first.jar");
+		Path second = directory.resolve("second.jar");
+		try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(first))) { add(out, "a/Handler"); }
+		try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(second))) { add(out, "b/Handler"); }
+		net.forbric.api.ModCatalog.publish(List.of(
+				new net.forbric.api.ModCatalog.Entry(net.forbric.api.Ecosystem.FABRIC, "firstmod", "First", "1", "", List.of(), "first.jar", "", ""),
+				new net.forbric.api.ModCatalog.Entry(net.forbric.api.Ecosystem.NEOFORGE, "secondmod", "Second", "1", "", List.of(), "second.jar", "", "")));
+		try (var a = new java.net.URLClassLoader(new java.net.URL[] { first.toUri().toURL() }, null);
+				var b = new java.net.URLClassLoader(new java.net.URL[] { second.toUri().toURL() }, null)) {
+			String shared = "jdk.proxy3.$Proxy7";
+			KernelTransferInterop.recordIssue(getClass().getClassLoader(),
+					new Issue("ROLLBACK_FAILED", shared, "first", a.loadClass("a.Handler")));
+			KernelTransferInterop.recordIssue(getClass().getClassLoader(),
+					new Issue("ROLLBACK_FAILED", shared, "second", b.loadClass("b.Handler")));
+			assertEquals("firstmod", attributed("transfer:ROLLBACK_FAILED:" + shared + " via a.Handler"));
+			assertEquals("secondmod", attributed("transfer:ROLLBACK_FAILED:" + shared + " via b.Handler"));
+			assertEquals(2, CompatibilityFindings.all().stream().filter(f -> f.id().startsWith("transfer:")).count(),
+					CompatibilityFindings.all()::toString);
+		} finally {
+			net.forbric.api.ModCatalog.publish(List.of());
+		}
+	}
+	/** An ordinary provider is its own source, and its finding is named exactly as before. */
+	@Test void anOrdinaryProvidersFindingIsNamedByItsClassAlone() {
+		assertEquals("p.Storage", KernelTransferInterop.subject("p.Storage", null));
+		assertEquals("java.lang.String", KernelTransferInterop.subject("java.lang.String", String.class));
+		assertEquals("unknown", KernelTransferInterop.subject(null, null));
+	}
+	/** Only a name that resolves to no class at all is a failure to attribute, and it still says so. */
+	@Test @net.forbric.kernel.ExpectCaught("could not tell which mod ships no.such.Provider")
+	void aNameThatResolvesToNothingIsStillReported() {
+		assertEquals("forbric", KernelTransferInterop.owner(getClass().getClassLoader(), "no.such.Provider", null));
+	}
+	/** {@code public class <name> { public static Runnable make() { return () -> {}; } }}: a jar class that makes a real lambda. */
+	private static byte[] lambdaFactory(String internalName) {
+		ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+		writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, internalName, null, "java/lang/Object", null);
+		var make = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "make", "()Ljava/lang/Runnable;", null, null);
+		make.visitCode();
+		make.visitInvokeDynamicInsn("run", "()Ljava/lang/Runnable;",
+				new org.objectweb.asm.Handle(Opcodes.H_INVOKESTATIC, "java/lang/invoke/LambdaMetafactory", "metafactory",
+						"(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;"
+								+ "Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;", false),
+				org.objectweb.asm.Type.getType("()V"),
+				new org.objectweb.asm.Handle(Opcodes.H_INVOKESTATIC, internalName, "lambda$make$0", "()V", false),
+				org.objectweb.asm.Type.getType("()V"));
+		make.visitInsn(Opcodes.ARETURN);
+		make.visitMaxs(0, 0);
+		make.visitEnd();
+		var body = writer.visitMethod(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_SYNTHETIC, "lambda$make$0", "()V", null, null);
+		body.visitCode();
+		body.visitInsn(Opcodes.RETURN);
+		body.visitMaxs(0, 0);
+		body.visitEnd();
+		writer.visitEnd();
+		return writer.toByteArray();
+	}
+	private static String attributed(String id) {
+		return CompatibilityFindings.all().stream().filter(f -> f.id().equals(id)).findFirst().orElseThrow().modId();
 	}
 	/**
 	 * Hoppers ask Fabric's lookup whenever fabric-transfer-api and NeoForge's hopper are both present — with or without

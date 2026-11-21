@@ -29,6 +29,7 @@ set -uo pipefail
 
 LOG="$BUILD/gate-m7-neo-boot.log"; mkdir -p "$BUILD"
 RUNDIR="$KERNEL/run/server-neo-only"
+refuse_shared_rundir "$RUNDIR"
 DL="$RUN_OLD/downloads/neoforge-26.2"
 # Five PURE NeoForge distributions (neoforge.mods.toml only): an optimisation mod that mixins deep into blockstate
 # internals, a HUD/network mod, and three library layers that all resolve themselves through ModList.
@@ -69,27 +70,26 @@ step "boot the kernel with them, reach Done, stop cleanly"
   done
   sleep 6
   echo stop
-) | FORBRIC_JVM="${M7_EXTRA_JVM:-}" RUNDIR="$RUNDIR" "$KERNEL/run/launch-kernel-server.sh" > "$LOG" 2>&1 &
+) | FORBRIC_JVM="${FORBRIC_JVM:-} ${M7_EXTRA_JVM:-}" RUNDIR="$RUNDIR" "$KERNEL/run/launch-kernel-server.sh" > "$LOG" 2>&1 &
 BOOTPID=$!
 record_server_pid "$RUNDIR" "$BOOTPID"
 await_server "$BOOTPID" "$LOG" 240
 
-step "the registries froze in the one order both carriers' freezeData() finish in (must PASS)"
-# MinecraftForge-first aborted NeoForge's GameData.freezeData at the first already-frozen registry
-# (bindAllTagsToEmpty → validateWrite throws): the THREW warning on every boot, no tag keys bound to empty, no
-# snapshot. NeoForge-first completes; MinecraftForge's pass afterwards early-returns on every plain registry. RED
-# with M7_EXTRA_JVM=-Dforbric.freezeNeoForgeFirst=off (the THREW line returns, the count line says MinecraftForge-first).
+step "the registries froze through NeoForge's freezeData(), which finished (must PASS)"
+# On the merged base two carriers' freezeData() passes ran and the order mattered: MinecraftForge-first aborted
+# NeoForge's GameData.freezeData at the first already-frozen registry (bindAllTagsToEmpty → validateWrite throws).
+# One carrier is left (Stage 4), so there is no order to choose and the -Dforbric.freezeNeoForgeFirst control is
+# retired (D29). What stays is the proof NeoForge's own pass ran to the end: no THREW line (the kernel's generic
+# "a method that is there and threw" warning) and the count line, whose wording is kept as it was (D32).
 check_absent "NeoForge's freezeData finished"  "GameData.freezeData\(\) THREW" "$LOG"
 check "registries frozen NeoForge-first"       "froze the registries NeoForge-first: [1-9][0-9]* registr(ies|y), [0-9]+ tag key" "$LOG"
 
-step "NeoForge's own data-map reload path is live, and the kernel's fallback stood down (must PASS)"
-# The merged base carries the whole path: NeoForgeEventHandler registers the DataMapLoader on
-# AddServerReloadListenersEvent, the live condition context is injected, TagsUpdatedEvent applies it. The kernel
-# used to load the maps a second time from about-to-start with an EMPTY context, over the genuine apply. RED with
-# M7_EXTRA_JVM=-Dforbric.eventBridges=off is not the switch here — the watch observes; the only kernel behaviour to
-# switch is the fallback (-Dforbric.neoDataMapFallback=off), under which these lines must STILL pass.
+step "NeoForge's own data-map reload path is live (must PASS)"
+# NeoForge's own path does it all: NeoForgeEventHandler registers the DataMapLoader on AddServerReloadListenersEvent,
+# the live condition context is injected, TagsUpdatedEvent applies it; KernelNeoDataMapWatch only observes and says
+# so. The kernel's about-to-start fallback (-Dforbric.neoDataMapFallback, which loaded the maps itself when this path
+# applied none) went in Stage 4, and with it the check that it stood down.
 check "NeoForge's own data-map path is live" "reload #1: NeoForge's own reload path applied data maps for [1-9][0-9]* registr" "$LOG"
-check "the kernel's fallback stood down"     "already applied data maps for [1-9][0-9]* registr.* fallback stood down" "$LOG"
 check_absent "no DataMapLoader registration gap" "DataMapLoader is NOT registered" "$LOG"
 
 step "every pure-NeoForge @Mod constructed (must PASS)"
@@ -115,7 +115,6 @@ check "a pure-NeoForge mod registered real content" "registered content: bookshe
 # changes nothing else in the breakdown. The number is a canary for "NeoForge still registers its own built-ins",
 # so it is pinned exactly and re-derived from the log when the carrier moves.
 check "NeoForge baseline intact (38)"      "registered content: neoforge: 38 entr" "$LOG"
-check "MinecraftForge baseline intact (10)" "registered content: forge: 10 entr" "$LOG"
 check_absent "no double-registration"      "Adding duplicate key" "$LOG"
 check_absent "no registry rollback"        "Rolling back to VANILLA state" "$LOG"
 
@@ -133,7 +132,7 @@ check "sided phase posted"           "posted FML dedicated server setup to [1-9]
 # has no proof its data maps exist (the kernel words a zero-count run so that it cannot match this line either).
 check "registration events ran"      "ran NeoForge.s registration events.* [1-9][0-9]* data map type" "$LOG"
 check "IMC enqueued and processed"   "posted FML IMC (enqueue|process) to [1-9][0-9]* NeoForge mod"  "$LOG" 2
-check_absent "no mod failed a phase" "failed during (construct|dedicated server setup|IMC)"     "$LOG"
+check_absent "no mod failed a phase" "Failed to wait for future "     "$LOG"
 # ModConfig.Type.SERVER is NOT one of the missing phases, which is worth pinning down rather than re-deriving:
 # ServerLifecycleHooks.handleServerAboutToStart loads it through the 3-arg ConfigTracker overload, and the kernel
 # never excised that call. The proof is the readme NeoForge's own server-config machinery writes into the world

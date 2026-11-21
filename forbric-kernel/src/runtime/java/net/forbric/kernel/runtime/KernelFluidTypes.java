@@ -17,11 +17,10 @@ import net.neoforged.neoforge.fluids.FluidType;
 /**
  * The NeoForge fluid type of a fluid that declares none (ForeignFluidTypeInjector).
  *
- * <p>On the merged base every fluid is asked NeoForge's {@code getFluidType()}; NeoForge's answer for a fluid that does
- * not override it is {@code CommonHooks.getVanillaFluidType}, which knows vanilla's and its own milk and throws
- * "Mod fluids must override getFluidType." for anything else. A Fabric mod's fluid never overrides it — it has never
- * heard of NeoForge — and neither does a MinecraftForge mod's (its override returns MinecraftForge's type), so the first
- * entity to touch one took the server down.
+ * <p>Every fluid is asked NeoForge's {@code getFluidType()}; NeoForge's answer for a fluid that does not override it is
+ * {@code CommonHooks.getVanillaFluidType}, which knows vanilla's and its own milk and throws "Mod fluids must override
+ * getFluidType." for anything else. A Fabric mod's fluid never overrides it — it has never heard of NeoForge — so the
+ * first entity to touch one took the server down.
  *
  * <p>Such a fluid gets the type vanilla's own rules give it: vanilla (and Fabric) decide what a fluid does to an entity
  * by its fluid tags, so a fluid in {@code minecraft:water} is water, one in {@code minecraft:lava} is lava, one in a tag
@@ -38,8 +37,14 @@ public final class KernelFluidTypes {
 	/** The type for {@code fluid} when NeoForge's own lookup would throw for it, else null (NeoForge answers it). */
 	public static FluidType foreignType(Fluid fluid) {
 		if (fluid == null || isNative(fluid)) return null;
+		return neoTypeOf(fluid);
+	}
+
+	/** A fluid NeoForge cannot type: what its tags imply. */
+	private static FluidType neoTypeOf(Fluid fluid) {
 		return taggedType(fluid);
 	}
+
 	private static FluidType taggedType(Fluid fluid) {
 		FluidState state = fluid.defaultFluidState();
 		try {
@@ -53,30 +58,42 @@ public final class KernelFluidTypes {
 		}
 		return NeoForgeMod.EMPTY_TYPE.value();
 	}
-	/** Entered only at the actual SDK lookup's proved unsupported branch; namespace guesses are unnecessary. */
-	public static FluidType foreignNeoLookup(Fluid fluid){FluidType type=taggedType(fluid);return (FluidType)net.forbric.api.LookupOutcomes.foreign(fluid,FluidType.class,type);}
-	public static net.minecraftforge.fluids.FluidType foreignForgeLookup(Fluid fluid){var type=forgeType(fluid);if(fluid!=null)FORGE_STAND_INS.add(fluid);return (net.minecraftforge.fluids.FluidType)net.forbric.api.LookupOutcomes.foreign(fluid,net.minecraftforge.fluids.FluidType.class,type);}
-
 	/**
-	 * Fluids whose MinecraftForge type MinecraftForge's own lookup could not give — {@link #foreignForgeLookup} answered
-	 * them instead, from their tags. Such a type is a stand-in for entity physics (a Fabric fluid in
-	 * {@code minecraft:water} swims like water), not the fluid's own: its client extensions — water's tint, water's
-	 * model — describe some other fluid, and genuine MinecraftForge never asks a fluid it did not type. Registry
-	 * singletons, so the set is bounded by the fluid registry; a fluid's class decides, so the answer never changes.
+	 * Entered only at the actual SDK lookup's proved unsupported branch; namespace guesses are unnecessary. A fluid answered
+	 * here is recorded as holding a stand-in derived from its tags.
 	 */
-	private static final Set<Fluid> FORGE_STAND_INS = ConcurrentHashMap.newKeySet();
-
-	/**
-	 * Whether {@code fluid}'s MinecraftForge type is {@link #foreignForgeLookup}'s stand-in rather than one MinecraftForge
-	 * itself gave it (vanilla's, or the fluid's own override). Read after the fluid's type was asked: MinecraftForge's
-	 * getter never caches a stand-in, so every ask of a stand-in fluid passes the fallback that records it.
-	 */
-	public static boolean forgeTypeIsStandIn(Fluid fluid) {
-		return fluid != null && FORGE_STAND_INS.contains(fluid);
+	public static FluidType foreignNeoLookup(Fluid fluid){
+		FluidType type=taggedType(fluid);
+		if(fluid!=null)NEO_STAND_INS.add(fluid);
+		return (FluidType)net.forbric.api.LookupOutcomes.foreign(fluid,FluidType.class,type);
 	}
 
 	/**
-	 * The merged {@code EntityFluidInteraction.getFluidTypeByTag} answer for a tag other than water and lava: the type
+	 * Fluids whose NeoForge type NeoForge's own lookup could not give and {@link #foreignNeoLookup} answered from their
+	 * tags: a Fabric mod's (water's, lava's, a Fabric behaviour's or the empty type). Registry singletons, so the set is
+	 * bounded by the fluid registry; a fluid's class decides, so the answer never changes.
+	 */
+	private static final Set<Fluid> NEO_STAND_INS = ConcurrentHashMap.newKeySet();
+
+	/** Whether {@code fluid}'s NeoForge type is {@link #foreignNeoLookup}'s tag-derived stand-in. Read after the type was asked. */
+	public static boolean neoTypeIsStandIn(Fluid fluid) {
+		return fluid != null && NEO_STAND_INS.contains(fluid);
+	}
+
+	/** {@code -Dforbric.ownFluidTypeClauses=off} leaves NeoForge's fire clause asking whatever type the fluid answers it. */
+	public static final String CLAUSES_PROPERTY = "forbric.ownFluidTypeClauses";
+
+	/**
+	 * In NeoForge's fire clause ({@code Fluid.entityInside}, OwnFluidTypeClausesInjector): NeoForge's empty type where the
+	 * kernel's tag-derived stand-in answered, which claims nothing, as vanilla's empty {@code entityInside}; else the type
+	 * itself.
+	 */
+	public static FluidType ownNeoType(Fluid fluid, FluidType type) {
+		return neoTypeIsStandIn(fluid) ? NeoForgeMod.EMPTY_TYPE.value() : type;
+	}
+
+	/**
+	 * NeoForge's {@code EntityFluidInteraction.getFluidTypeByTag} answer for a tag other than water and lava: the type
 	 * of a tag a Fabric mod registered a fluid behaviour for, else null, and NeoForge's {@code IllegalArgumentException}
 	 * stands. fabric-api asks {@code isInFluid}, {@code getFluidHeight} and {@code applyCurrentTo} by its tags every
 	 * entity tick, and {@code isEyeInFluid} for the air-bubble HUD every frame.
@@ -85,31 +102,9 @@ public final class KernelFluidTypes {
 		return tag != null && KernelFabricFluidBehaviors.registered(tag) ? KernelFabricFluidBehaviors.neoType(tag) : null;
 	}
 
-	/** Whether the merged type-based tracker has a meaning for this tag. An untracked vanilla tag query is false. */
+	/** Whether NeoForge's type-based tracker has a meaning for this tag. An untracked vanilla tag query is false. */
 	public static boolean hasTagType(TagKey<Fluid> tag) {
 		return FluidTags.WATER.equals(tag) || FluidTags.LAVA.equals(tag) || byTag(tag) != null;
-	}
-
-	/**
-	 * MinecraftForge's fluid type for a fluid that does not override MinecraftForge's {@code getFluidType()} — a NeoForge
-	 * or Fabric mod's (vanilla's are bridged per class). MinecraftForge's default throws the same "Mod fluids must
-	 * override getFluidType." for it; merged entity-fluid code and any MinecraftForge mod walking fluids ask it. Decided
-	 * by the same tags, as MinecraftForge's water, lava or empty type — or, exactly when NeoForge's answer is a Fabric
-	 * behaviour's type, MinecraftForge's type for that behaviour, so the two families never disagree about one fluid.
-	 * NeoForge's answer, not foreignType's: a NeoForge fluid in a behaviour tag answers with its own type there.
-	 */
-	public static net.minecraftforge.fluids.FluidType forgeType(Fluid fluid) {
-		FluidState state = fluid == null ? null : fluid.defaultFluidState();
-		try {
-			if (state != null && state.is(FluidTags.WATER)) return net.minecraftforge.common.ForgeMod.WATER_TYPE.get();
-			if (state != null && state.is(FluidTags.LAVA)) return net.minecraftforge.common.ForgeMod.LAVA_TYPE.get();
-			net.minecraftforge.fluids.FluidType behaviour = state == null ? null : forgeBehaviourType(fluid, state);
-			if (behaviour != null) return behaviour;
-		} catch (IllegalStateException unbound) {
-			// Tags are not bound yet; see foreignType.
-			Caught.expected(unbound);
-		}
-		return net.minecraftforge.common.ForgeMod.EMPTY_TYPE.get();
 	}
 
 	/**
@@ -121,22 +116,6 @@ public final class KernelFluidTypes {
 		try {
 			TagKey<Fluid> tag = KernelFabricFluidBehaviors.tagOf(state);
 			return tag == null ? null : KernelFabricFluidBehaviors.neoType(tag);
-		} catch (IllegalStateException unbound) {
-			throw unbound;
-		} catch (RuntimeException | LinkageError broken) {
-			Caught.warn(broken, "[Forbric/Fluid] a Fabric fluid behaviour's type could not be looked up — a fluid it covers"
-					+ " acts as its tags say");
-			return null;
-		}
-	}
-
-	/** MinecraftForge's side of behaviourType: its type for the behaviour NeoForge's answer is, or null. */
-	static net.minecraftforge.fluids.FluidType forgeBehaviourType(Fluid fluid, FluidState state) {
-		try {
-			if (KernelFabricFluidBehaviors.tagOf(state) != null && net.forbric.api.VirtualGetters.get(Fluid.class, "getFluidType", FluidType.class, fluid) instanceof KernelFabricFluidBehaviors.NeoType behaviour) {
-				return KernelFabricFluidBehaviors.forgeType(behaviour.tag);
-			}
-			return null;
 		} catch (IllegalStateException unbound) {
 			throw unbound;
 		} catch (RuntimeException | LinkageError broken) {

@@ -119,16 +119,22 @@ class DatapackRegistryDeclarationTest {
 		boolean declaresWhenJumping = branch.getOpcode() == Opcodes.IFEQ;
 		int waitingStart = declaresWhenJumping ? from : target;
 		int waitingEnd = declaresWhenJumping ? target : insns.length;
+		boolean collects = false;
 		for (int i = waitingStart + 1; i < waitingEnd; i++) {
 			if (insns[i] instanceof MethodInsnNode call && "registerDataPackRegistries".equals(call.name)) {
 				throw new AssertionError("the waiting path declares too, at " + i);
 			}
+			if (insns[i] instanceof MethodInsnNode call && "collectDataPackRegistryDeclarations".equals(call.name)) collects = true;
 			if (insns[i] instanceof JumpInsnNode leave && leave.getOpcode() == Opcodes.GOTO) {
 				assertTrue(drive.instructions.indexOf(leave.label) > declares,
 						"the waiting path must jump past the declaration");
 				break;
 			}
 		}
+		// What waits is only the processing: the mods' listeners are handed the event here, in the registry phase, as natively,
+		// so one that throws stops the client in the begin path and not after the Fabric mains (lane STOP review A-4; gate-m24d
+		// datapackreg runs it).
+		assertTrue(collects, "the waiting path still hands the mods the event (collectDataPackRegistryDeclarations)");
 		assertTrue(!declaresWhenJumping || declares > target, "the declaration is on the not-waiting branch");
 	}
 
@@ -185,7 +191,7 @@ class DatapackRegistryDeclarationTest {
 	// --- the two initialisers, in either order ------------------------------------------------------------------
 
 	/**
-	 * The premise of the whole fix, on stand-ins with the merged base's shape: NeoForge patched the loader's
+	 * The premise of the whole fix, on stand-ins with the base's shape: NeoForge patched the loader's
 	 * initialiser to call into the hooks just before it returns, and the hooks' initialiser copies the loader's
 	 * list. Loader first, and the copy is taken before the TAIL injector runs.
 	 */
@@ -329,14 +335,14 @@ class DatapackRegistryDeclarationTest {
 
 	/**
 	 * The reconcile reaches NeoForge by reflection, and a signature that drifted would turn it into a WARN with no test
-	 * saying so. Every member it names, as the staged carrier and merged base declare them.
+	 * saying so. Every member it names, as the staged carrier and base declare them.
 	 */
 	@Test
 	void theReconcilesReflectiveTargetsExistWithTheseShapes() throws Exception {
-		Path runtime = staged("neoforge-runtime", "neoforge-runtime.jar");
-		Path merged = staged("merged-base", "patched-mc-merged-26.2.jar");
+		Path runtime = staged(TestFixtures.NEO_CARRIER_JAR);
+		Path merged = TestFixtures.stagedBase().normalize();
 		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(runtime) && Files.isRegularFile(merged),
-				"carrier or merged base not staged");
+				"carrier or base not staged");
 
 		ClassNode wrapper = classIn(runtime, "net/neoforged/neoforge/registries/DataPackRegistryEvent$DataPackRegistryData");
 		assertTrue(declares(wrapper, "<init>", "(Lnet/minecraft/resources/RegistryDataLoader$RegistryData;"
@@ -539,8 +545,8 @@ class DatapackRegistryDeclarationTest {
 		return (List<String>) Class.forName(FakeHooks.class.getName(), true, fresh).getField("NEO").get(null);
 	}
 
-	private static Path staged(String dir, String jar) {
-		return TestFixtures.stagedRoot().resolve(dir).resolve(jar).normalize();
+	private static Path staged(String jar) {
+		return TestFixtures.stagedRoot().resolve(jar).normalize();
 	}
 
 	private static ClassNode classIn(Path jar, String internalName) throws Exception {

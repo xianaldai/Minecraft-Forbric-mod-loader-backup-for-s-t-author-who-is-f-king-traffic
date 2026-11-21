@@ -42,7 +42,7 @@ import net.forbric.kernel.util.ForbricLog;
 import net.forbric.kernel.util.Caught;
 
 /**
- * Gives a value the merged method computes on the stack the local the native method keeps it in, where a mod's
+ * Gives a value the current method computes on the stack the local the native method keeps it in, where a mod's
  * {@code @Local} asks for that local at a call the value is handed to.
  *
  * <p>Vanilla often names a value before handing it on — {@code ItemAttributeModifiers modifiers = getOrDefault(...);
@@ -54,14 +54,14 @@ import net.forbric.kernel.util.Caught;
  * call point and no slice:
  * <ul>
  *   <li>the method its selectors bind is the same method natively (the class its ecosystem's mods were compiled against)
- *       and merged, and its point selects as many calls in both, the occurrence it picks being the same one;</li>
+ *       and in the current class, and its point selects as many calls in both, the occurrence it picks being the same one;</li>
  *   <li>a {@code @Local} of the handler resolves, as MixinExtras resolves it, to one local at the native call, and that
  *       local is what the native call is handed as one of its operands, loaded from it with nothing in between able to
  *       change it ({@link MixinLocalOriginProof#atCall});</li>
- *   <li>at the merged call no local resolves for it, and the same operand is the result of one instruction in the same
+ *   <li>at the current call no local resolves for it, and the same operand is the result of one instruction in the same
  *       straight stretch (no jump or jump target between it and the call), of the type the local is declared with.</li>
  * </ul>
- * The merged method then also stores that result, right where it is computed, into a new local named and typed as the
+ * The current method then also stores that result, right where it is computed, into a new local named and typed as the
  * native one, visible from there to just after the call. The stack, and what the method does, are unchanged.
  *
  * <p>The local need not be handed to the injector's own call. Vanilla's {@code ScreenEffectRenderer.submit} keeps the
@@ -69,7 +69,7 @@ import net.forbric.kernel.util.Caught;
  * {@code submitBlockSprite}; NeoForge's body reads the state off a {@code Pair} for each use instead
  * ({@code (BlockState) pair.getLeft()}), so a mod's {@code @Local BlockState} at the sprite call has nothing to read.
  * When the native local is not one of the call's operands, the nearest call before it in the same straight stretch that
- * is handed the local — with no store to the slot between it and the injector's call — stands in: the merged method's
+ * is handed the local — with no store to the slot between it and the injector's call — stands in: the current method's
  * one call of the same member in its own straight stretch before the injector's call is handed the same operand as the
  * result of one instruction there (a call returning the local's type, or a cast to it), and that result gets the local,
  * visible to just after the injector's call.
@@ -132,7 +132,7 @@ public final class NativeLocalMaterialization {
 					if (register(loader, plan)) {
 						planned++;
 						merged = null;
-						ForbricLog.info("[Forbric/Mixin] %s.%s: the merged %s.%s hands %s's operand %d over without the local %s %s %s keeps it "
+						ForbricLog.info("[Forbric/Mixin] %s.%s: the current %s.%s hands %s's operand %d over without the local %s %s %s keeps it "
 								+ "in; it now keeps it there too, so the @Local reads it", mixin.name.replace('/', '.'), handler.name,
 								target.replace('/', '.'), plan.method(), plan.member(), plan.operand(), Type.getType(plan.desc()).getClassName(),
 								plan.name(), ecosystem);
@@ -149,7 +149,7 @@ public final class NativeLocalMaterialization {
 		return false;
 	}
 
-	/** The locals one handler asks for that the merged method could keep and does not. */
+	/** The locals one handler asks for that the current method could keep and does not. */
 	static List<Plan> derive(ClassNode merged, ClassNode original, MethodNode handler, AnnotationNode injector, String source) {
 		List<Plan> out = new ArrayList<>();
 		List<AnnotationNode> points = MixinFit.atNodes(injector);

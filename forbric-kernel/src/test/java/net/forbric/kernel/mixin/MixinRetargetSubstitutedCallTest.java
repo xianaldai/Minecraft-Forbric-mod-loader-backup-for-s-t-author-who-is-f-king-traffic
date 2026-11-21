@@ -23,20 +23,13 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
-import net.forbric.kernel.TestFixtures;
-import net.forbric.kernel.TestFixtures.Fixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.AnnotationVisitor;
@@ -78,8 +71,6 @@ class MixinRetargetSubstitutedCallTest {
 	private static final String CAPTURING = "(" + ENTRY + MixinRetarget.CALLBACK_INFO_RETURNABLE + IDENTIFIER + ")V";
 	private static final String PLAIN = "(" + ENTRY + MixinRetarget.CALLBACK_INFO_RETURNABLE + ")V";
 
-	private static final Path SWEEP = Path.of("build/compat-inputs/sweep90/mods");
-	private static final Path MERGED = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
 
 	@AfterEach
 	void reset() {
@@ -92,7 +83,7 @@ class MixinRetargetSubstitutedCallTest {
 
 	@Test
 	void fusionsModelIdCaptureFollowsTheParserNeoForgeSubstituted() {
-		MixinStubRebind.noteEcosystem(MIXIN, Ecosystem.FORGE);
+		MixinStubRebind.noteEcosystem(MIXIN, Ecosystem.FABRIC);
 		Function<String, byte[]> resolver = resolver(manager(true, "modelId"));
 		byte[] mixin = mixin(INJECT, CAPTURING, "BEFORE", true);
 		assertEquals(MixinFit.Verdict.PARTIAL, MixinFit.evaluate(mixin, resolver).verdict(), "premise: fromStream is not there");
@@ -117,7 +108,7 @@ class MixinRetargetSubstitutedCallTest {
 	/** The served node: the annotation keeps the handler's name and moves to the guard; the body is renamed aside. */
 	@Test
 	void theServedNodeCarriesTheMovedPointOnTheGuard() throws Exception {
-		MixinStubRebind.noteEcosystem(MIXIN, Ecosystem.FORGE);
+		MixinStubRebind.noteEcosystem(MIXIN, Ecosystem.FABRIC);
 		byte[] mixin = mixin(INJECT, CAPTURING, "BEFORE", true);
 		MixinRetarget.remember(plan(MixinFit.parse(mixin), resolver(manager(true, "modelId"))));
 		ClassNode node = new ClassNode();
@@ -147,7 +138,7 @@ class MixinRetargetSubstitutedCallTest {
 	/** Captured locals move only on the live table's word: a different local in the slot, or no table, and it stays. */
 	@Test
 	void capturedLocalsMustBeTheLiveMethods() {
-		MixinStubRebind.noteEcosystem(MIXIN, Ecosystem.FORGE);
+		MixinStubRebind.noteEcosystem(MIXIN, Ecosystem.FABRIC);
 		byte[] capturing = mixin(INJECT, CAPTURING, "BEFORE", true);
 		assertTrue(plan(MixinFit.parse(capturing), resolver(manager(false, "modelId"))).isEmpty(), "no table");
 		assertTrue(plan(MixinFit.parse(capturing), resolver(managerWithReaderInSlotOne())).isEmpty(),
@@ -160,7 +151,7 @@ class MixinRetargetSubstitutedCallTest {
 
 	@Test
 	void onlyBeforeOrAfterTheCallMoves() {
-		MixinStubRebind.noteEcosystem(MIXIN, Ecosystem.FORGE);
+		MixinStubRebind.noteEcosystem(MIXIN, Ecosystem.FABRIC);
 		Function<String, byte[]> resolver = resolver(manager(true, "modelId"));
 		assertEquals(2, plan(MixinFit.parse(mixin(INJECT, PLAIN, null, false)), resolver).rewrites().size());
 		assertEquals(2, plan(MixinFit.parse(mixin(INJECT, PLAIN, "AFTER", false)), resolver).rewrites().size());
@@ -169,7 +160,7 @@ class MixinRetargetSubstitutedCallTest {
 
 	@Test
 	void theSwitches() {
-		MixinStubRebind.noteEcosystem(MIXIN, Ecosystem.FORGE);
+		MixinStubRebind.noteEcosystem(MIXIN, Ecosystem.FABRIC);
 		Function<String, byte[]> resolver = resolver(manager(true, "modelId"));
 		byte[] mixin = mixin(INJECT, CAPTURING, "BEFORE", true);
 		System.setProperty(MixinRetarget.SUBSTITUTED_CALL_GUARD_PROPERTY, "off");
@@ -207,59 +198,6 @@ class MixinRetargetSubstitutedCallTest {
 					() -> handler.invoke(instance, "throws", 0L, null));
 			assertTrue(thrown.getCause() instanceof IllegalStateException, "only a LinkageError is the guard's business");
 		}
-	}
-
-	/** fusion's real ModelManagerMixin against the real merged ModelManager: 7/8 anchors, then all of them. */
-	@Test
-	void fusionsRealMixinOnTheRealMergedBase() throws Exception {
-		Path fusion = SWEEP.resolve("fusion-1.3.15a-forge-mc26.2.jar");
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "sweep pack or staged merged base absent");
-		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(fusion), "sweep pack or staged merged base absent");
-		byte[] mixin = read(fusion, "com/supermartijn642/fusion/mixin/ModelManagerMixin.class");
-		Function<String, byte[]> resolver = name -> {
-			try {
-				return read(MERGED, name);
-			} catch (Exception e) {
-				return null;
-			}
-		};
-		MixinStubRebind.noteEcosystem("com/supermartijn642/fusion/mixin/ModelManagerMixin", Ecosystem.FORGE);
-		MixinFit.Result raw = MixinFit.evaluate(mixin, resolver);
-		assertEquals(MixinFit.Verdict.PARTIAL, raw.verdict(), "premise: " + raw.unresolved());
-		assertTrue(raw.unresolved().stream().anyMatch(u -> u.contains("fromStream")), raw.unresolved().toString());
-
-		MixinRetarget.Plan plan = NativeCallTestEvidence.plan(MixinFit.parse(mixin), resolver);
-		assertEquals(List.of("deserializeModel:AT_TARGET", "deserializeModel:GUARD"),
-				plan.rewrites().stream().map(r -> r.handler() + ":" + r.element()).toList(), plan.describe());
-		assertEquals(PARSE, plan.rewrites().get(0).to());
-		MixinFit.Result after = MixinFit.evaluate(MixinRetarget.rewritten(mixin, plan), resolver);
-		assertEquals(MixinFit.Verdict.FIT, after.verdict(), "after: " + after.unresolved());
-
-		// The node Mixin is served, through the adapters getClassNode runs after the plan, in their order: the capture is
-		// softened on the guard that now carries it, and the stub rebind still moves the sprite capture beside it.
-		MixinRetarget.remember(plan);
-		ClassNode served = new ClassNode();
-		new ClassReader(mixin).accept(served, ClassReader.EXPAND_FRAMES);
-		MixinRetarget.applyRemembered(served.name, served);
-		MixinAtShape.normalise(served);
-		MixinLocalsCapture.soften(served);
-		ClassNode manager = new ClassNode();
-		new ClassReader(resolver.apply(MANAGER + ".class")).accept(manager, 0);
-		MixinStubRebind.adapt(served, name -> MANAGER.equals(name) ? manager : null);
-		MethodNode outer = method(served, "deserializeModel");
-		AnnotationNode inject = MixinFit.injectorOf(outer);
-		assertEquals(PARSE, MixinFit.value(MixinFit.atNodes(inject).get(0), "target"));
-		assertEquals("CAPTURE_FAILSOFT", MixinFit.asString(MixinFit.value(inject, "locals")));
-		assertNull(MixinFit.injectorOf(method(served, MixinHandlerShim.asideName(served.name, "deserializeModel", MixinRetarget.GUARDED_SUFFIX))));
-		method(served, MixinHandlerShim.asideName(served.name, "captureBlockItemSprites", MixinHandlerShim.INNER_SUFFIX));
-		new Analyzer<>(new BasicVerifier()).analyze(served.name, outer);
-		MethodNode live = manager.methods.stream().filter(m -> LAMBDA.equals(m.name + m.desc)).findFirst().orElseThrow();
-		assertTrue(InsertedLambdaArgumentShim.localsAtCall(PARSE, live, new Type[] {Type.getType(IDENTIFIER)}),
-				"the model id is the local fusion captures at the parse call");
-
-		MixinStubRebind.noteEcosystem("com/supermartijn642/fusion/mixin/ModelManagerMixin", Ecosystem.NEOFORGE);
-		assertTrue(NativeCallTestEvidence.plan(MixinFit.parse(mixin), resolver).rewrites().stream()
-				.noneMatch(r -> r.element() == MixinRetarget.Element.AT_TARGET && PARSE.equals(r.to())));
 	}
 
     private static MixinRetarget.Plan plan(ClassNode mixin, Function<String, byte[]> current) {
@@ -444,13 +382,4 @@ class MixinRetargetSubstitutedCallTest {
 		return found;
 	}
 
-	private static byte[] read(Path jar, String entry) throws Exception {
-		try (ZipFile zip = new ZipFile(jar.toFile())) {
-			ZipEntry found = zip.getEntry(entry);
-			if (found == null) return null;
-			try (InputStream in = zip.getInputStream(found)) {
-				return in.readAllBytes();
-			}
-		}
-	}
 }

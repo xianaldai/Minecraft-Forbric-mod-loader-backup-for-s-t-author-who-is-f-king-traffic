@@ -19,9 +19,10 @@ import org.junit.jupiter.api.io.TempDir;
  * as it is then; the thread starts before the levels load, so a line read during the boot runs on the first tick with
  * no level and throws ("An unexpected error occurred while trying to execute that command" — vanilla 26.2 does the
  * same). Seventeen gates fed "stop" after a fixed sleep, so a boot slower than the sleep left the server running until
- * the gate's hammer, and the gate went red as "never announced a stop". What has to hold: with the boot inside the
- * timer the line goes out when the timer ends, exactly as before; with a slower boot it goes out only after "Done (",
- * with settle seconds of ticking; and a server that stops or fails without reaching Done gets no line at all.
+ * the gate's hammer, and the gate went red as "never announced a stop". What has to hold: the line never goes out
+ * before settle seconds of ticking after "Done (", whenever Done came (before the timer ran out or after); with a
+ * boot done a settle or more before the timer it goes out when the timer ends, exactly as before; and a server that
+ * stops or fails without reaching Done gets no line at all.
  */
 class LibStopWhenReadyContractTest {
 	private static final Path LIB = Path.of("run/lib.sh");
@@ -30,26 +31,88 @@ class LibStopWhenReadyContractTest {
 
 	@TempDir Path temporary;
 
-	@Test void aBootInsideTheTimerGetsTheLineWhenTheTimerEnds() throws Exception {
+	@Test void aBootDoneASettleBeforeTheTimerEndsGetsTheLineWhenTheTimerEnds() throws Exception {
+		// Done is in the log from the start, a full three-second settle before a three-second timer ends: the server has
+		// had its ticks, and the line goes out at the timer's own moment, as it always did. A helper that added the settle
+		// after the timer anyway would write it at six seconds, so the window stops short of that (HARN review B-1: with
+		// timer 3 and settle 1 such a helper wrote it at 4.1 s, inside the old 3-6 s window).
 		Path log = log(BOOTING + DONE);
-		Result r = run("stop_when_ready \"" + log + "\" 1 6");
+		Result r = run("stop_when_ready \"" + log + "\" 3 3");
 		assertEquals("stop\n", r.out(), "the line, and only the line");
-		assertTrue(r.millis() >= 1000 && r.millis() < 5000,
-				"no settle when Done was already there — the old timer's moment (" + r.millis() + " ms)");
+		assertTrue(r.millis() >= 3000 && r.millis() < 5000,
+				"nothing added to a timer that already held the settle (" + r.millis() + " ms)");
+	}
+
+	@Test void aBootThatEndsJustBeforeTheTimerStillGetsItsSettle() throws Exception {
+		// gate-m3, VERIFY run 1 of C5: Done at 15:16:25 against a 22 s timer, "Stopping the server" at 15:16:26, and the
+		// canary's line for its 20th ServerTickEvent never printed. The old helper slept the timer, found Done already
+		// there and wrote "stop" at once: a Done in the timer's last second got no settle at all. Here Done lands half a
+		// second before a two-second timer, and the line must still wait three seconds after it.
+		Path log = log(BOOTING);
+		Path doneAt = temporary.resolve("done-at");
+		Path stopAt = temporary.resolve("stop-at");
+		Result r = run(appendDoneAt(1.5, log, doneAt) + "stop_when_ready \"" + log + "\" 2 3" + stampTheLine(stopAt)
+				+ "\nwait");
+		assertEquals("stop\n", r.out());
+		double gap = seconds(stopAt) - seconds(doneAt);
+		assertTrue(gap >= 3.0, "the line came " + gap + " s after a Done that beat the timer, not after the 3 s settle");
+		// Done is first seen at the two-second step, so the line is due at about five seconds; a settle counted twice
+		// would put it at eight (HARN review F3: the old bound of ten seconds let that through).
+		assertTrue(r.millis() < 7500, "and not much later either (" + r.millis() + " ms)");
+	}
+
+	@Test void aTimerOrSettleThatIsNotWholeSecondsIsRefusedOutLoud() throws Exception {
+		// The timer counts one-second sleeps; a fraction would make `[ 0 -lt 1.5 ]` an error that skips the timer.
+		Path log = log(BOOTING + DONE);
+		Result r = run("stop_when_ready \"" + log + "\" 1.5; echo \"rc=$?\"");
+		assertTrue(r.out().contains("whole seconds") && r.out().endsWith("rc=0\n") && !r.out().contains("stop\n"),
+				"no line, and a reason on stderr: " + r.out());
+	}
+
+	@Test void aTimerOrSettleWithALeadingZeroIsRefusedOutLoud() throws Exception {
+		// bash arithmetic reads a leading zero as octal: "01" happens to mean 1, "010" would mean 8, and "08" is an error
+		// that ends the whole shell, so in a gate the feeder died and no line was ever written (HARN review F4).
+		Path log = log(BOOTING + DONE);
+		Result r = run("stop_when_ready \"" + log + "\" 1 01; echo \"rc=$?\"; "
+				+ "stop_when_ready \"" + log + "\" 1 08; echo \"rc=$?\"");
+		assertTrue(r.out().split("leading zero", -1).length == 3 && r.out().endsWith("rc=0\n")
+				&& r.out().split("rc=0\n", -1).length == 3 && !r.out().contains("stop\n"),
+				"two refusals with a reason, no line, and the shell still running: " + r.out());
 	}
 
 	@Test void aBootSlowerThanTheTimerGetsTheLineOnlyAfterDoneAndTheSettle() throws Exception {
 		Path log = log(BOOTING);
 		Path doneAt = temporary.resolve("done-at");
+		Path stopAt = temporary.resolve("stop-at");
 		// Done lands three seconds in, two after a one-second timer: the old feeder had already written "stop" by then.
-		Result r = run("( sleep 3; printf '%s' '" + DONE.replace("'", "'\\''") + "' >> \"" + log + "\"; "
-				+ "python3 -c 'import time; print(time.time())' > \"" + doneAt + "\" ) &\n"
-				+ "stop_when_ready \"" + log + "\" 1 2\n"
-				+ "python3 -c 'import time; print(time.time())' > \"" + temporary.resolve("stop-at") + "\"\nwait");
+		Result r = run(appendDoneAt(3, log, doneAt) + "stop_when_ready \"" + log + "\" 1 2" + stampTheLine(stopAt)
+				+ "\nwait");
 		assertEquals("stop\n", r.out());
-		double done = Double.parseDouble(Files.readString(doneAt).trim());
-		double stop = Double.parseDouble(Files.readString(temporary.resolve("stop-at")).trim());
-		assertTrue(stop - done >= 2.0, "the line came " + (stop - done) + " s after Done, not after the 2 s settle");
+		double gap = seconds(stopAt) - seconds(doneAt);
+		assertTrue(gap >= 2.0, "the line came " + gap + " s after Done, not after the 2 s settle");
+	}
+
+	/**
+	 * Both moments the settle is measured between are taken where they happen, with no process start-up on either side.
+	 * Done's is stamped by the one python that appends the line, just before it writes; the line's by a python already
+	 * waiting on the helper's stdout, just after it reads it. With a python started after the append (C5 G-C wave 2b) the
+	 * test once measured 1.999 s for a settle lib.sh had given in full; with a python started after the helper returned
+	 * (HARN wave 2c) its start-up was added to every gap, and a lib.sh whose settle was a second short stayed green in
+	 * one run of four (HARN review B-5).
+	 */
+	private static String appendDoneAt(double after, Path log, Path at) {
+		return "( sleep " + after + "; python3 -c 'import sys, time\nf = open(sys.argv[1], \"a\")\nt = time.time()\n"
+				+ "f.write(sys.argv[2])\nf.close()\nopen(sys.argv[3], \"w\").write(repr(t))' \"" + log + "\" '"
+				+ DONE.replace("'", "'\\''") + "' \"" + at + "\" ) &\n";
+	}
+
+	private static String stampTheLine(Path at) {
+		return " | python3 -c 'import sys, time\nline = sys.stdin.readline()\nt = time.time()\nsys.stdout.write(line)\n"
+				+ "sys.stdout.flush()\nopen(sys.argv[1], \"w\").write(repr(t))' \"" + at + "\"";
+	}
+
+	private static double seconds(Path stamp) throws Exception {
+		return Double.parseDouble(Files.readString(stamp).trim());
 	}
 
 	@Test void aServerThatStopsWithoutReachingDoneGetsNoLine() throws Exception {

@@ -162,8 +162,8 @@ class MixinPredicateDelegateSpellingTest {
 	/** fabric-api's debug-option mixin under other names, the merged classes, and the option list as the mod was compiled against it. */
 	private static Inputs inputs() throws Exception {
 		Path api = Path.of(System.getProperty("forbric.fabricApi", TestFixtures.fabricApi().toString()));
-		Path base = Path.of(System.getProperty("forbric.predicateBase", TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").toString()));
-		Path neo = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
+		Path base = Path.of(System.getProperty("forbric.predicateBase", TestFixtures.stagedBase().toString()));
+		Path neo = TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR);
 		TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(api) && Files.isRegularFile(base) && Files.isRegularFile(neo), "actual predicate inputs required");
 		ClassNode released = null;
 		try (ZipFile jar = new ZipFile(api.toFile())) {
@@ -186,7 +186,7 @@ class MixinPredicateDelegateSpellingTest {
 				} catch (Exception e) {
 					return null;
 				}
-			}).get(Ecosystem.FABRIC, LIST);
+			}, null, TestFixtures.launchSources(base)).get(Ecosystem.FABRIC, LIST);
 		}
 		try (ZipFile jar = new ZipFile(neo.toFile())) {
 			String owner = "net/neoforged/neoforge/client/ClientHooks";

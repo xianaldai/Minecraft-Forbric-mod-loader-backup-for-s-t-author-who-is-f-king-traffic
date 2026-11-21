@@ -23,22 +23,21 @@ import org.objectweb.asm.tree.*;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.BasicVerifier;
 
-/** NeoForge's hopper asking Fabric's item storage lookup, on the real merged HopperBlockEntity. */
+/** NeoForge's hopper asking Fabric's item storage lookup, on the staged base's real HopperBlockEntity. */
 @ResourceLock("system-properties")
 class HopperFabricStorageInjectorTest {
 	private static final Path STAGED = TestFixtures.stagedRoot();
-	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
-	private static final Path NEO = STAGED.resolve("neoforge-patched/patched-mc-neoforge-26.2.jar");
-	private static final Path FORGE = STAGED.resolve("forge-patched/patched-mc-forge-26.2.jar");
+	private static final Path MERGED = STAGED.resolve(TestFixtures.BASE_JAR);
+	private static final Path NEO = STAGED.resolve(TestFixtures.BASE_JAR);
 	private static final Path FABRIC_API = TestFixtures.fabricApi().toAbsolutePath();
 	private static final String HOPPER = HopperFabricStorageInjector.HOPPER_INTERNAL;
 
 	@AfterEach void reset() { System.clearProperty(HopperFabricStorageInjector.PROPERTY); }
 
-	/** What Fabric's mixin anchors on is exactly what NeoForge's body no longer calls. */
+	/** What Fabric's mixin anchors on is exactly what NeoForge's bodies, the base's own, no longer call. */
 	@Test void premiseMergedBodiesAreNeoForgesAndFabricsAnchorsAreAbsent() throws Exception {
-		ClassNode merged = node(NativeCoremodParityTest.read(MERGED, HOPPER));
-		MethodNode eject = method(merged, "ejectItems"), suck = method(merged, "suckInItems");
+		ClassNode base = node(NativeCoremodParityTest.read(MERGED, HOPPER));
+		MethodNode eject = method(base, "ejectItems"), suck = method(base, "suckInItems");
 		assertEquals(1, calls(eject, HOPPER, "getContainerOrHandlerAt"));
 		assertEquals(0, calls(eject, HOPPER, "getAttachedContainer"));
 		assertEquals(1, calls(suck, HOPPER, "getSourceContainerOrHandler"));
@@ -97,12 +96,9 @@ class HopperFabricStorageInjectorTest {
 		assertSame(out, new HopperFabricStorageInjector().transform(HopperFabricStorageInjector.HOPPER, out, null), "a second pass changes nothing");
 	}
 
-	@Test void neoForgesOwnBodyGetsTheSameEditAndMinecraftForgesIsLeftAlone() throws Exception {
+	@Test void neoForgesOwnBodyGetsTheSameEdit() throws Exception {
 		byte[] neo = NativeCoremodParityTest.read(NEO, HOPPER);
 		assertNotSame(neo, new HopperFabricStorageInjector().transform(HopperFabricStorageInjector.HOPPER, neo, null));
-		byte[] forge = NativeCoremodParityTest.read(FORGE, HOPPER);
-		assertSame(forge, new HopperFabricStorageInjector().transform(HopperFabricStorageInjector.HOPPER, forge, null),
-				"MinecraftForge's body calls getAttachedContainer, where Fabric's own mixin applies");
 	}
 
 	@Test void theSwitchLeavesTheHopperAlone() throws Exception {

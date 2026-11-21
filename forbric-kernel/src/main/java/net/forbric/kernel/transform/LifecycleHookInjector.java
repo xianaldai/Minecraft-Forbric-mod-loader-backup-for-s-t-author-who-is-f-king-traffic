@@ -31,11 +31,11 @@ import net.forbric.api.ForeignType;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
- * Redirects the genuine-loader lifecycle trigger the merged base's byte-merge left woven into a vanilla entry
+ * Redirects the genuine-loader lifecycle trigger NeoForge's base weaves into a vanilla entry
  * point ({@code Main.main}) to the kernel's own native lifecycle hook — so the kernel, not FancyModLoader / FML,
  * owns the lifecycle.
  *
- * <p><b>The merged-base facts.</b> NeoForge won the byte-merge of both entries:
+ * <p><b>The base facts.</b> NeoForge's base calls its loader from both entries:
  * <ul>
  *   <li><b>Server</b> — {@code net.minecraft.server.Main.main} calls
  *       {@code net.neoforged.neoforge.server.loading.ServerModLoader.load(Z)V} between {@code Bootstrap.bootStrap()}
@@ -57,7 +57,7 @@ import net.forbric.kernel.util.ForbricLog;
  * The other client mod-loader calls ({@code ClientModLoader.finish/completeModLoading/setupModResourcePacks}) are
  * stubbed separately (see {@code KernelClientLaunch}'s {@code MethodBodyNeuter} targets).
  *
- * <p><b>Fail-loud.</b> If the targeted entry is transformed but no known trigger is found (the merged base moved
+ * <p><b>Fail-loud.</b> If the targeted entry is transformed but no known trigger is found (the base moved
  * the call), {@link #missedRequiredExcision()} reports it so the kernel refuses to boot rather than silently
  * firing a genuine lifecycle or leaving the entry un-hooked.
  *
@@ -77,9 +77,9 @@ import net.forbric.kernel.util.ForbricLog;
  */
 public final class LifecycleHookInjector implements ClassTransformer {
 
-	/** Merged-base dedicated-server entry. */
+	/** Base dedicated-server entry. */
 	public static final String SERVER_MAIN = "net.minecraft.server.Main";
-	/** Merged-base client entry. */
+	/** Base client entry. */
 	public static final String CLIENT_MAIN = "net.minecraft.client.main.Main";
 
 	private static final String KERNEL_HOOK_OWNER = "net/forbric/kernel/boot/KernelLifecycle";
@@ -103,7 +103,7 @@ public final class LifecycleHookInjector implements ClassTransformer {
 	}
 
 	/**
-	 * A genuine mod-loading trigger the byte-merge can leave in an entry, and the kernel hook it redirects to.
+	 * A genuine mod-loading trigger the base can leave in an entry, and the kernel hook it redirects to.
 	 *
 	 * <p>{@code popSlots} = how many argument slots to POP before the (no-arg) kernel hook, when the trigger's
 	 * descriptor carries arguments the hook does not want. When {@code popSlots == 0} the descriptor is kept and it
@@ -111,21 +111,18 @@ public final class LifecycleHookInjector implements ClassTransformer {
 	 */
 	private record Trigger(String owner, String name, String desc, String hookName, int popSlots) {}
 
-	// Server triggers: NeoForge's load(Z)V and MinecraftForge's no-arg load()V. A base may carry both (an edit-spliced
-	// merge keeps MinecraftForge's `if (!initSettings) load()` in front of NeoForge's): each is redirected, the kernel's
-	// window runs once (KernelLifecycle.openWindow) at whichever comes first, and the one marker follows the first.
-	// Same descriptor as the hook — keep the boolean on the stack, plain owner+name swap.
+	// Server trigger: NeoForge's load(Z)V. Same descriptor as the hook — keep the boolean on the stack, plain owner+name
+	// swap. (MinecraftForge's no-arg load()V, which an edit-spliced merge kept in front of NeoForge's, went with
+	// MinecraftForge.)
 	private static final Trigger[] SERVER_TRIGGERS = {
 			new Trigger(ForeignType.SERVER_MOD_LOADER.internal(Ecosystem.NEOFORGE), "load", "(Z)V", "onServerModLoading", 0),
-			new Trigger(ForeignType.SERVER_MOD_LOADER.internal(Ecosystem.FORGE), "load", "()V", "onServerModLoadingNoArg", 0),
 	};
 
 	// Client trigger: ClientModLoader.begin()V in net.minecraft.client.main.Main.main — the EXACT client analogue of
 	// the server's ServerModLoader.load redirect in the dedicated-server Main.main. bc 814, after Bootstrap.validate
 	// (811) and after BackgroundWaiter.runAndTick (796) has already run the bootstrap lambda (registries frozen), and
 	// BEFORE `new Minecraft` (1613) → Minecraft.<init> → ClientHooks.initClientHooks (which fires the client mod-bus
-	// events onClientModLoading must have populated the ModList for). No-arg swap (popSlots 0). Class name differs by
-	// family (Neo/Forge).
+	// events onClientModLoading must have populated the ModList for). No-arg swap (popSlots 0).
 	//
 	// (History: an earlier M5 attempt redirected setupModResourcePacks(PackRepository) in Minecraft.<init> instead,
 	// with begin() neutered — that HANGS before Minecraft.<init>, because neutering begin() defers onClientModLoading
@@ -133,7 +130,6 @@ public final class LifecycleHookInjector implements ClassTransformer {
 	private static final String BEGIN = "begin";
 	private static final Trigger[] CLIENT_TRIGGERS = {
 			new Trigger(ForeignType.CLIENT_MOD_LOADER.internal(Ecosystem.NEOFORGE), BEGIN, "()V", "onClientModLoading", 0),
-			new Trigger(ForeignType.CLIENT_MOD_LOADER.internal(Ecosystem.FORGE), BEGIN, "()V", "onClientModLoading", 0),
 	};
 
 	// The class + method carrying the trigger to rewrite. Server: Main.main. Client: Main.main (client entry), where
@@ -189,9 +185,9 @@ public final class LifecycleHookInjector implements ClassTransformer {
 		boolean fabricHooks = fabricServerHook && fabricHooksEnabled();
 		for (MethodNode m : node.methods) {
 			if (!m.name.equals(transformMethod)) continue;
-			// One marker per method, after the first trigger. SERVER_TRIGGERS keeps both load forms, and a base
-			// carrying both would otherwise call Hooks.startServer twice -- owo's @Group(max = 1) then fails with
-			// "expected 1 but 2", losing the freeze the marker is there for. Fabric's own Main calls it once.
+			// One marker per method, after the first trigger. A base carrying the trigger twice would otherwise call
+			// Hooks.startServer twice -- owo's @Group(max = 1) then fails with "expected 1 but 2", losing the freeze
+			// the marker is there for. Fabric's own Main calls it once.
 			boolean marked = false;
 			for (var insn : m.instructions.toArray()) {
 				if (!(insn instanceof MethodInsnNode call) || call.getOpcode() != Opcodes.INVOKESTATIC) continue;
@@ -242,7 +238,7 @@ public final class LifecycleHookInjector implements ClassTransformer {
 		if (fabricHooks) captureServerInstance(node);
 
 		if (redirected == 0) {
-			ForbricLog.error("[Forbric/Lifecycle] %s.%s contained NO known genuine-loader trigger — the merged "
+			ForbricLog.error("[Forbric/Lifecycle] %s.%s contained NO known genuine-loader trigger — the "
 					+ "base's entry shape changed; refusing to boot on an un-hooked lifecycle", transformClass,
 					transformMethod);
 			return classBytes;

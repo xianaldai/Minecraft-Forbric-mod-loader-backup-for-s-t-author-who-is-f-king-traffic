@@ -86,6 +86,7 @@ import net.forbric.kernel.transform.InjectorExecution;
 @ExecutesInjector(FabricFreezePointInjector.class)
 class FabricFreezePointWindowTest {
 	private static final String LIFECYCLE = "net/forbric/kernel/boot/KernelLifecycle";
+	private static final String STOP = "net/forbric/kernel/boot/RegistrationStop";
 	private static final String SIDE = Type.getInternalName(Side.class);
 	private static final String HEAD_HOOK = FabricFreezePointInjector.HEAD_HOOK;
 	private static final String TAIL_HOOK = FabricFreezePointInjector.TAIL_HOOK;
@@ -98,6 +99,7 @@ class FabricFreezePointWindowTest {
 	private static final String OPEN_ROOT = "open root";
 	private static final String CLOSE_ROOT = "close root";
 	private static final String CLOSE_WINDOW = "close window";
+	private static final String DISPATCH = "RegisterEvent dispatch";
 	private static final String RETURN = "return";
 	private static final String THROW = "throw";
 
@@ -154,38 +156,62 @@ class FabricFreezePointWindowTest {
 	/**
 	 * A server freezes where Fabric's {@code MainMixin.afterModInit} does: after every main, inside the span the root
 	 * registry is open for them — Create Fly creates its registries there when fabric-api is absent — and the TAIL
-	 * half only once the registration window is frozen again.
+	 * half only once the registration window is frozen again. Since K3 the mains run from
+	 * {@code runFabricMainsInTheWindow}, which NeoForge's own {@code GameData.postRegisterEvents} reaches where its
+	 * dispatch loop ends ({@code dispatchRegisterEvents}, through {@code RegisterEventsSeam}); the TAIL half stays in
+	 * {@code registerNeoForgeContent}'s finally, after that dispatch.
 	 */
 	@Test
 	void theServerReachesHeadAfterItsMainsWithTheRootOpenAndTailAfterTheWindowFreezes() throws Exception {
+		MethodNode mains = method("runFabricMainsInTheWindow");
+		Walk inWindow = walk(mains, mains.instructions.getFirst(), Set.of(OPEN_ROOT, MAINS, HEAD, CLOSE_ROOT), false, false);
+		assertEquals(Set.of(List.of(OPEN_ROOT, MAINS, HEAD, CLOSE_ROOT, RETURN)), inWindow.exits(),
+				"runFabricMainsInTheWindow on a dedicated server, run through");
+
+		// The walk below does not enter the lambda registerNeoForgeContent hands to dispatchRegisterEvents; this follows it.
+		assertEquals(List.of("runFabricMainsInTheWindow"), RegistrationWindowFabricStep.calls(),
+				"the Fabric step of the RegisterEvent dispatch must be runFabricMainsInTheWindow, or a dedicated server "
+						+ "never reaches the HEAD half");
+
 		MethodNode method = method("registerNeoForgeContent");
-
-		Walk run = walk(method, method.instructions.getFirst(),
-				Set.of(OPEN_ROOT, MAINS, HEAD, CLOSE_ROOT, CLOSE_WINDOW, TAIL), false, false);
-
+		Walk run = walk(method, method.instructions.getFirst(), Set.of(DISPATCH, MAINS, HEAD, CLOSE_WINDOW, TAIL), false, false);
 		assertEquals(Set.of(
-				List.of(OPEN_ROOT, MAINS, HEAD, CLOSE_ROOT, CLOSE_WINDOW, TAIL, RETURN),
+				List.of(DISPATCH, CLOSE_WINDOW, TAIL, RETURN),
 				// The `if (closeWindow)` the bytecode cannot see is always true here.
-				List.of(OPEN_ROOT, MAINS, HEAD, CLOSE_ROOT, TAIL, RETURN)), run.exits(),
-				"registerNeoForgeContent on a dedicated server, run through");
+				List.of(DISPATCH, TAIL, RETURN)), run.exits(),
+				"registerNeoForgeContent on a dedicated server, run through: the mains and the HEAD half only inside the "
+						+ "RegisterEvent dispatch, the TAIL half after the window closes");
 	}
 
 	@Test
 	void everyWayOutOfTheServerMainsReachesBothHalvesInOrder() throws Exception {
-		MethodNode method = method("registerNeoForgeContent");
+		MethodNode method = method("runFabricMainsInTheWindow");
 		AbstractInsnNode mains = onlyCall(method, "runMainEntrypoints");
 
-		Walk out = walk(method, mains, Set.of(HEAD, CLOSE_ROOT, CLOSE_WINDOW, TAIL), false, true);
+		Walk out = walk(method, mains, Set.of(HEAD, CLOSE_ROOT), false, true);
 
-		assertEquals(Set.of(
-				List.of(HEAD, CLOSE_ROOT, CLOSE_WINDOW, TAIL, RETURN),
-				List.of(HEAD, CLOSE_ROOT, TAIL, RETURN),
-				List.of(HEAD, CLOSE_ROOT, CLOSE_WINDOW, TAIL, THROW),
-				List.of(HEAD, CLOSE_ROOT, TAIL, THROW)), out.exits(),
-				"every path from runMainEntrypoints to the end of registerNeoForgeContent on a dedicated server, a "
+		assertEquals(Set.of(List.of(HEAD, CLOSE_ROOT, RETURN), List.of(HEAD, CLOSE_ROOT, THROW)), out.exits(),
+				"every path from runMainEntrypoints to the end of runFabricMainsInTheWindow on a dedicated server, a "
 						+ "throwing one included");
 		assertTrue(out.visited().containsAll(calls(method, "fabricFreezePoint")),
 				"a copy of a finally was never walked, so never checked");
+
+		MethodNode window = method("registerNeoForgeContent");
+		Walk after = walk(window, onlyCall(window, "dispatchRegisterEvents"), Set.of(CLOSE_WINDOW, TAIL), false, true);
+		assertEquals(Set.of(
+				List.of(CLOSE_WINDOW, TAIL, RETURN),
+				List.of(TAIL, RETURN),
+				List.of(CLOSE_WINDOW, TAIL, THROW),
+				List.of(TAIL, THROW)), after.exits(),
+				"every path from the RegisterEvent dispatch to the end of registerNeoForgeContent reaches the TAIL half");
+		assertTrue(after.visited().containsAll(calls(window, "fabricFreezePoint")),
+				"a copy of a finally was never walked, so never checked");
+
+		// Once NeoForge's registration failed and the boot stops (RegistrationStop, D82), neither the window's close nor
+		// Fabric's TAIL half runs: natively NeoForge's freezeData never runs after its roll-back, and nothing of a mod does.
+		Walk stopping = walk(window, onlyCall(window, "dispatchRegisterEvents"), Set.of(CLOSE_WINDOW, TAIL), false, true, true);
+		assertEquals(Set.of(List.of(RETURN), List.of(THROW)), stopping.exits(),
+				"after a registration stop, no way out of registerNeoForgeContent closes the window or reaches the TAIL half");
 	}
 
 	/**
@@ -207,6 +233,11 @@ class FabricFreezePointWindowTest {
 		List<AbstractInsnNode> sites = calls(method, "fabricFreezePoint");
 		assertFalse(sites.isEmpty(), "registerNeoForgeContent no longer calls the freeze point at all");
 		assertFalse(sites.stream().anyMatch(client.visited()::contains), "a client reaches a fabricFreezePoint call");
+
+		MethodNode mains = method("runFabricMainsInTheWindow");
+		Walk clientMains = walk(mains, mains.instructions.getFirst(), Set.of(HEAD, TAIL), true, true);
+		assertEquals(Set.of(List.of(RETURN), List.of(THROW)), clientMains.exits(),
+				"on a client the Fabric step of the RegisterEvent dispatch must reach neither half of the freeze point");
 	}
 
 	@Test
@@ -457,6 +488,15 @@ class FabricFreezePointWindowTest {
 	 */
 	private static Walk walk(MethodNode method, AbstractInsnNode from, Set<String> tracked, Boolean isClient,
 			boolean exceptions) {
+		return walk(method, from, tracked, isClient, exceptions, false);
+	}
+
+	/**
+	 * {@link #walk(MethodNode, AbstractInsnNode, Set, Boolean, boolean)} with a branch straight on
+	 * {@code RegistrationStop.stopped()} going the way {@code stopped} says: false for every boot that did not stop.
+	 */
+	private static Walk walk(MethodNode method, AbstractInsnNode from, Set<String> tracked, Boolean isClient,
+			boolean exceptions, boolean stopped) {
 		InsnList insns = method.instructions;
 		Set<List<String>> exits = new LinkedHashSet<>();
 		Set<AbstractInsnNode> visited = new HashSet<>();
@@ -498,6 +538,7 @@ class FabricFreezePointWindowTest {
 				if (!caught) exits.add(plus(steps, THROW));
 			} else if (insn instanceof JumpInsnNode jump) {
 				Boolean taken = guard(jump, isClient);
+				if (taken == null) taken = stopGuard(jump, stopped);
 				if (taken == null || taken) todo.push(new Object[] { jump.label, steps });
 				if (op != Opcodes.GOTO && (taken == null || !taken)) todo.push(new Object[] { insn.getNext(), steps });
 			} else if (insn instanceof TableSwitchInsnNode table) {
@@ -533,6 +574,7 @@ class FabricFreezePointWindowTest {
 			case "rootRegistry" -> argument != null && argument.getOpcode() == Opcodes.ICONST_1 ? OPEN_ROOT
 					: argument != null && argument.getOpcode() == Opcodes.ICONST_0 ? CLOSE_ROOT : "rootRegistry(?)";
 			case "closeClientEntrypointWindow", "closeRegistrationWindow" -> CLOSE_WINDOW;
+			case "dispatchRegisterEvents" -> DISPATCH;
 			default -> null;
 		};
 	}
@@ -541,7 +583,17 @@ class FabricFreezePointWindowTest {
 		if (insn.getOpcode() == Opcodes.ATHROW || insn instanceof InvokeDynamicInsnNode) return true;
 		if (!(insn instanceof MethodInsnNode call)) return false;
 		if (SIDE.equals(call.owner) && "isClient".equals(call.name)) return false;
+		if (STOP.equals(call.owner) && "stopped".equals(call.name)) return false;
 		return !(LIFECYCLE.equals(call.owner) && "fabricFreezePoint".equals(call.name));
+	}
+
+	/** Whether a branch straight on {@code RegistrationStop.stopped()} is taken; null when it is not one. */
+	private static Boolean stopGuard(JumpInsnNode jump, boolean stopped) {
+		if (jump.getOpcode() != Opcodes.IFEQ && jump.getOpcode() != Opcodes.IFNE) return null;
+		if (!(previous(jump) instanceof MethodInsnNode call) || !STOP.equals(call.owner) || !"stopped".equals(call.name)) {
+			return null;
+		}
+		return jump.getOpcode() == Opcodes.IFNE ? stopped : !stopped;
 	}
 
 	/** Whether a branch straight on {@code side.isClient()} is taken; null when it is not one, or either way goes. */

@@ -38,7 +38,8 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 /**
- * Every entry in {@link SupersededMixins} claims a named kernel repair does a guest mixin's whole job.
+ * Every entry in {@link SupersededMixins} claims a named kernel repair (or, for a {@code native-} entry, the base's own
+ * code) does a guest mixin's whole job.
  *
  * <p>The claim is what makes the entry safe, and it is the thing that rots: a repair gets renamed, or narrowed,
  * or deleted, and the entry keeps quietly suppressing a real failure report. So the kernel class each sentence
@@ -54,6 +55,13 @@ class SupersededMixinsTest {
 		List<String> broken = new ArrayList<>();
 
 		for (Map.Entry<String, String> entry : SupersededMixins.kinds().entrySet()) {
+			// A native- entry names no kernel class: the base does the job. Its witness is proved on the staged base's own
+			// class by a staged test of its own (SupersededFurnaceRemainderStagedTest), so this check needs no fixture.
+			if (entry.getKey().startsWith("native-")) {
+				if (!SupersededMixins.witnesses().get(entry.getKey()).startsWith("net.minecraft."))
+					broken.add(entry.getKey() + ": a native entry's witness must be a class of the base");
+				continue;
+			}
 			List<String> named = new ArrayList<>();
 			Matcher matcher = KERNEL_CLASS.matcher(entry.getValue());
 			while (matcher.find()) named.add(matcher.group(1));
@@ -197,8 +205,8 @@ class SupersededMixinsTest {
 	 */
 	@Test
 	void theProofMatchesWhatTheRealRepairWritesIntoTheRealClass() throws Exception {
-		Path carrier = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar").normalize();
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "staged NeoForge carrier absent");
+		Path carrier = TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR).normalize();
+		TestFixtures.requireFile(Fixture.STAGED, carrier, "staged NeoForge carrier absent");
 		byte[] original;
 		try (var zip = new java.util.zip.ZipFile(carrier.toFile())) {
 			var entry = zip.getEntry("net/neoforged/neoforge/common/conditions/ConditionalOps.class");
@@ -226,7 +234,7 @@ class SupersededMixinsTest {
 	/** The hopper entry's proof matches what HopperFabricStorageInjector writes into the real merged hopper. */
 	@Test
 	void theHopperProofMatchesWhatTheRealRepairWritesIntoTheRealClass() throws Exception {
-		java.nio.file.Path merged = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+		java.nio.file.Path merged = TestFixtures.stagedBase();
 		TestFixtures.require(Fixture.STAGED, java.nio.file.Files.isRegularFile(merged), "actual game required");
 		byte[] original;
 		try (var zip = new java.util.zip.ZipFile(merged.toFile())) {

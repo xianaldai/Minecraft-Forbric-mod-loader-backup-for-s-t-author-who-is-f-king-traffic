@@ -16,13 +16,25 @@
 
 package net.forbric.kernel.runtime;
 
+import java.io.InputStream;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
+import net.forbric.kernel.discovery.ForbricModDiscoverer;
 import net.forbric.kernel.discovery.ModFileScanner;
+import net.forbric.kernel.metadata.forge.ForgeModEntry;
+import net.forbric.kernel.metadata.forge.ModsTomlParser;
 import net.forbric.kernel.util.Caught;
+import net.forbric.kernel.util.ForbricLog;
 import net.neoforged.fml.jarcontents.JarContents;
 import net.neoforged.neoforgespi.language.IModInfo;
 import net.neoforged.neoforgespi.language.IModFileInfo;
@@ -47,16 +59,93 @@ import net.neoforged.neoforgespi.locating.ModFileDiscoveryAttributes;
  * now answer with the values a real mod file has. Each was null, and null is not a value any consumer expects
  * from them: a mod filtering the file list by type dropped every kernel-loaded mod, and a mod walking from a
  * file back to its info — the direction NeoForge's own error path takes — dereferenced null.
+ *
+ * <h2>One per jar, as FML builds them</h2>
+ *
+ * <p>FML builds ONE {@code ModFile} per jar, however many {@code [[mods]]} it declares, and every one of those mods'
+ * {@code getOwningFile().getFile()} is that object. The carrier's own bytecode says what that object answers
+ * ({@code javap} on {@code ModFile} and {@code ModFileInfo} in {@code neoforge-runtime.jar}, 26.2.0.93):
+ * {@code ModFileInfo}'s constructor reads {@code getConfigList("mods").stream().map(ModInfo::new).toList()}, so its
+ * {@code getMods()} is every {@code [[mods]]} entry of the jar's {@code neoforge.mods.toml}, in file order; the
+ * {@code ModFile} constructor then sets {@code id = modFileInfo.getMods().getFirst().getModId()}, so the file's id is
+ * the FIRST entry, whichever mod asks; and {@code getModInfos()} is {@code modFileInfo.getMods()}. There is one file
+ * info per jar too, so two mods of one jar have the same {@code getOwningFile()}.
+ *
+ * <p>The kernel builds that shape: {@link #sharedFor} hands every NeoForge declaration of a jar the same file, which
+ * owns one {@link KernelModFileInfo} listing all of them in {@code [[mods]]} order and is named after the first. Only
+ * NeoForge's: a universal jar whose Fabric half the kernel also describes as a mod ({@code KernelDeclarationReaders})
+ * keeps that Fabric mod on a file of its own — natively no NeoForge file lists a Fabric mod, and the walk up from a
+ * NeoForge mod must not land on one. Where it shows is {@code ModList.getAllScanData()}, which natively streams
+ * {@code sortedList → getOwningFile → getFile → distinct → getScanResult}: the {@code distinct()} is by identity, so
+ * the jar is listed once, and a mod that walks the index — JEI collecting {@code @JeiPlugin}s, Jade its providers —
+ * meets each class of the jar once (gate-m21 counts the NeoForge canary's two-{@code @Mod} jar: 1 entry; its second
+ * {@code @Mod} has no {@code [[mods]]} entry, which native NeoForge refuses, so that pair shows the shared file through a
+ * mod the kernel publishes leniently, see the gate's comment).
+ *
+ * <p>{@code -Dforbric.modFilePerJar=off} gives back the shape Forbric built until Stage 4 of the MinecraftForge
+ * removal (the merged base, and Stage 2, which kept it): one file per MOD, so such a jar is two entries of the index —
+ * the same index object ({@code ModFileScanner.scanShared}), so nothing is scanned twice, only walked twice. The
+ * default was flipped on NeoForge's own base after an on/off A/B on gate-m21 and gate-m9 (the client-merged-pack boot),
+ * and a server boot of a jar that declares two {@code [[mods]]} entries (wthit + waila) was measured both ways after
+ * it: 3 index entries for its three jars by default, 5 with the switch off (stage4-c5-g-a.md).
  */
 public final class KernelModFile implements IModFile {
+	/**
+	 * Every shared jar's file, by the real path {@code ModFileScanner} keys its shared index on, so a symlink or
+	 * {@code /tmp} for {@code /private/tmp} cannot make one jar two files. Empty with {@code -Dforbric.modFilePerJar=off},
+	 * and never holds a jar-less presence alias, which has no file to share.
+	 */
+	private static final Map<Path, KernelModFile> BY_JAR = new ConcurrentHashMap<>();
+
+	/** The switch {@link #sharedFor} is behind; on unless set to {@code off}. */
+	static final String PER_JAR_SWITCH = "forbric.modFilePerJar";
+
+	private static final AtomicBoolean ANNOUNCED = new AtomicBoolean();
+
+	/**
+	 * Whether a NeoForge declaration with a jar gets that jar's one shared file: yes, the native shape, unless
+	 * {@code -Dforbric.modFilePerJar=off}, which gives every mod a file of its own as Forbric did before Stage 4 (and
+	 * says so once). gate-m21 asserts the default and has this switch as its red control.
+	 */
+	static boolean perJar() {
+		if (!"off".equalsIgnoreCase(System.getProperty(PER_JAR_SWITCH, "on"))) return true;
+		if (ANNOUNCED.compareAndSet(false, true)) {
+			ForbricLog.info("[Forbric/Container] every NeoForge mod keeps an IModFile and file info of its own, "
+					+ "so a jar of several mods is listed once per mod in the scan index (-D%s=off)", PER_JAR_SWITCH);
+		}
+		return false;
+	}
+
+	/**
+	 * The jar's one shared file, built for the first declaration that asks. {@link KernelModFileInfo#forMod} is the
+	 * only caller, and it has already checked the switch and that the declaration is NeoForge's.
+	 */
+	static KernelModFile sharedFor(String modId, Path jar) {
+		return BY_JAR.computeIfAbsent(ModFileScanner.cacheKey(jar), key -> new KernelModFile(modId, jar, true));
+	}
+
 	private final String modId;
 	private final Path path;
 	private final JarContents contents;
 	private final Path jar;
 
+	/** Whether this is a jar's one shared file ({@link #sharedFor}) rather than one mod's own. */
+	private final boolean shared;
+
 	/**
-	 * The info that owns this file. Set by {@link KernelModFileInfo}'s constructor, which is what builds this
-	 * object: the two refer to each other, so one of them has to be filled in second.
+	 * A shared file's mods, by id, as one-slot holders: each {@link KernelModInfo} hands its slot over before filling
+	 * it in (it and its file info refer to each other), so an empty slot is a mod still inside its constructor and is
+	 * skipped. In join order; {@link #mods} sorts by the manifest.
+	 */
+	private final Map<String, IModInfo[]> members = new LinkedHashMap<>();
+
+	/** The {@code [[mods]]} ids of the jar's {@code neoforge.mods.toml}, in file order; read once, when first asked. */
+	private List<String> declaredOrder;
+
+	/**
+	 * The info that owns this file. Set by {@link KernelModFileInfo}, which is what asks for this object: the two
+	 * refer to each other, so one of them has to be filled in second. A shared file has the one file info of its
+	 * jar, which every mod of the jar also answers as its {@code getOwningFile()}.
 	 */
 	private IModFileInfo modFileInfo;
 
@@ -71,8 +160,13 @@ public final class KernelModFile implements IModFile {
 	 *            Pack.streamSelfAndChildren() because pack is null" and the world would not load.
 	 */
 	public KernelModFile(String modId, Path jar) {
+		this(modId, jar, false);
+	}
+
+	private KernelModFile(String modId, Path jar, boolean shared) {
 		this.modId = modId;
 		this.jar = jar;
+		this.shared = shared;
 		this.path = jar != null ? jar : Path.of("forbric-kernel", modId + ".jar");
 		// Native visitors enumerate every published identity, including cross-ecosystem aliases. An alias
 		// contributes no resources, but is still a valid file-shaped entry; null aborts the entire traversal.
@@ -127,10 +221,18 @@ public final class KernelModFile implements IModFile {
 		return scanResult;
 	}
 
-	/** The mod's id, which is what a real mod file's id is. */
+	/**
+	 * The mod's id, which is what a real mod file's id is. A shared file answers with its jar's first
+	 * {@code [[mods]]} entry, as {@code ModFile}'s constructor sets it, whichever of the jar's mods was built first;
+	 * a jar whose manifest names none answers with the first of its mods the kernel built.
+	 */
 	@Override
 	public String getId() {
-		return modId;
+		if (!shared) return modId;
+		List<String> order = declaredOrder();
+		if (!order.isEmpty()) return order.getFirst();
+		List<IModInfo> mods = mods();
+		return mods.isEmpty() ? modId : mods.getFirst().getModId();
 	}
 
 	/** The jar's file name, or the placeholder path's for a mod that has no jar. Never null. */
@@ -157,17 +259,74 @@ public final class KernelModFile implements IModFile {
 		return modFileInfo;
 	}
 
-	/** Called once by {@link KernelModFileInfo}'s constructor. */
-	void setModFileInfo(IModFileInfo info) {
-		this.modFileInfo = info;
+	/** Called by the {@link KernelModFileInfo} that owns this file; the first one keeps it. */
+	synchronized void setModFileInfo(IModFileInfo info) {
+		if (this.modFileInfo == null) this.modFileInfo = info;
+	}
+
+	/**
+	 * Adds a NeoForge declaration of this shared file's jar and answers the jar's one file info, built by
+	 * {@code firstInfo} for the first declaration. A second declaration of an id the file already lists — the same mod
+	 * described twice — keeps the first one's slot, which is its container's.
+	 */
+	synchronized KernelModFileInfo join(String id, IModInfo[] slot, Supplier<KernelModFileInfo> firstInfo) {
+		members.putIfAbsent(id, slot);
+		if (modFileInfo == null) setModFileInfo(firstInfo.get());
+		return (KernelModFileInfo) modFileInfo;
+	}
+
+	/**
+	 * A shared file's mods, as {@code ModFileInfo.getMods()} lists them: in the order of the jar's {@code [[mods]]}
+	 * entries, then any the manifest does not name (a {@code @Mod} class with no entry of its own, which the kernel
+	 * still gives a container) in the order they joined.
+	 */
+	synchronized List<IModInfo> mods() {
+		List<String> order = declaredOrder();
+		List<Map.Entry<String, IModInfo[]>> entries = new ArrayList<>(members.entrySet());
+		entries.sort(Comparator.comparingInt(entry -> {
+			int at = order.indexOf(entry.getKey());
+			return at < 0 ? Integer.MAX_VALUE : at;
+		}));
+		List<IModInfo> out = new ArrayList<>(entries.size());
+		for (Map.Entry<String, IModInfo[]> entry : entries) {
+			if (entry.getValue()[0] != null) out.add(entry.getValue()[0]);
+		}
+		return List.copyOf(out);
+	}
+
+	private synchronized List<String> declaredOrder() {
+		if (declaredOrder == null) declaredOrder = jar == null ? List.of() : declaredIn(jar);
+		return declaredOrder;
+	}
+
+	/** The {@code [[mods]]} ids {@code jar}'s {@code neoforge.mods.toml} declares, in file order; empty without one. */
+	static List<String> declaredIn(Path jar) {
+		try (ZipFile zip = new ZipFile(jar.toFile())) {
+			ZipEntry entry = zip.getEntry(ForbricModDiscoverer.NEOFORGE_MANIFEST);
+			if (entry == null) return List.of();
+			List<String> ids = new ArrayList<>();
+			try (InputStream in = zip.getInputStream(entry)) {
+				for (ForgeModEntry mod : ModsTomlParser.parse(in).getMods()) {
+					if (mod.getModId() != null && !ids.contains(mod.getModId())) ids.add(mod.getModId());
+				}
+			}
+			return List.copyOf(ids);
+		} catch (Exception unreadable) {
+			Caught.warn(unreadable, "[Forbric/Container] could not read the [[mods]] order of %s — its shared file "
+					+ "lists its mods in the order they were built", jar.getFileName());
+			return List.of();
+		}
 	}
 
 	// --- answered the way the proxy's defaultReturn answered them -----------------------------------------
 
-	/** Empty, as before. The mods of this file are reached through {@code IModFileInfo.getMods()} instead. */
+	/**
+	 * Empty, as before, for one mod's own file: its mods are reached through {@code IModFileInfo.getMods()} instead.
+	 * A shared file answers as {@code ModFile.getModInfos()} does, with its file info's mods.
+	 */
 	@Override
 	public List<IModInfo> getModInfos() {
-		return List.of();
+		return shared ? mods() : List.of();
 	}
 
 	/** Null, as before. */
@@ -184,6 +343,6 @@ public final class KernelModFile implements IModFile {
 
 	@Override
 	public String toString() {
-		return "KernelModFile[" + modId + "]";
+		return "KernelModFile[" + (shared ? getId() : modId) + "]";
 	}
 }

@@ -11,7 +11,7 @@ import net.forbric.kernel.TestFixtures.Fixture;
 
 class MergedBaseAbsorbedCallsTest {
     @Test void actualFogHookCannotReorderTheSourceCallbackPastFluidAndEventEffects()throws Exception{
-        Path root=TestFixtures.stagedRoot(),merged=root.resolve("merged-base/patched-mc-merged-26.2.jar"),nativeJar=TestFixtures.vanillaJar(),runtime=root.resolve("neoforge-runtime/neoforge-runtime.jar");
+        Path root=TestFixtures.stagedRoot(),merged=root.resolve(TestFixtures.BASE_JAR),nativeJar=TestFixtures.vanillaJar(),runtime=root.resolve(TestFixtures.NEO_CARRIER_JAR);
         TestFixtures.requireFiles(Fixture.STAGED,"merged and carrier",merged,runtime);TestFixtures.requireFiles(Fixture.MC_LIBRARIES,"vanilla",nativeJar);
         String owner="net/minecraft/client/renderer/fog/FogRenderer",signature="computeFogColor(Lnet/minecraft/client/Camera;FLnet/minecraft/client/multiplayer/ClientLevel;IFLorg/joml/Vector4f;)V";
         String member="Lorg/joml/Vector4f;set(FFFF)Lorg/joml/Vector4f;";
@@ -19,9 +19,9 @@ class MergedBaseAbsorbedCallsTest {
             assertTrue(CarrierHelpers.edges(NativeCallChanges.method(read(nativeJar,owner),signature),member).contains(CarrierHelpers.Shape.TAIL));
             assertNull(MergedBaseAbsorbedCalls.find(owner,signature,member,Ecosystem.FABRIC),"the hook continues with fluid/event writes; AFTER-hook changes observable callback ordering");
             var source=read(nativeJar,owner);var current=read(merged,owner);
-            // The merged method may reach the helper as MinecraftForge's own body reaches its set (an edit-spliced base keeps
-            // its getFogColor hook in front of NeoForge's helper): the other ecosystems' native bodies are its peers.
-            var peers=java.util.stream.Stream.of(Ecosystem.FORGE,Ecosystem.NEOFORGE).map(e->NativeCallTestEvidence.staged().apply(e,owner)).filter(java.util.Objects::nonNull).toList();
+            // The base's method may reach the helper as another ecosystem's own body reaches its set: NeoForge's native body
+            // is its peer.
+            var peers=java.util.stream.Stream.of(Ecosystem.NEOFORGE).map(e->NativeCallTestEvidence.staged().apply(e,owner)).filter(java.util.Objects::nonNull).toList();
             var seam=NativeCallbackSeam.derive(source,peers,current,NativeCallChanges.method(source,signature),member,n->{ClassNode node=read(merged,n);return node!=null?node:read(runtime,n);});
             assertNotNull(seam,"the original set remains the helper's unconditional first effect, with exactly the same input wires and a host prefix a native body has");
             assertEquals(owner,seam.host());

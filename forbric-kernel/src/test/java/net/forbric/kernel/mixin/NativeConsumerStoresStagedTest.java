@@ -20,7 +20,7 @@ import net.forbric.kernel.TestFixtures;
 import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
- * On the staged merged base, vanilla's {@code BucketItem.playEmptySound} stores its sound once and hands it straight to
+ * On the staged base, vanilla's {@code BucketItem.playEmptySound} stores its sound once and hands it straight to
  * {@code playSound}; the merged method stores it three times on the carriers' paths. A modifier written for the one native
  * store (as a guest names it: {@code name = "soundEvent"}) moves to the {@code playSound} read — the one read that comes
  * after all three stores. The test names the local as a guest's {@code @ModifyVariable} does; nothing in the proof names a
@@ -28,7 +28,10 @@ import net.forbric.kernel.TestFixtures.Fixture;
  */
 class NativeConsumerStoresStagedTest {
 	private static ClassNode staged(String entry) {
-		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+		return staged(TestFixtures.stagedBase(), entry);
+	}
+
+	private static ClassNode staged(Path jar, String entry) {
 		ClassNode node = new ClassNode();
 		new ClassReader(TestFixtures.requireEntry(Fixture.STAGED, jar, entry)).accept(node, 0);
 		return node;
@@ -36,7 +39,8 @@ class NativeConsumerStoresStagedTest {
 
 	@Test void theSoundModifierMovesToThePlaySoundRead() {
 		String owner = "net/minecraft/world/item/BucketItem";
-		ClassNode merged = staged(owner + ".class"), vanilla = staged("META-INF/forbric/native-reference/FABRIC/" + owner + ".class.bin");
+		ClassNode merged = staged(owner + ".class"), vanilla = staged(TestFixtures.vanillaReference(TestFixtures.stagedBase()), // the launch's sidecar
+				"META-INF/forbric/native-reference/FABRIC/" + owner + ".class.bin");
 		String method = "playEmptySound(Lnet/minecraft/world/entity/LivingEntity;Lnet/minecraft/world/level/LevelAccessor;Lnet/minecraft/core/BlockPos;)V";
 		MethodNode host = NativeCallInlining.method(merged, method), was = NativeCallInlining.method(vanilla, method);
 		AnnotationNode injector = new AnnotationNode("Lorg/spongepowered/asm/mixin/injection/ModifyVariable;");

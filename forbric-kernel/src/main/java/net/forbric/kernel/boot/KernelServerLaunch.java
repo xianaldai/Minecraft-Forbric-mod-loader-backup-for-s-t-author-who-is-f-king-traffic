@@ -18,7 +18,7 @@ package net.forbric.kernel.boot;
 
 /**
  * The dedicated-server boot entry (BOOT side). Thin wrapper over {@link KernelBoot}; the whole flow — sovereign
- * {@link net.forbric.kernel.classloading.ForbricClassLoader}, transform pipeline, tri-ecosystem discovery, Mixin,
+ * {@link net.forbric.kernel.classloading.ForbricClassLoader}, transform pipeline, Fabric and NeoForge discovery, Mixin,
  * native registration window — is shared with the client so the two sides cannot drift.
  *
  * <p>Owned (transform-loaded) jars are passed with {@code --gameJar} / {@code --runtimeJar}; MC libraries with
@@ -30,6 +30,9 @@ public final class KernelServerLaunch {
 
 	public static void main(String[] args) throws Throwable {
 		int code = CompatibilityLaunchBoundary.run(() -> KernelBoot.launch(KernelBoot.Side.SERVER, args));
+		// The game's Main logs a NeoForge mod-loading failure and returns; FML's Server.main then finds no server thread and
+		// exits with status 1, and so does this.
+		if (code == 0) code = RegistrationStop.serverExit();
 		if (code != 0) System.exit(code);
 	}
 }

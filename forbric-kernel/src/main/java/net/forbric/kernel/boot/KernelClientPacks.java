@@ -32,9 +32,11 @@ import net.forbric.kernel.util.ForbricLog;
  * Serves the ecosystem jars' CLIENT ASSETS (shaders, textures, models, lang) to the real client
  * {@code PackRepository}.
  *
- * <p>Why: NeoForge's own {@code ResourcePackLoader.findResourcePacks} (its {@code mod_resources} source) is ORPHANED
- * on the merged base — nothing calls it, because the vanilla/Forge pack-repository construction won that merge. So
- * every ecosystem asset is unreachable. That is invisible until something actually needs one: NeoForge's
+ * <p>Why: NeoForge's own {@code ResourcePackLoader.findResourcePacks} (its {@code mod_resources} source) was ORPHANED
+ * on the old merged base — nothing called it, because the vanilla/Forge pack-repository construction won that merge —
+ * so every ecosystem asset was unreachable. On NeoForge's base its {@code setupModResourcePacks} reaches that source,
+ * and the kernel replaces that body with this one (below). An unreachable asset is invisible until something actually
+ * needs one: NeoForge's
  * {@code NeoForgeRenderPipelines} registers pipelines whose shaders live at {@code assets/neoforge/shaders/*}, and
  * without them {@code ShaderManager.apply} throws "Failed to load required shader programs" and the client dies before
  * the title screen. Forge-family mod jars have the same problem for their own textures/models.
@@ -208,24 +210,18 @@ public final class KernelClientPacks {
 	 * where NeoForge's reader supplies a default — so those stay on NeoForge's. Game side, a vanilla read that
 	 * yields nothing falls back to NeoForge's reader, and then to the synthesised metadata.
 	 *
-	 * <p>A {@code carrier} is an ecosystem runtime jar, and what it is comes from its own manifest, never from
-	 * {@link MultiLoaderArbiter}: nobody arbitrates a carrier, and each one also ships a {@code fabric.mod.json}, so
-	 * asking the arbiter scanned the 4 MB MinecraftForge carrier for {@code @Mod} classes on the render thread
-	 * inside {@code Minecraft.<init>} and logged that it was "loading it as FORGE only, suppressing [FABRIC]" —
-	 * while nothing was being loaded or suppressed. NeoForge's carrier is read by NeoForge's reader, as NeoForge
-	 * reads it; MinecraftForge's by vanilla's, as MinecraftForge reads it.
+	 * <p>A {@code carrier} is the NeoForge runtime jar, never put to {@link MultiLoaderArbiter}: nobody arbitrates a
+	 * carrier, and it also ships a {@code fabric.mod.json}, so asking the arbiter scanned a carrier for {@code @Mod}
+	 * classes on the render thread inside {@code Minecraft.<init>} and logged a load decision nothing was making. It
+	 * is read by NeoForge's reader, as NeoForge reads it.
 	 */
 	static boolean readsItsMetadataTheVanillaWay(Path jar, boolean carrier) {
 		if ("off".equalsIgnoreCase(System.getProperty(VANILLA_READER, "on"))) return false;
 		// The cheap question first: without a pack.mcmeta there is nothing to route, and no owner to ask about.
 		if (!declaresPackMetadata(jar)) return false;
-		Ecosystem owner = carrier ? carrierEcosystem(jar) : MultiLoaderArbiter.ownerOf(jar);
-		return owner != Ecosystem.NEOFORGE;
-	}
-
-	/** The ecosystem a runtime carrier is: NeoForge's declares {@code neoforge.mods.toml}, MinecraftForge's does not. */
-	private static Ecosystem carrierEcosystem(Path jar) {
-		return MultiLoaderArbiter.declaredBy(jar).contains(Ecosystem.NEOFORGE) ? Ecosystem.NEOFORGE : Ecosystem.FORGE;
+		// NeoForge's reader for what NeoForge loads; vanilla's for everything else, a refused jar and a library among it.
+		boolean neoForge = carrier || MultiLoaderArbiter.claimOf(jar).ownedBy(Ecosystem.NEOFORGE);
+		return !neoForge;
 	}
 
 	private static boolean declaresPackMetadata(Path jar) {

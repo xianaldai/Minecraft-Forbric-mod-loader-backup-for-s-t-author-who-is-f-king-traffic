@@ -59,9 +59,8 @@ import org.objectweb.asm.tree.MethodNode;
  */
 class KernelClientPackSourceTest {
 	private static final Path STAGED = TestFixtures.stagedRoot();
-	private static final Path MERGED_BASE = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
-	private static final Path NEO_CARRIER = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
-	private static final Path FORGE_CARRIER = STAGED.resolve("forge-runtime/forge-runtime.jar");
+	private static final Path MERGED_BASE = STAGED.resolve(TestFixtures.BASE_JAR);
+	private static final Path NEO_CARRIER = STAGED.resolve(TestFixtures.NEO_CARRIER_JAR);
 	private static final Path RUNTIME = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
 	private static final Path MC = TestFixtures.minecraftDir();
 	private static final String SOURCE = "net/forbric/kernel/runtime/KernelClientPackSource";
@@ -70,7 +69,7 @@ class KernelClientPackSourceTest {
 			+ "Lnet/minecraft/server/packs/repository/PackCompatibility;Lnet/minecraft/world/flag/FeatureFlagSet;"
 			+ "Ljava/util/List;Z)V";
 	/**
-	 * The two places the merged base asks FML something on this path, and there is no FML in a unit test: the
+	 * The two places the staged base asks FML something on this path, and there is no FML in a unit test: the
 	 * SharedConstants initialiser asks whether this is production, and FeatureFlags' initialiser (reached through
 	 * the feature-flags metadata section) asks for modded flags. They answer as a production game with none.
 	 */
@@ -154,11 +153,10 @@ class KernelClientPackSourceTest {
 	// ---------------------------------------------------------------------------------------------------------
 
 	private Game game() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE) && Files.isRegularFile(NEO_CARRIER)
-				&& Files.isRegularFile(FORGE_CARRIER), "staged game jars absent");
+		TestFixtures.requireFiles(Fixture.STAGED, "staged game jars absent", MERGED_BASE, NEO_CARRIER);
 		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(RUNTIME.resolve("net/forbric/kernel/runtime")), "game side not compiled");
 		List<URL> urls = new ArrayList<>(List.of(RUNTIME.toUri().toURL(), MERGED_BASE.toUri().toURL(),
-				NEO_CARRIER.toUri().toURL(), FORGE_CARRIER.toUri().toURL()));
+				NEO_CARRIER.toUri().toURL()));
 		urls.addAll(minecraftLibraries());
 		return new Game(new GameLoader(urls.toArray(URL[]::new), getClass().getClassLoader(),
 				hooked(TestFixtures.requireEntry(Fixture.STAGED, MERGED_BASE, PACK + ".class")), productionEnvironment(), noModdedFlags()));

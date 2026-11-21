@@ -31,7 +31,7 @@ import net.forbric.api.ModCatalog;
 import net.forbric.kernel.util.ForbricBranding;
 
 /**
- * NeoForge's real BrandingControl and the merged base's real F3 version line name Forbric's release.
+ * NeoForge's real BrandingControl and the staged base's real F3 version line name Forbric's release.
  *
  * <p>Those two read staged bytes. {@link #theEditedLinesReadForbricAndCountEveryInstalledMod} runs the edits on
  * stand-ins compiled here with the call sequences the edits key on, against the real {@link ForbricBranding}.
@@ -41,8 +41,8 @@ import net.forbric.kernel.util.ForbricBranding;
 @ResourceLock("ModCatalog")
 class ForbricBrandingInjectorTest {
 	private static final Path STAGED = TestFixtures.stagedRoot();
-	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
-	private static final Path NEOFORGE_RUNTIME = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
+	private static final Path MERGED = STAGED.resolve(TestFixtures.BASE_JAR);
+	private static final Path NEOFORGE_RUNTIME = STAGED.resolve(TestFixtures.NEO_CARRIER_JAR);
 
 	/** NeoForge's own line counts NeoForge's ModList (one mod here); F3 shows the launcher profile and the sent brand. */
 	private static final Map<String, String> STAND_INS = Map.of(
@@ -151,7 +151,7 @@ class ForbricBrandingInjectorTest {
 
 		List<ModCatalog.Entry> previous = ModCatalog.everything();
 		ModCatalog.publish(List.of(mod(Ecosystem.FABRIC, "sodium", ""), mod(Ecosystem.NEOFORGE, "create", ""),
-				mod(Ecosystem.FORGE, "jei", ""), mod(Ecosystem.FABRIC, "fabric-api-base", "sodium")));
+				mod(Ecosystem.NEOFORGE, "jei", ""), mod(Ecosystem.FABRIC, "fabric-api-base", "sodium")));
 		try {
 			assertEquals(List.of("Minecraft 26.2", ForbricBranding.display() + " (3 mods loaded)"), InjectorExecution.invokeStatic(
 					loader.loadClass(ForbricBrandingInjector.BRANDING_CONTROL), "getBrandings"));
@@ -186,7 +186,7 @@ class ForbricBrandingInjectorTest {
 	}
 
 	@Test void theTitleScreenNamesForbricAndCountsEveryInstalledMod() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE_RUNTIME), "neoforge runtime not staged: " + NEOFORGE_RUNTIME);
+		TestFixtures.requireFile(Fixture.STAGED, NEOFORGE_RUNTIME, "neoforge runtime not staged: " + NEOFORGE_RUNTIME);
 		String internal = ForbricBrandingInjector.BRANDING_CONTROL.replace('.', '/');
 		byte[] original = NativeCoremodParityTest.read(NEOFORGE_RUNTIME, internal);
 		byte[] out = new ForbricBrandingInjector().transform(ForbricBrandingInjector.BRANDING_CONTROL, original, null);
@@ -204,7 +204,7 @@ class ForbricBrandingInjectorTest {
 	}
 
 	@Test void f3ShowsForbricsReleaseAndBrand() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "merged base not staged: " + MERGED);
+		TestFixtures.requireFile(Fixture.STAGED, MERGED, "base not staged: " + MERGED);
 		String internal = ForbricBrandingInjector.DEBUG_VERSION.replace('.', '/');
 		byte[] original = NativeCoremodParityTest.read(MERGED, internal);
 		byte[] out = new ForbricBrandingInjector().transform(ForbricBrandingInjector.DEBUG_VERSION, original, null);

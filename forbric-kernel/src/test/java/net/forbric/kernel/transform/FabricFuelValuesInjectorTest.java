@@ -30,13 +30,13 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
 
 /**
  * NeoForge's DataMapHooks.populateFuelValues runs Fabric's fuel events on its builder just before building it, then
- * hands the table through vanillaBurnTimes' return hooks, whose merge-added body returns it without rebuilding vanilla's.
+ * hands the table through vanillaBurnTimes' return hooks, whose carrier-added body returns it without rebuilding vanilla's.
  */
 @ResourceLock("system-properties")
 class FabricFuelValuesInjectorTest {
 	private static final Path RUN = TestFixtures.stagedRoot();
-	private static final Path NEO_RT = RUN.resolve("neoforge-runtime/neoforge-runtime.jar");
-	private static final Path MERGED = RUN.resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path NEO_RT = RUN.resolve(TestFixtures.NEO_CARRIER_JAR);
+	private static final Path MERGED = RUN.resolve(TestFixtures.BASE_JAR);
 	private static final String HOOKS = "net/neoforged/neoforge/common/DataMapHooks";
 	private static final String FUEL_VALUES = FabricFuelValuesInjector.FUEL_VALUES;
 	private static final String STUB_DESC = "(Lnet/minecraft/core/HolderLookup$Provider;Lnet/minecraft/world/flag/FeatureFlagSet;I)L"
@@ -282,15 +282,14 @@ class FabricFuelValuesInjectorTest {
 		Game(boolean shortCircuit, boolean headCancel) throws Exception {
 			Path compiled = Path.of(System.getProperty("user.dir"), "build", "classes", "java", "runtime").normalize();
 			TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "the game side is absent");
-			TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "the merged game is absent");
+			TestFixtures.requireFile(Fixture.STAGED, MERGED, "the staged game is absent");
 			byte[] original = NativeCoremodParityTest.read(MERGED, FUEL_VALUES);
 			byte[] woven = shortCircuit ? FabricFuelValuesInjector.shortCircuitTheBody(original) : original;
 			byte[] bytes = headCancel ? cancelledAtHead(woven) : withReturnHook(woven);
 			byte[] hookBytes = returnHookClass();
-			Path forge = RUN.resolve("merged-base/forge-runtime-interop.jar");
-			TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEO_RT) && Files.isRegularFile(forge), "the carriers are absent");
+			TestFixtures.requireFiles(Fixture.STAGED, "the carrier is absent", NEO_RT);
 			List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), MERGED.toUri().toURL(),
-					NEO_RT.toUri().toURL(), forge.toUri().toURL()));
+					NEO_RT.toUri().toURL()));
 			urls.addAll(libraries());
 			loader = new URLClassLoader(urls.toArray(new URL[0]), FabricFuelValuesInjectorTest.class.getClassLoader()) {
 				@Override

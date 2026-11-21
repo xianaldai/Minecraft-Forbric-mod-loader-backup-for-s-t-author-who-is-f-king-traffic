@@ -8,6 +8,7 @@ import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import net.forbric.api.Ecosystem;
+import net.forbric.kernel.TestFixtures;
 
 class MixinDefaultCallbackTransportTest {
     private record Inputs(ClassNode source, Map<String, ClassNode> types, ClassNode original) { }
@@ -118,8 +119,8 @@ class MixinDefaultCallbackTransportTest {
     }
     private static Inputs inputs() throws Exception {
         Path api = Path.of(System.getProperty("forbric.fabricApi", net.forbric.kernel.TestFixtures.fabricApi().toString()));
-        Path base = Path.of(System.getProperty("forbric.predicateBase", net.forbric.kernel.TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").toString()));
-        Path neo = net.forbric.kernel.TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
+        Path base = Path.of(System.getProperty("forbric.predicateBase", net.forbric.kernel.TestFixtures.stagedBase().toString()));
+        Path neo = net.forbric.kernel.TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR);
         net.forbric.kernel.TestFixtures.require(net.forbric.kernel.TestFixtures.Fixture.STAGED,
                 Files.isRegularFile(api) && Files.isRegularFile(base) && Files.isRegularFile(neo), "actual API and indexed native runtimes required");
         ClassNode source = null; Map<String, ClassNode> types = new HashMap<>(); ClassNode original;
@@ -131,9 +132,12 @@ class MixinDefaultCallbackTransportTest {
             }
         }
         try (var jar = new java.util.zip.ZipFile(base.toFile())) {
-            for (String name : List.of("net/minecraft/world/entity/LivingEntity", "net/minecraft/world/level/block/LadderBlock"))
+            // LadderBlock reaches NeoForge's makesOpenTrapdoorAboveClimbable through Block's IBlockExtension (genuine NeoForge
+            // declares no forwarder in LadderBlock), so the hierarchy the transport walks is part of the input.
+            for (String name : List.of("net/minecraft/world/entity/LivingEntity", "net/minecraft/world/level/block/LadderBlock",
+                    "net/minecraft/world/level/block/Block"))
                 types.put(name, parse(jar.getInputStream(jar.getEntry(name + ".class")).readAllBytes()));
-            original = new NativeGameReferences(path -> { try { var entry = jar.getEntry(path); return entry == null ? null : jar.getInputStream(entry).readAllBytes(); } catch (Exception e) { return null; } })
+            original = new NativeGameReferences(path -> { try { var entry = jar.getEntry(path); return entry == null ? null : jar.getInputStream(entry).readAllBytes(); } catch (Exception e) { return null; } }, null, TestFixtures.launchSources(base))
                     .get(Ecosystem.FABRIC, "net/minecraft/world/entity/LivingEntity");
         }
         try (var jar = new java.util.zip.ZipFile(neo.toFile())) {

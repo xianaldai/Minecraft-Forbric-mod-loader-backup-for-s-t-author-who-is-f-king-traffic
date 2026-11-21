@@ -192,11 +192,10 @@ class KernelDataPacksTest {
 	/**
 	 * The whole stack rests on string comparison, because PackRepository.discoverAvailable re-sorts each source's
 	 * packs into a TreeMap and discards the order they were emitted in. So assert the thing the game actually
-	 * sorts: carriers below mods, MinecraftForge below NeoForge.
+	 * sorts: carriers below mods.
 	 */
 	@Test
 	void packIdsSortIntoThePriorityStackTheGameWillApply() throws Exception {
-		Path forge = jar("forge-runtime-interop.jar", null, "data/forge/tags/item/tools.json");
 		Path neo = jar("neoforge-runtime.jar", null, "data/neoforge/damage_type/thing.json");
 		Path mod = jar("lithostitched-1.7.13-neoforge-26.2.jar", ForbricModDiscoverer.NEOFORGE_MANIFEST,
 				"data/lithostitched/recipe/x.json");
@@ -204,12 +203,10 @@ class KernelDataPacksTest {
 		Path early = jar("aaa-mod.jar", ForbricModDiscoverer.NEOFORGE_MANIFEST, "data/aaa/recipe/x.json");
 
 		List<String> sorted = new java.util.ArrayList<>(List.of(
-				modPackIdByFileName(mod), KernelDataPacks.carrierPackId(neo),
-				modPackIdByFileName(early), KernelDataPacks.carrierPackId(forge)));
+				modPackIdByFileName(mod), KernelDataPacks.carrierPackId(neo), modPackIdByFileName(early)));
 		java.util.Collections.sort(sorted);
 
 		assertEquals(List.of(
-				"forbric/carrier/1-forge-runtime-interop",
 				"forbric/carrier/2-neoforge-runtime",
 				"forbric/data/aaa-mod",
 				"forbric/data/lithostitched-1.7.13-neoforge-26.2"), sorted);
@@ -223,21 +220,74 @@ class KernelDataPacksTest {
 	}
 
 	/**
-	 * The carrier order is the arbitration rule for the 49 last-wins files the two carriers disagree on (30 loot
-	 * tables, 19 recipes), and it is read off the jar, not off the caller's argument order. NeoForge is emitted
-	 * last — later is higher priority — because the merged base IS NeoForge, and its versions of those files are
-	 * written against ingredient types only it registers.
+	 * NeoForge's carrier ranks 2 because it is NeoForge's, read off its own {@code data/neoforge}, not because of where it
+	 * stands among the carriers: alone, beside another carrier jar with data, and listed first or last, its pack id is
+	 * {@code forbric/carrier/2-neoforge-runtime} and it is emitted last (later is higher priority). Worlds record that id
+	 * in {@code level.dat}'s enabled datapacks, and gate-m9 and gate-m10 pin it, so a launch with one carrier must not
+	 * renumber it (D2). Any other carrier jar ranks 0 — MinecraftForge's, which ranked 1, is no input any more.
 	 */
 	@Test
-	void neoForgeCarrierIsEmittedLastSoItWinsTheCollisions() throws Exception {
-		Path forge = jar("forge-runtime-interop.jar", null,
-				"data/forge/tags/item/tools.json", "data/c/tags/item/ingots.json");
-		Path neo = jar("neoforge-runtime.jar", null,
-				"data/neoforge/damage_type/thing.json", "data/c/tags/item/ingots.json");
+	void theNeoForgeCarriersRankIsItsOwnWhereverItIsListed() throws Exception {
+		Path neo = jar("neoforge-runtime.jar", null, "data/neoforge/damage_type/thing.json", "data/c/tags/item/ingots.json");
+		Path other = jar("forge-runtime-interop.jar", null, "data/forge/tags/item/tools.json", "data/c/tags/item/ingots.json");
 
-		// Passed NeoForge-first on purpose: the answer must not depend on how the launcher happens to list them.
-		assertEquals(List.of(forge, neo), KernelDataPacks.carriersWithData(List.of(neo, forge)));
-		assertEquals(List.of(forge, neo), KernelDataPacks.carriersWithData(List.of(forge, neo)));
+		assertEquals(2, KernelDataPacks.carrierRank(neo));
+		assertEquals(0, KernelDataPacks.carrierRank(other), "no MinecraftForge rank any more");
+		assertEquals("forbric/carrier/2-neoforge-runtime", KernelDataPacks.carrierPackId(neo));
+		assertEquals(List.of(neo), KernelDataPacks.carriersWithData(List.of(neo)), "the only carrier");
+		for (List<Path> carriers : List.of(List.of(neo, other), List.of(other, neo))) {
+			List<Path> served = KernelDataPacks.carriersWithData(carriers);
+			assertEquals(List.of(other, neo), served, "listed " + carriers);
+			assertEquals("forbric/carrier/2-neoforge-runtime", KernelDataPacks.carrierPackId(served.get(served.size() - 1)));
+		}
+	}
+
+	/**
+	 * D43: the NeoForge carrier's id is the same under every name its jar has had — the staged {@code neoforge-runtime.jar},
+	 * the library file earlier installs wrote ({@code neoforge-runtime-26.2.jar}) and the one this installer
+	 * writes ({@code neoforge-runtime-26.2.0.93.jar}, InstalledCarrierPackIdTest derives it from the installer). With the
+	 * file name in the id, an upgrade renamed the pack under every world an installed Forbric had written.
+	 */
+	@Test
+	void theNeoForgeCarriersIdDoesNotFollowItsFileName() throws Exception {
+		for (String name : List.of("neoforge-runtime.jar", "neoforge-runtime-26.2.jar", "neoforge-runtime-26.2.0.93.jar")) {
+			Path neo = jar(name, null, "data/neoforge/damage_type/thing.json");
+			assertEquals("forbric/carrier/2-neoforge-runtime", KernelDataPacks.carrierPackId(neo), name);
+		}
+		assertEquals("forbric/carrier/0-something-else",
+				KernelDataPacks.carrierPackId(jar("something-else.jar", null, "data/whatever/x.json")),
+				"a carrier with no family keeps its file name");
+	}
+
+	/** Two jars with NeoForge's data would share the carrier id and collapse into one pack; the second keeps its name. */
+	@Test
+	void aSecondNeoForgeCarrierKeepsItsFileNameId() throws Exception {
+		java.util.Set<String> taken = new java.util.LinkedHashSet<>();
+		Path first = jar("neoforge-runtime.jar", null, "data/neoforge/damage_type/thing.json");
+		Path second = jar("other-neo-carrier.jar", null, "data/neoforge/damage_type/thing.json");
+		assertEquals("forbric/carrier/2-neoforge-runtime", KernelDataPacks.carrierPackId(first, taken));
+		assertEquals("forbric/carrier/2-other-neo-carrier", KernelDataPacks.carrierPackId(second, taken));
+		assertEquals("forbric/carrier/0-something-else", KernelDataPacks.carrierPackId(
+				jar("something-else.jar", null, "data/whatever/x.json"), taken), "a carrier with no family is unaffected");
+	}
+
+	/**
+	 * What old worlds recorded is renamed where it stands: the carrier keeps its place below the mod packs, MinecraftForge's
+	 * carrier id is left for vanilla to report missing, and a list naming the carrier twice keeps the first.
+	 */
+	@Test
+	void anOldWorldsCarrierIdIsRenamedInPlace() {
+		assertEquals(List.of("vanilla", "forbric/carrier/1-forge-runtime-interop", "forbric/carrier/2-neoforge-runtime",
+				"forbric/data/mcwbridges"), KernelDataPacks.migrateCarrierIds(List.of("vanilla",
+						"forbric/carrier/1-forge-runtime-interop", "forbric/carrier/2-neoforge-runtime-26.2",
+						"forbric/data/mcwbridges")));
+		assertEquals(List.of("vanilla", "forbric/carrier/2-neoforge-runtime", "forbric/data/a"),
+				KernelDataPacks.migrateCarrierIds(List.of("vanilla", "forbric/carrier/2-neoforge-runtime-26.2",
+						"forbric/data/a", "forbric/carrier/2-neoforge-runtime")), "the later duplicate goes");
+		assertNull(KernelDataPacks.migrateCarrierIds(List.of("vanilla", "forbric/carrier/2-neoforge-runtime",
+				"forbric/carrier/1-forge-runtime-interop-26.2")), "nothing to rename");
+		assertNull(KernelDataPacks.migrateCarrierIds(List.of()));
+		assertNull(KernelDataPacks.migrateCarrierIds(null));
 	}
 
 	@Test
@@ -280,7 +330,6 @@ class KernelDataPacksTest {
 	void eachPackIsDeclaredTheKnownPackItsOwnPlatformDeclares() throws Exception {
 		assertEquals(List.of("neoforge", "mod/sprocket,cog", "1.2,3.4"),
 				KernelDataPacks.knownPack(net.forbric.api.Ecosystem.NEOFORGE, List.of("sprocket", "cog"), List.of("1.2", "3.4")));
-		assertNull(KernelDataPacks.knownPack(net.forbric.api.Ecosystem.FORGE, List.of("sprocket"), List.of("1.2")));
 		assertNull(KernelDataPacks.knownPack(net.forbric.api.Ecosystem.FABRIC, List.of("sprocket"), List.of("1.2")));
 		assertNull(KernelDataPacks.knownPack(net.forbric.api.Ecosystem.NEOFORGE, List.of(), List.of()));
 

@@ -15,8 +15,7 @@ import net.forbric.kernel.util.ForbricLog;
 
 /**
  * NeoForge joins {@code KeyboardHandler.keyPress}'s exits into one {@code ClientHooks.onKeyInput(event, action)} call just
- * before its final return (the merged body keeps MinecraftForge's own {@code ForgeHooksClient.onKeyInput} in the same
- * join, in front of it), so a guest's {@code @Inject} at a native {@code RETURN} ordinal names a return the merged
+ * before its final return, so a guest's {@code @Inject} at a native {@code RETURN} ordinal names a return the current
  * body no longer has, and its {@code TAIL} also runs on the paths whose native returns came earlier.
  *
  * <p>Which native return a handler names is read off the native body the guest was compiled against
@@ -72,7 +71,7 @@ public final class MixinKeyActionAdapter {
 		if (exits == null) return 0;
 		int changed = 0;
 		for (MethodNode handler : candidates) {
-			// However the selector is written, it must bind keyPress alone, natively and in the merged class.
+			// However the selector is written, it must bind keyPress alone, natively and in the current class.
 			MethodNode bound = MixinTargetSelectors.one(handler, current), nativeBound = MixinTargetSelectors.one(handler, original);
 			if (host == null || source == null || bound != host || nativeBound != source) continue;
 			if (relocate(mixin, handler, exits)) changed++;
@@ -112,16 +111,16 @@ public final class MixinKeyActionAdapter {
 				MixinPlayerWorldCallbackAdapter.set(at, "value", "TAIL");
 				MixinPlayerWorldCallbackAdapter.remove(at, "ordinal");
 			}
-			placed = "the merged final return";
+			placed = "the current final return";
 		} else {
 			guard = exits.joined(ordinal);
 			// Before the hook, a cancelled callback would also cancel the carrier's event, which the native return never had.
 			if (guard == null || Boolean.TRUE.equals(MixinFit.value(injector, "cancellable"))) return false;
-			// Just before the join's first call: the hook, or another ecosystem's twin the merge kept in front of it.
+			// Just before the join's first call: the hook (on the old merged base, MinecraftForge's twin stood in front of it).
 			MixinPlayerWorldCallbackAdapter.set(at, "value", "INVOKE");
 			MixinPlayerWorldCallbackAdapter.set(at, "target", exits.entry());
 			MixinPlayerWorldCallbackAdapter.set(at, "ordinal", exits.entryOrdinal());
-			placed = "the merged " + exits.entry() + " call that begins the join";
+			placed = "the current " + exits.entry() + " call that begins the join";
 			if (guard.all()) guard = null;
 		}
 		List<String> shares = new ArrayList<>();

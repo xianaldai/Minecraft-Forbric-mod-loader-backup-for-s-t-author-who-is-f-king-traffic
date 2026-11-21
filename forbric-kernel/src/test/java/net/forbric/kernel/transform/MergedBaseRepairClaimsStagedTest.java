@@ -44,23 +44,23 @@ import net.forbric.kernel.TestFixtures;
 import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
- * Every fixed-target claim of the compat transformer, fed its real target from the staged merged base or carrier:
+ * Every fixed-target claim of the compat transformer, fed its real target from the staged base or carrier:
  * the ledger is clean and every claim is a hit. Then one target is mutated so exactly one repair declines, and the
  * ledger names that claim and no other — which is the whole reason claims exist.
  */
 class MergedBaseRepairClaimsStagedTest {
 	private static final Path RUN = TestFixtures.stagedRoot();
-	private static final List<Path> JARS = List.of(RUN.resolve("merged-base/patched-mc-merged-26.2.jar"),
-			RUN.resolve("neoforge-runtime/neoforge-runtime.jar"), RUN.resolve("forge-runtime/forge-runtime.jar"));
+	private static final List<Path> JARS = List.of(RUN.resolve(TestFixtures.BASE_JAR), RUN.resolve(TestFixtures.NEO_CARRIER_JAR));
 	private static final TransformContext CTX = new TransformContext(EnvType.CLIENT, false, "intermediary");
-	private static final String KEY_MAPPING = "net.minecraft.client.KeyMapping";
-	private static final String LOOKUP_CLAIM = "forbric-merged-base-compat#addMissingForgeKeyMappingLookupInitializer";
+	private static final String BOOTSTRAP = "net.minecraft.server.Bootstrap";
+	private static final String MINECRAFT = "net.minecraft.client.Minecraft";
+	private static final String STREAMS_CLAIM = "forbric-merged-base-compat#wrapTheStreamsVanillaWraps";
 
 	@Test
 	void everyClaimLandsOnItsStagedTargetAndTheLedgerIsClean() throws Exception {
-		TestFixtures.require(Fixture.STAGED, JARS.stream().allMatch(Files::isRegularFile), "staged merged base or carriers absent");
+		TestFixtures.requireFiles(Fixture.STAGED, "staged base or carriers absent", JARS.toArray(Path[]::new));
 		TransformChain chain = new TransformChain();
-		ForbricMergedBaseCompatTransformer compat = new ForbricMergedBaseCompatTransformer(MergedBaseRepairClaimsStagedTest::bytesOf);
+		ForbricMergedBaseCompatTransformer compat = new ForbricMergedBaseCompatTransformer();
 		chain.register(TransformPhase.COREMOD, compat);
 
 		Map<String, byte[]> targets = targets(compat);
@@ -76,24 +76,25 @@ class MergedBaseRepairClaimsStagedTest {
 
 	@Test
 	void whenOneRepairDeclinesTheLedgerNamesExactlyThatClaim() throws Exception {
-		TestFixtures.require(Fixture.STAGED, JARS.stream().allMatch(Files::isRegularFile), "staged merged base or carriers absent");
+		TestFixtures.requireFiles(Fixture.STAGED, "staged base or carriers absent", JARS.toArray(Path[]::new));
 		TransformChain chain = new TransformChain();
-		ForbricMergedBaseCompatTransformer compat = new ForbricMergedBaseCompatTransformer(MergedBaseRepairClaimsStagedTest::bytesOf);
+		ForbricMergedBaseCompatTransformer compat = new ForbricMergedBaseCompatTransformer();
 		chain.register(TransformPhase.COREMOD, compat);
 
-		byte[] real = bytesOf(KEY_MAPPING);
+		byte[] real = bytesOf(BOOTSTRAP);
 		assertNotNull(real);
-		// The merge left MinecraftForge's KeyMapping.MAP without an initializer; give it one, and the repair that
-		// adds the initializer has nothing to do while the other three KeyMapping repairs still apply.
-		chain.applyBeforeMixin(KEY_MAPPING, withForgeLookupInitialised(real), CTX);
+		// Give Bootstrap the wrapStreams() call vanilla makes: the repair that puts it back has nothing to do. A second
+		// class with its own claim goes through the same chain, so the ledger has to tell the two apart.
+		chain.applyBeforeMixin(BOOTSTRAP, withVanillasStreamWrap(real), CTX);
+		chain.applyBeforeMixin(MINECRAFT, bytesOf(MINECRAFT), CTX);
 
 		AnchorLedger.Report report = chain.ledger().report();
 		List<String> missed = new ArrayList<>();
 		for (AnchorLedger.Miss miss : report.misses()) missed.add(miss.transformer());
-		assertEquals(List.of(LOOKUP_CLAIM), missed, "exactly the one repair that declined, on its own line");
-		assertEquals(KEY_MAPPING, report.misses().get(0).className());
-		assertTrue(report.misses().get(0).cost().contains("never initialised"), report.misses().get(0).cost());
-		assertEquals(3, report.hit(), "the other three KeyMapping claims are hits");
+		assertEquals(List.of(STREAMS_CLAIM), missed, "exactly the one repair that declined, on its own line");
+		assertEquals(BOOTSTRAP, report.misses().get(0).className());
+		assertTrue(report.misses().get(0).cost().contains("latest.log"), report.misses().get(0).cost());
+		assertEquals(1, report.hit(), "the other class's claim (the window title) is a hit");
 	}
 
 	/** Binary name → class bytes for every fixed anchor of every claim. */
@@ -101,7 +102,9 @@ class MergedBaseRepairClaimsStagedTest {
 		Map<String, byte[]> out = new LinkedHashMap<>();
 		for (ClassTransformer.Claim claim : transformer.claims()) {
 			for (AnchorSet.Anchor anchor : claim.anchors().anchors()) {
-				out.computeIfAbsent(anchor.binaryName(), MergedBaseRepairClaimsStagedTest::bytesOf);
+				// As the chain feeds the compat transformer: after the vanilla member twins (the PiP map's lookup the
+				// bridge wires exists only once they have run on the genuine base).
+				out.computeIfAbsent(anchor.binaryName(), n -> PreMixinView.twinned(n.replace('.', '/'), bytesOf(n)));
 			}
 		}
 		return out;
@@ -123,17 +126,33 @@ class MergedBaseRepairClaimsStagedTest {
 		return null;
 	}
 
-	private static byte[] withForgeLookupInitialised(byte[] classBytes) {
+	/**
+	 * {@code Bootstrap} as an upstream that kept vanilla's line would ship it: {@code bootStrap()} calls its own
+	 * {@code wrapStreams()} right before it records {@code bootstrapDuration}, which is the call
+	 * wrapTheStreamsVanillaWraps puts back on NeoForge's base, so that repair has nothing left to do.
+	 */
+	private static byte[] withVanillasStreamWrap(byte[] classBytes) {
 		ClassNode node = new ClassNode();
 		new ClassReader(classBytes).accept(node, 0);
-		MethodNode clinit = null;
-		for (MethodNode m : node.methods) if (m.name.equals("<clinit>")) clinit = m;
-		assertNotNull(clinit, "KeyMapping has a <clinit>");
-		clinit.instructions.insert(new FieldInsnNode(Opcodes.PUTSTATIC, "net/minecraft/client/KeyMapping", "MAP",
-				"Lnet/minecraftforge/client/settings/KeyMappingLookup;"));
-		clinit.instructions.insert(new InsnNode(Opcodes.ACONST_NULL));
+		MethodNode bootStrap = node.methods.stream().filter(m -> m.name.equals("bootStrap") && m.desc.equals("()V"))
+				.findFirst().orElseThrow();
+		for (org.objectweb.asm.tree.AbstractInsnNode insn : bootStrap.instructions) {
+			assertTrue(!(insn instanceof org.objectweb.asm.tree.MethodInsnNode c && c.name.equals("wrapStreams")),
+					"premise: the staged Bootstrap.bootStrap() does not call wrapStreams() (NeoForge's patch replaced that call)");
+		}
+		FieldInsnNode duration = null;
+		for (org.objectweb.asm.tree.AbstractInsnNode insn : bootStrap.instructions) {
+			if (insn instanceof FieldInsnNode f && f.getOpcode() == Opcodes.GETSTATIC && f.name.equals("bootstrapDuration")) {
+				duration = f;
+				break;
+			}
+		}
+		assertNotNull(duration, "premise: bootStrap() records bootstrapDuration");
+		bootStrap.instructions.insertBefore(duration, new org.objectweb.asm.tree.MethodInsnNode(Opcodes.INVOKESTATIC,
+				"net/minecraft/server/Bootstrap", "wrapStreams", "()V", false));
 		ClassWriter writer = new ClassWriter(0);
 		node.accept(writer);
 		return writer.toByteArray();
 	}
+
 }

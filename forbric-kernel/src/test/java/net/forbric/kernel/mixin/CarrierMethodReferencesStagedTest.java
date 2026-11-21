@@ -35,7 +35,7 @@ import net.forbric.api.Ecosystem;
 import net.forbric.kernel.TestFixtures;
 
 /**
- * {@link CarrierMethodReferences} on the unmodified fabric-api enchanting-table redirect against the staged merged base and the
+ * {@link CarrierMethodReferences} on the unmodified fabric-api enchanting-table redirect against the staged base and the
  * native references it carries. Natively {@code getAvailableEnchantmentResults} filters with a lambda
  * {@code holder.value().isPrimaryItem(stack) || isBook}, and fabric-item-api redirects {@code isPrimaryItem} there; NeoForge
  * filters with {@code stack::isPrimaryItemFor}, whose inherited implementation answers true for a book first. The redirect moves
@@ -55,15 +55,14 @@ class CarrierMethodReferencesStagedTest {
 	}
 
 	private static Path merged() {
-		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
-		TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(jar), "actual game required");
+		Path jar = TestFixtures.stagedBase();
+		TestFixtures.requireFile(TestFixtures.Fixture.STAGED, jar, "actual game required");
 		return jar;
 	}
 
-	/** Every class of the merged base and both carriers, with local variable tables, as the mixin service hands them over. */
+	/** Every class of the staged base and the NeoForge carrier, with local variable tables, as the mixin service hands them over. */
 	private static Function<String, ClassNode> game() {
-		List<Path> jars = List.of(merged(), TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar"),
-				TestFixtures.stagedRoot().resolve("merged-base/forge-runtime-interop.jar"));
+		List<Path> jars = List.of(merged(), TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR));
 		Map<String, ClassNode> read = new HashMap<>();
 		return owner -> read.computeIfAbsent(owner, name -> {
 			for (Path jar : jars) {
@@ -91,7 +90,7 @@ class CarrierMethodReferencesStagedTest {
 			} catch (Exception unreadable) {
 				return null;
 			}
-		});
+		}, null, TestFixtures.launchSources(jar));
 		return references::get;
 	}
 

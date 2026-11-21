@@ -81,7 +81,7 @@ public final class MixinCollectionSourceAdapter {
 		if (opcode instanceof Number n && n.intValue() != -1 && n.intValue() != Opcodes.GETSTATIC) return null;
 		if (ordinal instanceof Number n && n.intValue() > 0 || MixinFit.value(at, "shift") != null) return null;
 		// The field the redirect names, as Mixin resolves its target: spelled in full, that field; shortened, the one field
-		// it selects in the method the mod was compiled against (the merged body no longer reads it).
+		// it selects in the method the mod was compiled against (the current body no longer reads it).
 		String named = MixinCallbackShape.pointMember(at, null);
 		if (named == null) named = MixinCallbackShape.pointMember(at, MixinCallbackShape.written(handler, nativeTarget.get()));
 		Field original = field(named);
@@ -89,7 +89,7 @@ public final class MixinCollectionSourceAdapter {
 		ClassNode originalOwner = classes.apply(original.owner());
 		if (originalOwner == null || originalOwner.fields.stream().noneMatch(f -> f.name.equals(original.name())
 				&& f.desc.equals(original.desc()) && (f.access & Opcodes.ACC_STATIC) != 0)) return null;
-		// The method Mixin binds the wrap to in the merged target, which must be the one the mod wrote it for.
+		// The method Mixin binds the wrap to in the current target, which must be the one the mod wrote it for.
 		MethodNode body = MixinTargetSelectors.boundAsWritten(handler, target, nativeTarget);
 		if (body == null) return null;
 		List<Plan> candidates = new ArrayList<>();

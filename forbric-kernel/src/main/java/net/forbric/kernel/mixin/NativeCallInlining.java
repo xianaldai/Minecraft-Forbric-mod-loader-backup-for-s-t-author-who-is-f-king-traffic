@@ -76,23 +76,36 @@ import net.forbric.kernel.util.Caught;
  * <p>Nothing here knows a mod, a class or a method by name. An inline is planned from one guest injector, when:
  * <ul>
  *   <li>its point is a call ({@code INVOKE}), without a slice; the method its selectors bind in the class the mod was
- *       compiled against (the native reference of its ecosystem) and in the merged class are the same method, and the
- *       native body makes more calls the point selects than the merged body does;</li>
+ *       compiled against (the native reference of its ecosystem) and in the current class are the same method, and the
+ *       native body makes more calls the point selects than the current body does;</li>
  *   <li>a sequence of at most {@value #MAX_DEPTH} inlines — each of a call the native method does not make (a call the
- *       carrier introduced), the second one inside what the first put in — makes the merged body select exactly as many
+ *       carrier introduced), the second one inside what the first put in — makes the current body select exactly as many
  *       calls as the native one, and only one such sequence of the fewest inlines does, or only one whose selected calls
  *       are handed every local and parameter of the method the native calls are handed (read by name and type);</li>
  *   <li>each inlined callee is a concrete, non-synchronized method no larger than {@value #MAX_CALLEE_INSNS} instructions,
  *       whose dispatch is known: a static call; a call to a private method of the class itself; or an instance call whose
  *       receiver's exact class is proved — a new instance, the result of a static method every return of which is a new
  *       instance of one class, or the method's own receiver, guarded at run time by {@code getClass()} so an instance of a
- *       subclass still makes the call as merged;</li>
+ *       subclass still makes the call as the base has it;</li>
  *   <li>everything the inlined code names is reachable from the class it moves into, or is a field or a static method of a
  *       class this loader still has to define, which is then made public (never a private instance method, whose widening
  *       would turn a same-named method of a subclass into an override);</li>
  *   <li>no other mixin anchors an injector on a call this inline removes, nor declares in that class a method an inlined
  *       instance call would dispatch to (checked again when the class is transformed, with every mixin prepared by then).</li>
  * </ul>
+ *
+ * <p>"Other mixin" means every mixin of every config registered on this side that Mixin applies (the config as the kernel
+ * serves it, without the mixins it suppresses, asked again each time a conflict is read — a config Mixin has not read
+ * yet counts as its jar has it less the mixins named as suppressed, its derived drops once it is served), each read from
+ * its own jar, not only the mixins planned so far: configs are read one after another, so a mixin of a later config is not planned yet when an earlier
+ * one's inline is decided. Deciding on the mixins seen so far registered the inline, and the class transform withdrew
+ * it once the later mixin was there — leaving the injector it was for with neither the inline nor the adapter that would
+ * have served it had the call never looked put back. fabric-screen-api's wrap of the screen draw in
+ * {@code Gui.extractRenderState} met this on NeoForge's base with spruceui (NeoForge) installed: spruceui wraps
+ * {@code ClientHooks.extractScreen}, the very call the inline replaces. Declined while it is planned, the call stays for
+ * spruceui and the screen draw is left to {@link MixinOperationSeamTransport}, which runs fabric-screen-api's handler
+ * around the draw inside {@code ClientHooks} while the call is made as NeoForge makes it.
+ * {@code -Dforbric.nativeCallInlining.registeredMixins=off} decides on the mixins planned so far, as before.
  *
  * <p>An argument the call site hands over as a plain read of a local, which the callee never writes, is read from that
  * local itself rather than copied — so the method gains no second local of the same type beside a mod's {@code @Local}.
@@ -104,6 +117,8 @@ import net.forbric.kernel.util.Caught;
  */
 public final class NativeCallInlining {
 	public static final String PROPERTY = "forbric.nativeCallInlining";
+	/** Off: a plan's conflicts are the mixins planned so far, not every registered config's mixins. */
+	public static final String REGISTERED_PROPERTY = "forbric.nativeCallInlining.registeredMixins";
 	static final int MAX_DEPTH = 2;
 	/** {@code -Dforbric.nativeCallInlining.debug=true}: one line per inline tried while planning. */
 	private static final boolean DEBUG = Boolean.getBoolean("forbric.nativeCallInlining.debug");
@@ -143,6 +158,13 @@ public final class NativeCallInlining {
 		final Set<Anchor> anchors = ConcurrentHashMap.newKeySet();
 		final Set<Added> added = ConcurrentHashMap.newKeySet();
 		final Set<Bound> bound = ConcurrentHashMap.newKeySet();
+		/** Every registered config's mixins were remembered (once per loader, the first time a plan's conflicts are read). */
+		volatile boolean indexed;
+		/** Mixins remembered only from the registered list, not planned: each conflicts only while {@link #applied} holds. */
+		final Set<String> listedOnly = ConcurrentHashMap.newKeySet();
+		final Set<String> planned = ConcurrentHashMap.newKeySet();
+		/** Whether a listed mixin is still one Mixin applies (a config served later may have dropped it). */
+		volatile java.util.function.Predicate<String> applied = mixin -> true;
 	}
 
 	private static final Map<ClassLoader, Registry> REGISTRIES = Collections.synchronizedMap(new WeakHashMap<>());
@@ -152,6 +174,10 @@ public final class NativeCallInlining {
 
 	static boolean enabled() {
 		return !"off".equalsIgnoreCase(System.getProperty(PROPERTY, "on"));
+	}
+
+	static boolean registeredMixinsConflict() {
+		return !"off".equalsIgnoreCase(System.getProperty(REGISTERED_PROPERTY, "on"));
 	}
 
 	public static void release(ClassLoader loader) {
@@ -174,9 +200,35 @@ public final class NativeCallInlining {
 	 */
 	public static int adapt(ClassNode mixin, Function<String, ClassNode> code, BiFunction<Ecosystem, String, ClassNode> natives,
 			ForbricClassLoader loader) {
+		return adapt(mixin, code, natives, loader, null);
+	}
+
+	/**
+	 * As {@link #adapt(ClassNode, Function, BiFunction, ForbricClassLoader)}; {@code registered} lists every mixin of every
+	 * config registered on this side, each as its jar has it, read the first time a plan's conflicts are (null: only the
+	 * mixins planned so far conflict).
+	 */
+	public static int adapt(ClassNode mixin, Function<String, ClassNode> code, BiFunction<Ecosystem, String, ClassNode> natives,
+			ForbricClassLoader loader, java.util.function.Supplier<? extends java.util.Collection<ClassNode>> registered) {
+		return adapt(mixin, code, natives, loader, registered, null);
+	}
+
+	/**
+	 * As {@link #adapt(ClassNode, Function, BiFunction, ForbricClassLoader, java.util.function.Supplier)}; a mixin known
+	 * only from {@code registered} conflicts only while {@code applied} holds for its internal name — Mixin may never
+	 * apply it (a config the kernel serves without it). A mixin handed to this method itself, which Mixin is loading,
+	 * always conflicts. Null: every listed mixin conflicts.
+	 */
+	public static int adapt(ClassNode mixin, Function<String, ClassNode> code, BiFunction<Ecosystem, String, ClassNode> natives,
+			ForbricClassLoader loader, java.util.function.Supplier<? extends java.util.Collection<ClassNode>> registered,
+			java.util.function.Predicate<String> applied) {
 		if (!enabled() || mixin == null || loader == null || code == null || natives == null) return 0;
 		Registry registry = registry(loader);
+		if (applied != null) registry.applied = applied;
+		registry.planned.add(mixin.name);
+		registry.listedOnly.remove(mixin.name);
 		remember(registry, mixin);
+		Runnable index = registered == null || !registeredMixinsConflict() ? () -> { } : () -> index(registry, registered);
 		Ecosystem ecosystem = MixinStubRebind.ecosystemOf(mixin.name);
 		if (ecosystem == null) return 0;
 		int planned = 0;
@@ -190,13 +242,13 @@ public final class NativeCallInlining {
 				for (AnnotationNode at : MixinFit.atNodes(injector)) {
 					if (merged == null) merged = code.apply(target);
 					if (merged == null) break;
-					Outcome outcome = derive(merged, original, handler, at, code, others(registry, mixin.name), mixin.name, ecosystem,
+					Outcome outcome = derive(merged, original, handler, at, code, new Conflicts(registry, mixin.name, index), mixin.name, ecosystem,
 							owner -> loader.findResource(owner + ".class") != null, owner -> raw(loader, owner));
 					if (outcome.plan() != null) {
 						if (register(loader, registry, outcome.plan())) {
 							planned++;
 							merged = null;  // read again: the plan just changed what the class's methods hold
-							ForbricLog.info("[Forbric/Mixin] %s.%s: %s is made in %s.%s again — the merged game makes it inside %s, now "
+							ForbricLog.info("[Forbric/Mixin] %s.%s: %s is made in %s.%s again — the game makes it inside %s, now "
 									+ "inlined at its call there, so the injector binds where %s binds it", mixin.name.replace('/', '.'),
 									handler.name, readable(outcome.plan().anchor()), target.replace('/', '.'),
 									outcome.plan().method().substring(0, outcome.plan().method().indexOf('(')), chain(outcome.plan()), ecosystem);
@@ -206,7 +258,7 @@ public final class NativeCallInlining {
 						}
 					} else if (outcome.declined() != null) {
 						MethodNode host = MixinTargetSelectors.one(handler, merged);
-						ForbricLog.info("[Forbric/Mixin] %s.%s: the merged %s.%s makes fewer calls of %s than %s does, and none is "
+						ForbricLog.info("[Forbric/Mixin] %s.%s: the current %s.%s makes fewer calls of %s than %s does, and none is "
 								+ "put back: %s", mixin.name.replace('/', '.'), handler.name, target.replace('/', '.'),
 								host == null ? "?" : host.name, readable(MixinFit.asString(MixinFit.value(at, "target"))), ecosystem,
 								outcome.declined());
@@ -233,43 +285,76 @@ public final class NativeCallInlining {
 
 	/** Anchors and added methods of every mixin but {@code mixin} recorded so far. */
 	private static Conflicts others(Registry registry, String mixin) {
-		return new Conflicts(registry, mixin);
+		return new Conflicts(registry, mixin, () -> { });
+	}
+
+	/** Remembers every registered mixin, once per loader; one that cannot be read is left out, with a warning. */
+	private static void index(Registry registry, java.util.function.Supplier<? extends java.util.Collection<ClassNode>> registered) {
+		if (registry.indexed) return;
+		synchronized (registry) {
+			if (registry.indexed) return;
+			int count = 0;
+			try {
+				java.util.Collection<ClassNode> all = registered.get();
+				if (all != null) for (ClassNode one : all) {
+					if (one == null) continue;
+					if (!registry.planned.contains(one.name)) registry.listedOnly.add(one.name);
+					remember(registry, one);
+					count++;
+				}
+			} catch (RuntimeException unreadable) {
+				Caught.warn(unreadable, "[Forbric/Mixin] could not list the registered configs' mixins; an inline's conflicts are "
+						+ "the mixins planned so far");
+			}
+			registry.indexed = true;
+			ForbricLog.debug("[Forbric/Mixin] %d registered mixin(s) remembered as possible conflicts of a native call put back", count);
+		}
 	}
 
 	/** What other mixins would lose or change if a call of a method were inlined away. */
 	static final class Conflicts {
 		private final Registry registry;
 		private final String self;
+		private final Runnable index;
 
-		private Conflicts(Registry registry, String self) {
+		private Conflicts(Registry registry, String self, Runnable index) {
 			this.registry = registry;
 			this.self = self;
+			this.index = index;
 		}
 
 		static Conflicts none() {
-			return new Conflicts(new Registry(), "");
+			return new Conflicts(new Registry(), "", () -> { });
 		}
 
 		/** Another mixin's injector point names a call of {@code nameAndDesc} in {@code target}. */
 		String anchoredBy(String target, String nameAndDesc) {
+			index.run();
 			for (Anchor anchor : registry.anchors)
-				if (!anchor.mixin().equals(self) && anchor.target().equals(target) && anchor.nameAndDesc().equals(nameAndDesc)) return anchor.mixin();
+				if (!anchor.mixin().equals(self) && anchor.target().equals(target) && anchor.nameAndDesc().equals(nameAndDesc) && live(anchor.mixin())) return anchor.mixin();
 			return null;
 		}
 
 		/** Another mixin injects into, or merges into, the method {@code nameAndDesc} of {@code target}: inlining it would bypass that. */
 		String changes(String target, String nameAndDesc) {
+			index.run();
 			String name = nameAndDesc.substring(0, nameAndDesc.indexOf('(')), desc = nameAndDesc.substring(nameAndDesc.indexOf('('));
 			for (Bound bound : registry.bound)
 				if (!bound.mixin().equals(self) && bound.target().equals(target) && bound.name().equals(name)
-						&& (bound.desc() == null || bound.desc().equals(desc))) return bound.mixin();
+						&& (bound.desc() == null || bound.desc().equals(desc)) && live(bound.mixin())) return bound.mixin();
 			return addedBy(target, nameAndDesc);
+		}
+
+		/** A mixin known only from the registered list conflicts only while Mixin still applies it. */
+		private boolean live(String mixin) {
+			return !registry.listedOnly.contains(mixin) || registry.applied.test(mixin);
 		}
 
 		/** Another mixin merges a method {@code nameAndDesc} into {@code target}. */
 		String addedBy(String target, String nameAndDesc) {
+			index.run();
 			for (Added added : registry.added)
-				if (!added.mixin().equals(self) && added.target().equals(target) && added.nameAndDesc().equals(nameAndDesc)) return added.mixin();
+				if (!added.mixin().equals(self) && added.target().equals(target) && added.nameAndDesc().equals(nameAndDesc) && live(added.mixin())) return added.mixin();
 			return null;
 		}
 	}
@@ -320,7 +405,7 @@ public final class NativeCallInlining {
 			return Outcome.NONE;
 		List<MethodInsnNode> wanted = MixinCallbackShape.calls(at, was);
 		if (wanted.isEmpty() || MixinCallbackShape.calls(at, host).size() >= wanted.size()) return Outcome.NONE;
-		// A method the merged game never runs (a carrier's forwarding stub, a vanilla overload nothing calls) gains nothing from
+		// A method the game never runs (a carrier's forwarding stub, a vanilla overload nothing calls) gains nothing from
 		// the call: the adapters that move an injector to the method that runs handle it.
 		if (ecosystem != null && MergedBaseUncalledMethods.neverRuns(merged, host, ecosystem) != null) return Outcome.NONE;
 		// A carrier's forwarding stub is left to MixinStubRebind, which moves the injector onto the overload that does the work,
@@ -670,8 +755,8 @@ public final class NativeCallInlining {
 		}
 
 		String reason() {
-			if (tried == 0) return "the merged method makes no call of its own a known body could stand in for";
-			return refusals.isEmpty() ? "no inline of the merged method's own calls makes the native number of calls"
+			if (tried == 0) return "the current method makes no call of its own a known body could stand in for";
+			return refusals.isEmpty() ? "no inline of the current method's own calls makes the native number of calls"
 					: String.join("; ", refusals);
 		}
 
@@ -1329,7 +1414,7 @@ public final class NativeCallInlining {
 			node.accept(writer);
 			return writer.toByteArray();
 		} catch (RuntimeException unwritable) {
-			Caught.warn(unwritable, "[Forbric/Mixin] could not write %s with its native calls put back; it stays as merged", binary);
+			Caught.warn(unwritable, "[Forbric/Mixin] could not write %s with its native calls put back; it stays as the base has it", binary);
 			return bytes;
 		}
 	}

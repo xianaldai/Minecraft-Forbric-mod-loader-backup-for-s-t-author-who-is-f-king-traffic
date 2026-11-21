@@ -1,0 +1,23 @@
+# Stage 4 C5 lane G-A, wave 2 (the wave-1 list of 41 is in this file's git history) -- failing kernel tests on the genuine stage, pinned build (D68)
+#
+# Run: heavy.sh ./gradlew --no-daemon $(cat .stage4/props.txt) -Pforbric.requireFixtures=all cleanTest test --continue
+#      first act: in s4c5-g-a/forbric-kernel at f0cb66b0 (rebased, = stage tip): 5772 tests, 0 skipped, 5 failed (c5/g-a/w2/suite-first.log, XML w2/suite-first-xml/)
+#      wave 2: in an APFS clone of s4c5-g-a made ~00:15, before the flip was committed (01:40, d7f80b9a; equality with the
+#      commit not shown, review B-6): 5773 tests, 0 skipped, 5 failed (c5/g-a/w2/suite-final.log, XML w2/suite-final-xml/).
+#      final (review fixes): in an APFS clone of s4c5-g-a at the code tip baa8373d: 5773 tests, 0 skipped, 5 failed, same 5
+#      names, every message's first 240 chars equal (c5/g-a/w2r/suite-final.log, XML w2r/suite-final-xml/).
+#   Plain ~/.gradle, --offline, pinned JUnit 5.9.2 / annotations 23.0.0; no init script, no GRADLE_USER_HOME. Nothing downloaded.
+#
+# Name-for-name against c5/failures-wave1.txt (5): 0 new, 0 gone, 5 kept; every kept row's first 240 message chars equal.
+# Test count 5772 -> 5773: KernelModFilePerJarTest +1 (byDefaultTwoModsOfOneJarShareOneFileAndTheIndexListsTheJarOnce;
+#   two of its tests renamed with the flip: byDefaultEveryModKeeps... -> withTheSwitchOffEveryModKeeps...,
+#   withTheSwitchOnTwoMods... -> twoModsOfOneJarShareOneFileAndOneFileInfoAndTwoJarsStayTwoFiles).
+# The 5 kept rows are the Stage-0 fixture reds kept by D58 (LiquidBounce jars absent under build/lb-vfp; SharedFinalSourceActual
+#   opt-in fixture absent). gate-m0 step 2 captures the latter itself and there they pass; the 3 LB rows skip there.
+#
+# Row format: test | failing assertion (now, first 260 chars) | cause | owner (from failures-close)
+FabricClientMixinAnchorsTest.releasedLiquidBounceBuildDrawsItsMenuWithTheCanvasTheGatewayDraws() | org.opentest4j.AssertionFailedError: [fixture:third-party] ../build/lb-vfp/jars/liquidbounce-0.40.1+26.2-20260925.jar absent — required by -Dforbric.requireFixtures=all | P1 still red: third-party fixture ../build/lb-vfp/jars/liquidbounce-*.jar absent (failures-p1.txt); not caused by C1 | P1
+FabricClientMixinAnchorsTest.releasedLiquidBounceDrawsItsMenuWithTheCanvasTheGatewayDraws() | org.opentest4j.AssertionFailedError: [fixture:third-party] ../build/lb-vfp/jars/liquidbounce-9889fe2.jar absent — required by -Dforbric.requireFixtures=all | P1 still red: third-party fixture ../build/lb-vfp/jars/liquidbounce-*.jar absent (failures-p1.txt); not caused by C1 | P1
+MixinTwinRebindTest.releasedLiquidBounceMovesItsFaceTestAndNothingElse() | org.opentest4j.AssertionFailedError: [fixture:third-party] ../build/lb-vfp/jars/liquidbounce-0.40.1+26.2-20260925.jar absent — required by -Dforbric.requireFixtures=all | P1 still red: third-party fixture ../build/lb-vfp/jars/liquidbounce-*.jar absent (failures-p1.txt); not caused by C1 | P1
+SharedFinalSourceActualTest.actualSourceAndRealFinalMixinShapeCloseAllNineMethods() | org.opentest4j.AssertionFailedError: [fixture:opt-in] actual shared final definition: /Users/jerry/Documents/Forbric/.claude/worktrees/suspicious-chaum-b28730/.stage4/run/shared-final-definitions — required by -Dforbric.requireFixtures=all | P1 still red: opt-in fixture .stage4/run/shared-final-definitions absent (failures-p1.txt); not caused by C1 | P1
+SharedFinalSourceActualTest.mutatingEitherRealSourceBodyRevokesTheWholeActualContinuation() | org.opentest4j.AssertionFailedError: [fixture:opt-in] actual shared final definition: /Users/jerry/Documents/Forbric/.claude/worktrees/suspicious-chaum-b28730/.stage4/run/shared-final-definitions — required by -Dforbric.requireFixtures=all | P1 still red: opt-in fixture .stage4/run/shared-final-definitions absent (failures-p1.txt); not caused by C1 | P1

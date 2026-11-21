@@ -42,23 +42,43 @@ For the next random set, set `SEED=20260919`, `WANT_FABRIC=26`, `WANT_NEO=26`,
 resolved manifest, including dependencies and actual loaders, with the run evidence.
 
 `abi-audit.py` checks class references against explicitly supplied carrier/game jars;
-`field-drift.py` compares vanilla and merged field descriptors and reports affected
-guest jars. `fapi-usage.py` scans class references, including `META-INF/jars`, to prove
+`field-drift.py` compares the field descriptors of vanilla and a game base (it was written for the merged base the
+installer staged before MinecraftForge was dropped; it reads any two jars, so NeoForge's patched game is the base to
+give it now) and reports
+affected guest jars. `fapi-usage.py` scans class references, including `META-INF/jars`, to prove
 that candidates actually call a named set of symbols — by default the Fabric loot/model
 surfaces, and with `--preset` / `--symbols` any other set, which is how "who is actually
 waiting on this Forge event" gets answered from bytecode instead of from `javap` notes in
-a javadoc. `--list-presets` prints the named sets. `hook-worklist.sh` goes the other way round: it
-censuses which of a carrier's event hooks the merged base still calls, then joins the dead
-ones to the jars in a mods directory that name them, so the list is ordered by how many
-mods notice rather than by whatever order the byte-merge produced. `repair-drift.sh`
+a javadoc. `--list-presets` prints the named sets. (`hook-worklist.sh`, which joined the carrier's event hooks the
+merged base no longer called to the jars that named them, went with the NeoForge-to-MinecraftForge event forward in
+Stage 4 of dropping MinecraftForge: on NeoForge's own base every NeoForge hook is NeoForge's.) `repair-drift.sh`
 replays the compat transformer's claim ledger against a CANDIDATE game build and names
 the repairs that would stop applying, which is the question a carrier bump asks and that
-nothing answered before a player did. `control-diff.sh` answers the question that has
+nothing answered before a player did. It runs the vanilla twins first, as a launch does, so a
+candidate run needs the vanilla-reference sidecar last in its jar list (with no arguments it uses
+the staged one); without it the census says so and reports the repairs that stand on a copied
+vanilla body as declined, and a twin that stands down on a stale sidecar prints as HEDGED, which
+withholds the all-clear. `control-diff.sh` answers the question that has
 been settled by argument until now — is this symptom Forbric's — by booting the same
 Fabric mods on a native Fabric server and on Forbric and saying which log it appears in:
 FORBRIC-ONLY, BOTH, NATIVE-ONLY or NEITHER, and INCONCLUSIVE when an arm did not start.
 Run each with `--help` for its argument list. API usage must be proved from the downloaded candidate
 jar before treating the selection as final; metadata resolution alone cannot prove it.
+
+## MinecraftForge refusal sweep (Stage 3 of dropping MinecraftForge)
+
+`stage3-sweep.py --classpath <kernel classpath> --out DIR [--root DIR ...]` asks two kernels' own arbitration how every
+local mod jar loads: the `tri-eco-26.2-final` tag's (`before`) and this tree's (`after`, which refuses a MinecraftForge
+build with no usable Fabric or NeoForge half). It writes one TSV row per distinct SHA-1 with each declared loader half's
+verdict and reason, and prints every transition, every refused jar and every jar that now loads as Fabric with a
+mandatory dependency its pack does not supply. Without `--root` it sweeps the main checkout's `forbric-kernel/run`,
+`forbric-kernel/build` and `forbric-loader/run` (`FORBRIC_SWEEP_HOME` overrides where that checkout is).
+`stage3-refused-check.py <stage3-sweep.tsv> <out.tsv> [--offline]` reads each refused jar independently of the kernel
+(manifests, `@Mod` classes, entrypoints, mixin configs, package references, nested jars) and, online, asks Modrinth
+whether the mod has a NeoForge or Fabric build for 26.2 — the evidence for the hand check that no refusal is false.
+`stage3-logcheck.py <stage3-sweep.tsv> [--since ...] [--exclude SUBSTRING ...]` cross-checks the `before` column against
+what real boots logged for multi-manifest jars and exits 1 when a current log disagrees. The committed results and the
+exact commands are in `reports/2026-10-30-forge-removal-baseline/stage3-sweep.md`.
 
 ## Rename experiment
 
@@ -82,58 +102,157 @@ JVM and compare.
 
 ## Carpet rule and event verification
 
-`carpet-gate.py --carpet <fabric-carpet-26.2+v260616.jar> --staged-root <forbric-loader/run>`
-compiles the Carpet probe and runs 27 behavior checks in isolated dedicated-server worlds. The baseline
-runs with `forbric.playerWorldCallbacks=off` and must fail exactly the 16 checks that need the adapter (fill shape
-updates, a direct `Level.setBlock` under `impendingFillSkipUpdates` for the neighbour-update redirect, renewable
-blackstone and deepslate on, both Scarpet events and their native-Fabric order); vanilla's own lava/water reactions
-pass there, since placement no longer depends on the adapter (`FluidInteractionsInjector`), and the summary lists
-Carpet and base-fluid failures separately. The fixed run uses strict compatibility policy and must pass every
-behavior check with no confirmed Carpet losses, and none of the five adapted mixins may be left suspected or
-"applies only partially" (the baseline must still show them, so the check can fail). Both runs
-must save and shut down normally. Reports, logs, test worlds and input hashes stay under the printed
-output directory; `--output` selects a new directory explicitly. See
-[the Carpet probe instructions](../../canary/carpet/README.md) for prerequisites and coverage.
+`carpet-gate.py --carpet <fabric-carpet-26.2+v260616.jar> --staged-root <stage/run>`
+compiles the Carpet probe and runs 34 behavior checks in isolated dedicated-server worlds, three times. The baseline
+runs with `forbric.playerWorldCallbacks=off` and must fail exactly the 13 checks that need the adapter (fill shape
+updates, renewable blackstone and deepslate on a neighbour change, both Scarpet events and their native-Fabric order;
+the direct `Level.setBlock` lamp check and the two fluid rules on placement pass without it, because the generic
+retarget carries that redirect and NeoForge's `LiquidBlock.onPlace` calls vanilla's `shouldSpreadLiquid`). Vanilla's
+own lava/water reactions, on placement and on a neighbour change, must pass in every run (NeoForge's own registry and
+vanilla's placement path give them; the neighbour-change twins are the neighbour wrap's negative controls), and the
+summary lists Carpet and base-fluid failures separately. A third run with only
+`-Dforbric.fluidReactionNeighbourChange=off` must fail exactly the two neighbour-change rule checks. The fixed run uses
+strict compatibility policy and must pass every behavior check with no confirmed Carpet losses, and none of the five
+adapted mixins may be left suspected or "applies only partially" (the baseline must still show them, so the check can
+fail). Every run must save and shut down normally. Reports, logs, test worlds and input hashes stay under the printed
+output directory; `--output` selects a new directory explicitly; `--port N` puts the three servers on N to N+2 (default:
+any free port). See [the Carpet probe instructions](../../canary/carpet/README.md) for prerequisites and coverage.
+`gate-m62-carpet.sh` runs it in the gate list (the jar from `build/compat-inputs/carpet`, `M62_CARPET` overrides;
+servers on `GATE_PORT` to `GATE_PORT+2`) and asserts 21/34, 34/34 and 32/34.
+
+## Fluid HEAD handlers on a neighbour change
+
+`fluid-head-gate.py --fabric-api <fabric-api-0.161.0+26.2.jar> [--create <create-fly.jar>] [--staged-root <stage/run>]
+[--output DIR]` compiles the fluid HEAD-handler probe and runs its cases in two isolated dedicated servers (ports from
+`GATE_PORT`, else any free one). fabric-block-api's `FluidFlowEvents` veto (block-api 3.1.0, fabric-api 0.161.0 or later)
+and Create Fly's lava + honey reaction are cancellable HEAD injectors on vanilla's `LiquidBlock.shouldSpreadLiquid`,
+which NeoForge's `onPlace` asks but its `neighborChanged` does not (it asks NeoForge's fluid interaction registry), so
+`MixinFluidReactionAdapter` runs them from a wrap of that registry question. The run with
+`-Dforbric.fluidReactionNeighbourChange.head=off` must fail exactly the neighbour-change cases (`neighbor.veto`,
+`neighbor.veto.reaction`, and `create.neighbor.reaction` with Create) and announce no wrap; the placement and un-vetoed
+cases pass in both runs. The fixed run uses strict compatibility policy, must pass every case and must announce the
+wrap of each loaded mixin. `--off <switch>` replaces the negative run's switch and then only reports which cases fail.
+Every run must save and shut down normally; reports stay under the output directory. See [the probe's
+instructions](../../canary/fluidhead/README.md). `gate-m61-fluid-head.sh` runs it in the gate list (fabric-api 0.161.0
+and Create Fly from `build/purefabric-2026-10-03` and `build/compat-inputs/create-fly`, `M61_FABRIC_API` /
+`M61_CREATE` override; servers on `GATE_PORT` and `GATE_PORT+1`) and asserts both runs' lines.
+
+## Fabric item and shears adaptations
+
+`regress-gate.py --fabric-api <fabric-api-0.155.2+26.2.jar> --bclib <bclib-26.201.2.jar> --mod <worldweaver> --mod
+<wunderlib> [--staged-root DIR] [--port N] [--output DIR]` compiles the regress probe (a Fabric mod with a NeoForge half)
+and runs 15 cases in four dedicated servers: fabric-item-api's custom damage handler, BCLib's tag shears on sheep and
+snow golems beside a Fabric and a NeoForge item with an entity entry of their own, and fabric-item-api's stack-aware
+furnace remainder. The fixed run must pass every case with fabric-item-api's `ItemStackMixin` and
+`AbstractFurnaceBlockEntityMixin` and BCLib's `SheepMixin` / `SnowGolemMixin` unsuspected; `-Dforbric.itemDamageHandler=off`
+must fail exactly the two `damage.*` handler cases and `-Dforbric.shearsRelayMobs=off` exactly the three tag-shears cases,
+and `-Dforbric.supersededMixins=off` no case, each showing its mixin suspected again (the furnace mixin's rows are
+resolved only by SupersededMixins' native-furnace-remainder entry), so each check is known to be able to fail. See [the probe's instructions](../../canary/regress/README.md).
+`gate-m60-regress.sh` runs it in the gate list (fabric-api from `.dev/api`, else `run/client-merged-pack/mods`, as
+build.gradle takes it; BCLib and WorldWeaver from `build/compat-inputs/sweep90`, WunderLib from
+`build/purefabric-2026-10-03`; `M60_*` override; servers on `GATE_PORT` to `GATE_PORT+3`) and asserts each phase's
+exact line.
 
 ## Vanilla fluid parity
 
-`fluid-parity-gate.py [--output DIR] [--unfixed]` runs one datapack, unchanged, on a vanilla 26.2 dedicated server
+`fluid-parity-gate.py [--output DIR]` runs one datapack, unchanged, on a vanilla 26.2 dedicated server
 (`launch-vanilla-server.sh`, the player's own jar) and on the kernel with zero mods (`launch-kernel-server.sh`): lava set
 beside water (source and flowing), water set beside lava, lava set on soul soil beside blue ice, lava flowing into a
 cell under water, water flowing to lava, lava flowing down into water, and a cobblestone and a basalt generator emptied
 every tick for 600 ticks. The scores the console prints and the blocks in the saved region files must be identical on
-both sides, and vanilla itself must show every reaction (so a scenario that measured nothing cannot pass). `--unfixed`
-runs the kernel with `-Dforbric.fluidInteractions=off` and must go RED. Needs Java 25 on `PATH`, like gate M31.
+both sides, and vanilla itself must show every reaction (so a scenario that measured nothing cannot pass). Needs Java 25
+on `PATH`, like gate M31. Server ports come from `GATE_PORT` (each server takes the next), else a pid-derived default.
+It is a manual tool, not a gate.
 
-`fluid-parity-gate.py --mods [--native-controls DIR]` is the same comparison for mods' fluid rules, against the loaders
-themselves: native NeoForge 26.2.0.88 with a NeoForge canary mod and native MinecraftForge 26.2-65.0.1 with a
-MinecraftForge canary mod (`canary/fluid-interactions`, each compiled against its own loader's installed jars only), and
-the kernel with both jars. The native images are the ones `native-controls.py prepare` installs (default
-`build/native-controls`); each run copies them and never writes into them. On NeoForge a mod's rule runs when a block
-next to the liquid changes and never when the liquid is placed; on MinecraftForge it runs on both, and every rule is
-tried at one neighbour before the next, so a mod's rule above beats vanilla's water to the east. Every case cell must
-match the server of the loader whose entry point the merged game uses there (placement: MinecraftForge's; a neighbour
-change: NeoForge's, then MinecraftForge mods' rules at the same neighbour), immediately and 100 ticks later, and the
-canaries must report the same firings there; where both rules match one block, exactly one runs. `--mods --unfixed`
-must go RED.
+`fluid-parity-gate.py --mods [--native-controls DIR]` is the same comparison for a NeoForge mod's fluid rules, against
+native NeoForge 26.2.0.93 itself, with a NeoForge canary mod (`canary/fluid-interactions/neo`, compiled against native
+NeoForge's installed jars only), and the kernel with the same jar. The native image is the one `native-controls.py
+prepare` installs (default `build/native-controls`); each run copies it and never writes into it. On NeoForge a mod's
+rule runs when a block next to the liquid changes and never when the liquid is placed. Every case cell must match native
+NeoForge's server, immediately and 100 ticks later, and the canary must report the same firings there.
+Stage 4 of dropping MinecraftForge took out `--unfixed` (`-Dforbric.fluidInteractions=off`: FluidInteractionsInjector
+was deleted as native parity and the switch is retired, so the run could not go red) and the native MinecraftForge
+column (Forbric refuses a MinecraftForge-only mod, so no MinecraftForge rule runs on Forbric to be compared).
+
+## Breathing, drowning and liquids (gate-m57)
+
+`breath-drown.py` is gate-m57's measuring tool. Its canaries (`canary/forge-breath-drown`, one MinecraftForge and one
+NeoForge mod; `run/build-breath-drown-canary.sh` builds the NeoForge one from the stage, and
+`run/build-forge-refusal-fixtures.sh` the MinecraftForge one against stand-ins, entry for entry the jar the real
+carrier gave) play 53 scenarios on a dedicated server and write one JSON
+result: air and health every tick, what each family's breathe, drown and damage listeners saw, a liquid's bucket round
+trip, the body's random-source steps per tick, and the entity events the server sent for the body (the probe's player
+gets an entity tracker of its own for that, as a player in a level has one). Since Stage 3 of dropping MinecraftForge,
+Forbric refuses the MinecraftForge canary, so on Forbric the NeoForge one plays alone; both still run on their native
+loaders for the reference.
+
+- `breath-drown.py reference [--runs 3] [--port N]` rebuilds the canaries and runs native MinecraftForge 26.2-65.0.1
+  and NeoForge 26.2.0.93 (the images `native-controls.py prepare --family forge` and `prepare --family neo` install;
+  `M57_NATIVE` points elsewhere) `--runs`
+  times each, in fresh instances under `build/m57-reference/`. Every run of one loader must agree with its first on
+  every stored field — what is judged, and the random draws — or it stops and names the differences; nothing is
+  filtered. It then writes `canary/forge-breath-drown/native-reference.json` with the canary sources' digest. Run it
+  after any change to the canaries; the gate refuses a reference measured with other sources (`check-sources`). The
+  native images are cloned with `cp -c` on macOS and copied elsewhere, and the NeoForge and MinecraftForge servers
+  start from their installers' `unix_args.txt` (`win_args.txt` on Windows); the canary build reads the game's
+  libraries from `MC_DIR` (default: the macOS launcher directory), as every canary builder does.
+- `breath-drown.py judge --result R.json --phase positive|refused|vanilla-refill-off` is the gate's verdict: every row
+  against native NeoForge (air and health, or a liquid row's result, and what the NeoForge canary's listeners saw; a
+  row's `f-*` tags do nothing there, as they do on Forbric with the MinecraftForge canary refused), no row with a view
+  of a MinecraftForge listener, the rows in the MinecraftForge canary's liquids skipped because the block or item is not
+  registered (as on native NeoForge), plus one documented deliberate difference (`vanilla-refill`: a body that breathes
+  with its eye in water refills as vanilla does, so NeoForge's breathe listener is handed `refill=4` where native NeoForge
+  hands it `refill=0`, which the reference must still show; the water-breathing pig, which keeps the refill, must have
+  the air native MinecraftForge's hook, which refills as vanilla does, gives the same row, and native NeoForge's air must
+  differ). Exit 1 unless the failed rows are exactly the ones the phase predicts (none for `positive` and `refused`; the
+  two vanilla-refill rows for `vanilla-refill-off`, each failing because NeoForge's breathe listener was handed
+  NeoForge's own refill).
+- `breath-drown.py run --engine native-forge|native-neo|native-fabric|forbric --mods JAR... --driver forge|neo|fabric
+  --out DIR --port N [--jvm=-D...] [--tree WT --staged OLD]` is one server, for a developer probe (a Fabric build of the
+  same canary with fabric-api's damage events stays out of the repository); `compare A.json B.json` lists every
+  difference, the unjudged fields included. `properties` prints the server.properties lines every arm uses. The
+  Forbric engine runs `run/launch-kernel-server.sh`, so it needs bash.
+
+`test_breath_drown.py` holds the judge's row table to the canary's plan (and the liquid rows to the rows the plan puts
+in MinecraftForge's liquids), the family names it reads to the names the canaries report under, the gate to every row
+and phase, the committed reference to the canary sources (line endings ignored), to
+every row it is compared on and to the documented difference, and each phase's verdict to "exact both ways, for the
+phase's cause"; it needs no game files and runs in `tools/dev.py tool-test`.
 
 ## Fabric menu codec verification
 
 `menu-codec-gate.py --farmers-delight <FarmersDelight-26.2-3.6.26+refabricated.jar>`
-compiles the menu probe and opens Farmer's Delight's cooking pot through a real `ServerboundUseItemOnPacket` in
-isolated dedicated-server worlds with Fabric API 0.155.2+26.2. The baseline runs with
-`forbric.wrapperEntryEvents=off` and must reproduce "Codec for farmersdelight:cooking_pot is not registered!";
-the fixed run uses strict compatibility policy and must record the codec, open the menu and send fabric-menu-api's
-`open_screen` payload, with no confirmed Farmer's Delight or fabric-menu-api losses. Both runs
-must save and shut down normally. See [the menu probe instructions](../../canary/menu-codec/README.md).
+compiles the menu probe and opens Farmer's Delight's cooking pot through a real `ServerboundUseItemOnPacket` in an
+isolated dedicated-server world with Fabric API 0.155.2+26.2. The run uses strict compatibility policy and must record
+the codec, open the menu and send fabric-menu-api's `open_screen` payload, with no confirmed Farmer's Delight or
+fabric-menu-api losses, and must save and shut down normally. It is a manual tool, positive only: its baseline run
+(`forbric.wrapperEntryEvents=off`, the merged base's MinecraftForge-wrapper half of the registries' entry events) went
+in Stage 4 of dropping MinecraftForge, since that switch is retired and the baseline passed every check on NeoForge's
+base. See [the menu probe instructions](../../canary/menu-codec/README.md).
 
 ## Run and collect
 
-1. Build the four staged artifacts and canaries. Do not run a gate while a Windows
-   sweep is using those artifacts; gates rebuild the kernel jar in place.
+1. Build the four staged artifacts and canaries: the kernel jar, the base (NeoForge's patched game), its one carrier
+   (the NeoForge runtime), and the vanilla-reference sidecar measured against that base (`tools/dev.py prepare` stages
+   them; push-and-run builds a sidecar with `run/vanilla-reference-jar.sh` when the staged one records another base).
+   The stage is `FORBRIC_OLD` when it is set, else `forbric-kernel/.dev/staged` (what `tools/dev.py prepare` writes,
+   and what `build.gradle` reads without `FORBRIC_OLD`); never `forbric-loader/run`, whose carrier is NeoForge
+   26.2.0.88 and unstamped. The base and the carrier go up only while their build stamps (`<jar>.pins`) name this
+   tree's installer pins; otherwise push-and-run refuses before building or touching anything (prepare the stage,
+   point `FORBRIC_OLD` at a prepared one, or name the files with `--artifact`). Do not run a gate while a Windows sweep is using those artifacts; gates rebuild
+   the kernel jar in place.
 2. Use `push-and-run.sh --label <label> --mods <mods-dir> --manifest <manifest.json>`.
    Preview with `--dry-run --version-json <installed-profile.json>`. The dry run names
-   all four artifact uploads, sanitized mod names, PID stop, cleanup, and evidence.
+   all four artifact uploads, sanitized mod names, PID stop, cleanup, and evidence. push-and-run rewrites only the
+   profile's game arguments: `--gameJar`, `--runtimeJar` and `--nativeReference` become the paths of the base, carrier
+   and sidecar libraries the profile names, one value per flag, with `--libraryPath` and every other argument kept
+   (`PROFILE_REWRITES`, or `PROFILE_REWRITES none` when they already say that). It changes no library. A profile the
+   installer of this tree did not write -- one an older installer wrote (one that staged the merged base, before
+   MinecraftForge was dropped), naming the merged base, a MinecraftForge carrier or the old loader's jars, or one naming the three game artifacts at other versions
+   than this tree stages, or lacking one -- is refused (exit 2) before the kernel is built and before anything is
+   stopped or staged, with the advice to run the new installer again with the same game directory; the kernel would
+   refuse that game anyway (D9). A refused run leaves no evidence directory, so the same `--label` runs again after
+   the reinstall.
 3. Stop only PIDs read from `.forbric-sweep.pid` / `.forbric-gate.pid`, including the
    server subdirectory's gate file. Never kill all Java/Python/game processes by name.
    Those PIDs include the client and bisect drivers, so a stop also skips their own restore of the player's
@@ -154,8 +273,9 @@ must save and shut down normally. See [the menu probe instructions](../../canary
    jar on the Windows side from its own URL, verifying size and SHA-1 against the manifest; an upload whose remote
    SHA-256 already matches is skipped either way. `COMPAT_CALL_TIMEOUT` (default 240) raises the per-call ceiling
    for such a tunnel; whether a stalled call may be repeated is the `WINSH`/`WINFILE` command's own decision.
-5. `version-json-sync.py` updates SHA-1/size for exactly four supplied `group:artifact`
-   pairs. It keeps library order and all other metadata. A missing pair is an error.
+5. `version-json-sync.py` updates SHA-1/size for every supplied `group:artifact` pair — the five
+   push-and-run supplies, `net.forbric:vanilla-reference` among them. It keeps library order and all other
+   metadata. A missing pair is an error.
    Upload the artifacts and refreshed profile, then the driver tools and mod archive.
    Windows-illegal jar characters are replaced with `_`; collisions fail before upload.
 6. `win/run-server-test.py` drives `win/forbric-server.py` through world generation,
@@ -241,6 +361,29 @@ must save and shut down normally. See [the menu probe instructions](../../canary
    to whichever chunk generated first. A comparison over two absent or half-generated worlds
    reports zero differences, so the `chunks:` and `full:` counts must be checked before any
    zero counts. `test_world_parity.py` checks which spawner differences count; gate-m0 runs it.
+   `world-snapshot.py` is not part of the sweep either: gate-m58 (world upgrade) and gate-m59 (Forge to NeoForge
+   build swap) export a save after a clean stop to a typed JSON snapshot (`export`, schema
+   `forbric-world-snapshot/1`, frozen: level.dat, block states, biomes, block entities, chunk extras such as
+   attachments, entities, players, stats, SavedData), compare two snapshots under named rules (`diff --rules
+   upgrade|reopen`; every allowance is printed with its count, including the resave noise measured old -> old,
+   `--ignore-namespace` for a mod that is meant to be gone, `--json` for the same result as
+   `forbric-world-snapshot-diff/1`), change a copy of a save for a reverse control (`mutate`), and check that every
+   registry name a snapshot refers to is in the registry lists a canary wrote (`census`). A rule is noise only once
+   a run of the old line against itself has shown it. It reads saves through `world-parity.py`'s typed reader, the
+   tree's one NBT parser; its docstring is the operating manual, and `test_world_snapshot.py` checks it, including
+   against bytes the game wrote (`testdata/world-snapshot/`).
+   `forge-swap-make-old.sh <out-dir>` writes the old side of the Forge to NeoForge build swap with
+   `run/old-kernel.sh` (a world the pre-removal kernel wrote with the candidates' MinecraftForge builds, a
+   singleplayer player pass, the old side's own A/A, and the fixture's MANIFEST); `forge-swap.py` holds the probe's
+   console and drill lines, the player kit, the loader-key census and the per-key loss classification
+   (`classify --forbric DIR --native DIR`); `native-controls.py swap` runs the native oracle and the Forbric open.
+   A packedup backpack's contents live in its own files, which only a player opening the bag creates, so
+   `ForgeSwapBagFill.java` (built by `forge-swap.py bag-agent`, a `-javaagent` on the old create, the native create
+   via `swap --create-jvm=...`, and the old singleplayer client) runs packedup's own server-side open-and-insert, and
+   `forge-swap.py bags` reads the saved inventories back. `run/gate-m59-forge-swap.sh` opens the frozen fixture on
+   this tree and pins its losses with `forge-swap.py pin` against `canary/forge-swap/expected-losses.tsv` and the
+   fixture's frozen native arm (D77: exactly the native-identical rows). Their docstrings are the operating manual;
+   `test_forge_swap.py` and `test_native_controls.py` check them.
 9. `push-and-run.py` implements the shell entry point's orchestration and writes
    `report.md` using `report-template.md`, with commit, manifest, phase results, log
    assertions, frame verdict, region evidence and named load-report failures. Retain
@@ -275,7 +418,11 @@ declares itself in one line near its top:
 
 `rundirs` names what the gate owns while it runs — two gates naming the same one are never
 co-scheduled — and `mem` is what it costs. A gate WITHOUT that line runs alone, and the run
-says so in the progress log; a new gate is slow rather than silently unsound.
+says so in the progress log; a new gate is slow rather than silently unsound. A gate whose
+verdict is a timing adds the bare word `alone` (gate-m12's late-tick ceiling, and every gate
+that calls `check_kept_up`): a neighbour's CPU would read as the server falling behind, so it
+runs with no other gate, and `GatesAllTest` fails on such a gate that does not say `alone`.
+Any other word on the line, or a line with none, stops the sweep before a gate runs; a note goes after ` # `.
 
 A gate that wants a shared fixture to itself declares `clone=<dir>:<ENV_VAR>` instead, and the
 scheduler points that variable at a private copy under `run/.gate-clones/`. Four gates want
@@ -318,29 +465,116 @@ the environment is one the scheduler exports; no gate writes a literal port; a g
 server calls the lost-port check; and a "never reached Done" exit calls it before it leaves. It
 reads text, so it holds the call and that one shared exit, not every path through a gate.
 
+`FORBRIC_JVM` is how a whole sweep is pointed at something every game JVM must carry -- a locale
+(`FORBRIC_JVM="-Duser.language=zh -Duser.country=CN"`; no routine run uses one, see below), a
+debugging property, a switch a red control turns off. A gate that sets it for a launch keeps the
+caller's value first: `FORBRIC_JVM="${FORBRIC_JVM:-} -D..."` in the shell, `os.environ.get('FORBRIC_JVM',
+'') + ' -D...'` in Python, `JAVA_TOOL_OPTIONS="${FORBRIC_JVM:-} ..."` for a JVM started from a resolved
+command line (gate-m17). First, so what the gate sets on purpose still wins (the JVM keeps the last `-D`
+of a name). Until 2026-11 most gates wrote their own value over it and a sweep "in Chinese" reached the
+game JVMs of 16 of 60 gates. `python3 run/compat/test_gate_locale.py` (also run by gate-m0 step 6) holds
+every gate, its Python heredocs and the `run/compat/*.py` drivers it names to that (the caller's value
+first, not only present), and lists each launch that pins a language on purpose with the reason:
+gate-m26's refusal-prompt boot and gate-m29's refusal boot, both English. A pin pins
+both language switches the kernel reads -- `-Duser.language` (the load report) and
+`-Dforbric.dialogLanguage` (DialogLang: the dependency dialog and a refused mod's finding, read before
+the locale) -- the second by a tag DialogLang has a table for: `zh` names two tables and is ignored, so
+a sweep that wants the dialog in Chinese adds `-Dforbric.dialogLanguage=zh_cn`.
+
+Three things keep repeated sweeps cheap (2026-11-15; a development round had swept every gate five or six times,
+several of them on one tree), and a fourth keeps a sweep from being run twice: nothing is run a second time in Chinese.
+
+- **Longest first.** With more than one slot, `gates-parallel.py` starts gates by their last measured duration,
+  longest first: `run/compat/gate-durations.tsv` is the checked-in prior, and each run's own timings
+  (`<cache dir>/durations.json`) win over it. `-j 1` keeps numerical order; `summary.txt` is always numerical.
+- **The verdict cache** (`run/compat/gate_cache.py`). A gate whose inputs are identical to a run that went GREEN
+  is reported `GREEN (exit=0; cached: same inputs went GREEN at <time>)`, and its log in the results directory is
+  that run's log. The key is every non-prose file git sees (each gate keys on its own script and the gate scripts
+  it names, not the others'; a gate that says `# GATE-CACHE: tests` also on the test sources, every gate script and
+  the prose outside `reports/`, which its tests read), every jar under `run/` outside the gates' own declared rundirs
+  and outside `run/canary/` (the canary builders' output; their sources, and the ones they compile from the staged
+  root, are keyed instead) and under the staged and game directories (by entry name, CRC-32 and size, so a re-zipped
+  jar still hits), the inherited `FORBRIC_*`/`MC_*`/`M<n>_*`/`JAVA_*`/`LANG` environment and the launchers'
+  unprefixed knobs (`BASE`, `NEO_RT`, `NATIVE_REF`, `VANILLA_JAR`, `VANILLA_JVM`, with the jars they name) minus
+  ports and the scheduler's own knobs, and `java -version` of the `java` the launchers start.
+  `python3 run/compat/test_gate_cache.py` fails on a gate that runs test sources without `# GATE-CACHE: tests`, on a
+  fixture jar a gate stages from build/ outside the hashed roots, on a canary a gate stages without building it, on
+  an environment variable a run/ script reads that the key does not, and on every way the key could miss a change it
+  must see; gate-m0 runs it, with test_control_arm.py. It lives in git's common directory and is shared by
+  every worktree; `FORBRIC_GATE_CACHE=<dir>` moves it, `=0` or `--no-cache` turns it off, and `--release` never
+  reads it. It cannot see a hand-edited fixture world: run `--no-cache` after changing one.
+- **Control arms are kept, not re-booted.** A run inside a gate whose inputs hold nothing of this tree -- gate-m31's
+  pure-vanilla server -- is kept by lib.sh's `control_arm_dir` / `control_arm_store` under a key file listing every
+  input (beside the verdicts, so every worktree shares it), stored only after it passed its own checks, and booted
+  again under `FORBRIC_GATE_FRESH=1` (`--release`, `--no-cache`) or `FORBRIC_GATE_CACHE=0`.
+  `python3 run/compat/test_control_arm.py` holds the key, the fresh switches and the whole-or-nothing store.
+- **No Chinese run** (D88). Only the load report, merge report, crash analysis, the disabled-mods file, DialogLang's
+  windows, findings and in-game compatibility screen, and the installer's two sentences follow the language (lane ZH,
+  2026-11-15: a full zh sweep differed from en in no verdict), and the unit suite asserts each of them in zh_CN and
+  English with the system locale deciding.
+
+`gates-all.sh` also builds the jar and resolves the boot classpath once and exports them as `FORBRIC_PREBUILT_JAR`,
+`FORBRIC_PREBUILT_DEPS` and `FORBRIC_PREBUILT_STAMP`; the launchers and `lib.sh` skip their own two Gradle runs
+while the jar still has that size and mtime, so every gate of a sweep boots the same jar.
+
+A gate's rundir must not be a fixture other worktrees share. A worktree links `client-merged-pack`,
+`client-kernel`, `client-neo-pack`, `carry-on`, `modmenu` and `neoforge-builds` to the main
+checkout's, and a gate that wiped or wrote one of them through a fixed or default rundir changed a
+pack every other tree reads. `lib.sh`'s `refuse_shared_rundir "$RUNDIR"` fails (exit 3, a
+`[kernel] FAIL refusing rundir` line) when the rundir is, lies inside, or resolves into one of those,
+`client-popular` or `forge-swap`, or is spelled inside this tree's `run/` but leaves it through a
+symlink. `forge-swap` is also refused at its own home outside every checkout (`$FORBRIC_FORGE_SWAP`,
+default `~/Forbric-backups/forge-swap`), since a tree cut before it existed has no link to it; clone the fixture by its real path (`cp -c -R`) instead. `python3
+run/compat/test_lib_guards.py` runs the real `lib.sh` in a throwaway tree laid out like a worktree
+beside a main checkout and goes red when the guard is a no-op or matches names by prefix.
+
+A gate's checks must read only files its own run wrote. A gate writes its logs under fixed names in
+`build/`, and a step that does not run writes none, so the file of the run before stays where that
+step's checks look: `check` fails on a missing or empty log but cannot tell this run's log from the
+last run's. `lib.sh`'s `discard_earlier_run <prefix> [keep-name ...]` removes every `build/<prefix>*`
+an earlier run left (not the names it is told to keep, and not the file this run's own output is
+redirected to); a gate calls it before it writes anything. It covers `build/` and nothing else, and
+it knows the run's own output file only by a direct redirection: output piped into a
+`build/<prefix>*` file (`| tee build/gate-mX.out`) is removed as an earlier run's, so such output
+goes to a name outside the prefix. gate-m17 calls it, for `gate-m17-`: a run whose first install
+failed used to print PASS for the command and the client log of the run before. Its phase U has a
+second source of files no install of the run wrote, on purpose: the directory it upgrades is a copy
+of the released v0.3.1-beta2 install, which holds files under names this install writes too. There
+"this install's own file is there" needs a file that differs from the old install's or carries a
+`.pins` stamp this run wrote (NeoForge 26.2.0.93's patched game is byte for byte 26.2.0.88's, so that
+jar legitimately comes through unchanged, with a new stamp), and a profile that is still the old
+install's is neither resolved nor launched. The checks of what the old install holds read beta2's
+files, as they are meant to. `python3 run/compat/test_gate_own_files.py` runs the real `lib.sh` over
+planted files, with the unguarded state as its control, holds every `build/` name in gate-m17 to
+that prefix (written as `$BUILD/name`, the one spelling it reads), and reads phase U's two rules and
+the hashing of the player's files as text. No other gate calls `discard_earlier_run` yet.
+
 The script's output is exactly the RESULT lines, byte for byte the same as `summary.txt`.
 The running commentary — what started when, on which slot and port, what each gate cost, and
 what the run would have taken sequentially — goes to `build/gates/progress.log`; `--progress`
 also mirrors it to stderr.
 
-`gate-m25-worldgen.sh` still deliberately exposes the missing MinecraftForge biome-modifier
-mechanism (its Forge half is expected red until workstream D). `gate-m26-forgeclient.sh` was
-born expected red and turned green with Phase 1 A; it stages a data-free copy of its canary so adding a worldgen datapack cannot block
+`gate-m25-worldgen.sh` checks that NeoForge's biome and structure modifiers leave the NeoForge canary's blocks in
+saved overworld chunks (`M25_NO_DATA=1` is its red demonstration); its MinecraftForge half went in Stage 3 of
+dropping MinecraftForge, when Forbric began refusing a MinecraftForge-only jar. `gate-m26-forgeclient.sh` checks that
+the client event buses receive the game's real registration events and that a refused MinecraftForge mod is put to
+the player; it stages a data-free copy of the NeoForge canary so adding a worldgen datapack cannot block
 quick-play behind a new-pack confirmation; the source jar remains intact and m25 tests its data.
 It also invokes `win/prepare-world.py` on the zero-mod test save to acknowledge the
 carrier experimental-generation prompt before quick-play.
-Header `EXPECTED: RED until ...`, exit code 2, and an
-`EXPECTED-RED` observation together distinguish a known failure from boot failures
-or broken control assertions (exit 1). Remove the expected-red contract when its
+A gate that is red by declaration carries the header `EXPECTED: RED until ...`, exits 2 and prints an
+`EXPECTED-RED` observation, which together distinguish a known failure from boot failures
+or broken control assertions (exit 1); no gate carries that contract today. Remove it when its
 implementation lands, as m26's was. `gate-m27-frame.sh` requires the 97-jar pack and a PNG newer
 than the current launch. Gate headers document `M25_NO_DATA`, `M26_EXTRA_JVM`,
 `M27_SHOT_TICKS`, and `M27_FRAME` negative controls.
 
-`gate-m28-forgeconfig.sh` opens a fresh dedicated-server fixture, checks both the
-canary and Forge's own COMMON files, then changes the canary value from 11 to 73
-while the server is running. Only a new Reloading event within 40 seconds and a
+`gate-m28-forgeconfig.sh` opens a fresh dedicated-server fixture, checks the NeoForge
+canary's COMMON file, then changes the canary value from 11 to 73
+while the server is running (its MinecraftForge canary went in Stage 3 of dropping MinecraftForge, MinecraftForge's
+own `forge-common.toml` with the carrier in Stage 4). Only a new Reloading event within 40 seconds and a
 matching file readback pass. `M28_EXTRA_JVM=-Dforbric.earlyConfigs=off` is its negative
-control. `gate-m16-forge-handshake.sh` also checks that the client loads its CLIENT
+control. `gate-m16-forge-handshake.sh` also checks that the NeoForge canary's client loads its CLIENT
 config exactly once while the dedicated server creates no CLIENT file.
 
 After each step, run `./gradlew --offline cleanTest test`, read the JUnit XML, and
@@ -369,32 +603,51 @@ python3 run/compat/evidence.py run --source .. \
 
 Run from `forbric-kernel/`; command paths are resolved from the recorded repository source root. Supply every
 actual game/runtime/tool jar as a named `--artifact` in real acceptance runs. `--release` requires clean
-committed sources, a mods directory (empty is valid for zero-mod tests), and all of: `vanilla`,
-`forge-patched`, `neo-patched`, `merged`, `forge-runtime`, `neo-runtime`, `forge-interop`, `kernel`,
-`kernel-runtime`, `merge-tools`. Missing inputs fail. Keep output under ignored `build/` or outside the repo.
+committed sources, a mods directory (empty is valid for zero-mod tests), and all six release roles: `vanilla`,
+`neo-patched` (NeoForge's patched game, the base), `neo-runtime` (its carrier), `kernel`, `kernel-runtime` and
+`sidecar` (the vanilla-reference jar measured against the base). Missing inputs fail. Since Stage 4 of dropping
+MinecraftForge there is no merged base, MinecraftForge carrier, interop jar or merge-tools jar to attest. Keep output
+under ignored `build/` or outside the repo.
 
 A release capture also fails unless:
 - the versions read out of the artifacts are the pins (Minecraft `26.2` from each game jar's `version.json`,
-  MinecraftForge `26.2-65.0.1` and NeoForge `26.2.0.88` from the carriers' manifests);
-- the merged base and both runtimes the kernel build compiles against and its bytecode tests read
-  (`$FORBRIC_OLD/run/...`, else `forbric-loader/run/...`) are byte-identical to the attested ones;
-- `<merged>.provenance.json`, written by `build-merged-base.sh`, names the attested inputs and outputs, an
-  enforced link check, and merge-tool sources identical to the attested commit.
+  NeoForge `26.2.0.93` from the carrier's manifest);
+- the base, the carrier and the sidecar that the kernel build compiles against, its bytecode tests read and the
+  gates' launchers hand the kernel are byte-identical to the attested ones. The staged root resolves as
+  `build.gradle`'s does: `$FORBRIC_OLD/run`, else `forbric-kernel/.dev/staged/run` when it holds the base, else
+  `forbric-loader/run` (the old loader's stage, which `tools/dev.py prepare` never writes a sidecar into; a release
+  that falls back to it fails here);
+- the build stamps `tools/dev.py prepare` writes beside that staged base and carrier (`<jar>.pins`) name
+  `mc=26.2 neoforge=26.2.0.93`: the base declares no NeoForge version of its own, so the stamp is the one record of
+  which NeoForge built it (an unstamped stage, or one built from another NeoForge, fails; the manifest keeps both
+  stamps under `stagedBuildStamps`, and `verify` fails when one changes);
+- the sidecar's `META-INF/forbric/vanilla-reference.properties` records the attested `neo-patched` and `vanilla`
+  jars (their SHA-1s) as what it was measured against.
 A release `run` refuses `--skip`, requires `gates-all.sh --release`, and records any `RESULT ... SKIP` or
 `EXPECTED_RED` line as a failed command. `${file.jarVersion}` mod versions are resolved from the archive's own
 `Implementation-Version` and kept beside the raw declaration.
 
 `evidence.py release-check --manifest <run.json> ... --publish kernel=<jar> ...` passes only when every manifest
 is a passed release run, all bind the same source and the same hash per role, and each published file is the
-accepted one. The installer's `releaseAssets` requires `-PreleaseEvidence=<run.json>[,...]` and runs it on the
-kernel and merge-tools jars it is about to publish.
+accepted one; a `--publish` role that is not a release role (`merge-tools`, `merged`, ...) is refused by name. The
+installer's `releaseAssets` requires `-PreleaseEvidence=<run.json>[,...]` and runs it on the kernel jar it is about to
+publish.
 
-`native-controls.py prepare` installs the fixed native Fabric, Forge and NeoForge servers into
-`build/native-controls`; `build` compiles one public-API canary per ecosystem. `run --engine native` and
-`run --engine forbric` execute the same jar hashes, seed and world actions, each in a fresh owned instance.
+`native-controls.py prepare` installs the fixed native Fabric and NeoForge servers into `build/native-controls`
+(`--family forge` also installs native MinecraftForge 26.2-65.0.1, which only the native MinecraftForge arms that remain
+use: the C5c swap oracle and `breath-drown.py reference`, gate-m57's native reference. Forbric loads no MinecraftForge
+mod, so there is no MinecraftForge behaviour control). `build [--family fabric|neo]` compiles the
+public-API canary of each family asked for, against that family's image only. `run --engine native` and
+`run --engine forbric` (`--family fabric|neo`) execute the same jar hashes, seed and world actions, each in a fresh
+owned instance, one server at a time on the caller's `GATE_PORT` (an OS ephemeral port without it).
 `compare <native-result.json> <forbric-result.json>` rejects mismatched inputs before comparing behavior.
 `NATIVE_CONTROL_CACHE` selects the read-only reference checkout; its default is the parent of `FORBRIC_OLD`,
-or this checkout when that variable is absent. All generated files remain under this kernel's `build/`.
+or this checkout when that variable is absent. The Forbric arm boots `FORBRIC_OLD` when it is set, else the prepared
+`forbric-kernel/.dev/staged`, and refuses with neither (never the cache's `forbric-loader`, whose carrier is NeoForge
+26.2.0.88 and unstamped). Either stage must also carry this tree's build stamps beside its base and carrier
+(`<jar>.pins` beginning with the installer's pins, `tools/dev.py`'s readiness rule, the one push-and-run applies), or the
+arm refuses naming them: in a worktree `.dev` links to the main checkout's, which can hold an unstamped 26.2.0.88
+carrier as well. `retention-control.py` resolves the same stage before it compiles or runs anything. All generated files remain under this kernel's `build/`.
 
 `native-controls.py run-set --engine native|forbric --family fabric --mods JAR... [--ticks 200] [--timeout 900]
 [--xmx 3G] [--level-type minecraft:normal] [--policy strict] [--keep]` boots one fresh server under `build/native-controls/instances/`
@@ -439,35 +692,62 @@ the copied mixed pack. It compiles an independent canary, saves a real campfire 
 mod's static cache after normal shutdown on native NeoForge and Forbric. Both arms and their exact mod
 hashes must agree. This attributes one observed native retention issue; it does not clear another retained
 root by itself. Evidence stays under `build/retention-control/`, and `native-retention.json` names the root
-and exact jar hash it proved; a release M34 run re-reads that evidence before launching.
+and exact jar hash it proved; a release M34 run re-reads that evidence before launching. It uses evidence that
+still describes what it was measured on (every file each arm's `inputs.json` records has the recorded bytes, the
+kernel jar among them, and the Forbric arm booted the kernel jar, base and carrier the soak has just frozen), and
+runs `retention-control.py` itself when the evidence is absent or stale, printing why, the command and the seconds
+it took; a measurement that fails, or leaves evidence that still does not describe the run, stops the soak. Evidence
+that cannot be read (JSON of another shape, a record without its keys), whose native arm does not name the installed
+image it booted, or whose arm records do not lie beside the comparison (a comparison copied in from another checkout)
+is measured again like absent evidence. Each arm records, besides its jars, the scripts that decide how it is booted
+(`native-controls.py`, `launch-kernel-server.sh` and the two scripts it calls) and `build.gradle`; the Forbric arm's
+boot classpath jars and vanilla reference are resolved by the launcher and not recorded themselves. The measurement's
+Forbric server takes the caller's `FORBRIC_JVM` first, like every server a gate starts, and writes what its kernel
+caught to `native-retention-N.caught.tsv` in the run's evidence, which the manifest records and `soak-run.py` appends
+to the gate's file. Everything the soak starts runs in a session of its own, so a stopped soak has to stop it:
+`soak-run.py` takes SIGTERM and SIGHUP as the interruption Ctrl-C is, for the whole run (a gate started in the
+background ignores Ctrl-C, so SIGTERM is the way to stop one). While it measures it tells the measurement to stop
+(SIGTERM, thirty seconds) and the measurement stops the server it started; while the client runs it stops the client's
+process group and records the run as the failed run it is. It is interrupted once: a second stop signal, or Ctrl-C
+after one, used to interrupt the stopping itself and leave the client running with no record, so later ones are
+counted and change nothing (the stopping ends within its thirty seconds either way). The soak and its measurement
+run on macOS and Linux only (bash launchers, process groups). Their self-tests are also discovered on Windows, which
+has no SIGHUP and no process groups: there the code names SIGTERM and SIGBREAK and would end the client's tree with
+`taskkill /F /T`. Those Windows branches have not been run on Windows (the `taskkill` line only with `subprocess.run`
+modelled); CI's windows-latest leg is where they are first measured. The
+native image is not installed that way (the official installer downloads): without `build/native-controls/native/neo`
+`retention-control.py` stops before compiling anything and names `native-controls.py prepare --family neo`.
 
-`ui-control.py` requires the built kernel, `FORBRIC_OLD`, `MERGED`, `FORGE_RT` and `NEO_RT`. It creates a
-nonce-owned copy of the full mixed pack/world under `build/compat-ui/`, publishes late necessary findings,
+`ui-control.py` requires the built kernel, `FORBRIC_OLD` and `NEO_RT` (`BASE` optional, as for the launchers). It
+creates a nonce-owned copy of the full mixed pack/world under `build/compat-ui/`, publishes late necessary findings,
 clicks the actual native Continue button, then closes a second prompt. It requires preserved failure
 evidence, initial refusal focus, normal save/return to title and two fresh game screenshots. Its deliberately
 incompatible control scenario is separate from a strict compatibility acceptance run.
 
 `gate-m39-transfer-core.sh` first runs the transfer engine suite (`transferTest`) as a required step: every
 `@Test` declared under `src/transferTest` must appear in its XML report, none failed, errored or skipped, and a
-missing game side fails instead of skipping. It then packages the existing real-carrier transfer scenarios as a
-game canary. It
-requires all fourteen Forge snapshot/alias/metadata/facade cases (including a dying endpoint) and a real full watchdog thread dump, including
-the final-defined native-helper equivalence finding. Inputs are hash-bound and its server remains strict.
+missing game side fails instead of skipping. It then packs the watchdog canary (`src/transferTest`'s `WatchdogCanary`
+with its `watchdog-canary.fabric.mod.json`) beside fabric-api and runs it on a strict kernel server: a real full watchdog
+thread dump, and fabric-api's `ServerWatchdogMixin#printEntireThreadDump` reported RESOLVED (the final-defined
+native-helper equivalence finding). Inputs are hash-bound. The fourteen MinecraftForge storage scenarios it ran on the
+merged base went with the MinecraftForge carrier in Stage 4 of dropping MinecraftForge; their Fabric/NeoForge half is
+the transfer engine suite and gate-m33/m40's world runs.
 
 `gate-m40-energy.sh` checks block-entity energy between Team Reborn Energy (the Fabric energy API; Fabric API
-has none), NeoForge's `Capabilities.Energy.BLOCK` and MinecraftForge's `ForgeCapabilities.ENERGY`, through those
-public lookups only. It needs `energy-5.0.0.jar` (team_reborn_energy, MIT): `M40_REBORN_ENERGY`, default
+has none) and NeoForge's `Capabilities.Energy.BLOCK`, through those public lookups only. It needs `energy-5.0.0.jar` (team_reborn_energy, MIT): `M40_REBORN_ENERGY`, default
 `forbric-kernel/run/energy-api/energy-5.0.0.jar` beside the staged tree; the gate fails if it is missing and copies
 it into its own world's mods. The canaries are built with `TRANSFER_CANARY_ENERGY=1` into `build/energy-canary/`,
-never into `run/canary/`. Four hash-bound phases in the nonce-owned `run/server-energy-m40`: `prepare` (all three
-ecosystems: 12 routes, 60,000 E conserved, faces, native precedence, a refused custom Forge store reported once, store
-limits, nested rollback, replacement including the cached NeoForge/Forge views of a Reborn cell, a Fabric addon's
-explicit Reborn provider on a NeoForge block reached by NeoForge and Forge consumers, a Forge battery loaded at
-1,500/1,000 E that moves nothing on bridged insertion and keeps its energy, one dirty mark per root commit, long/int
-clamping), `reload` (amounts after a real save; the overfull battery refuses again after the restart, then drains
-into its bounds), `noreborn` (the same pack without Reborn: 4 Forge <-> NeoForge routes, the overfull battery for
-NeoForge, and the JVM's class-load log must show no Reborn class) and `negative` (bridge off, must fail at a foreign
-lookup). 1 FE = 1 E. Item energy is not bridged. Evidence: `build/verification/m40-energy/`.
+never into `run/canary/`. Four hash-bound phases in the nonce-owned `run/server-energy-m40`: `prepare` (Fabric and
+NeoForge: 4 routes, 40,000 E conserved, faces, native precedence, store limits, nested rollback across both
+transaction engines, replacement including the cached NeoForge views of a Reborn cell, a Fabric addon's explicit
+Reborn provider on a NeoForge block reached by the NeoForge consumer, one dirty mark per root commit, long/int
+clamping), `reload` (amounts after a real save, the routes again), `noreborn` (the same pack without Reborn: the
+NeoForge cell and consumer alone, no route, the probe's SKIP for the checks that need a second family, and the JVM's
+class-load log must show the probe and the bridge's fallback loaded and no Reborn class) and `negative` (bridge off,
+must fail at a foreign lookup). The gate clears `build/verification/m40-energy/` when it starts, so no check reads an
+earlier run's file. 1 FE = 1 E. Item energy is not bridged. Evidence: `build/verification/m40-energy/`. MinecraftForge's
+`ForgeCapabilities.ENERGY` (a Forge consumer, a Forge cell and battery) went with the MinecraftForge carrier in Stage 4
+of dropping MinecraftForge.
 
 The kernel game side compiles the energy bridge against the same jar (`-Pforbric.rebornEnergy=<jar>`, same default,
 else this checkout's own `forbric-kernel/run/energy-api/energy-5.0.0.jar`). Nothing fetches it and `*.jar` is not
@@ -495,6 +775,36 @@ open or save-and-disconnect loop longer than the timeout, and a controller that 
 Activity is independently verified even when retention requires review; releaseAccepted remains false and
 the command remains nonzero. Release runs also require a fresh final strict compatibility report with zero
 confirmed necessary losses and no unclassified failed initialization.
+
+The client gets the base's vanilla-reference sidecar (`--nativeReference`, from `run/vanilla-reference-jar.sh` or
+`--native-reference`), frozen with the other inputs; when none can be had the soak stops instead of launching, since
+NeoForge's patched game embeds no vanilla index and a client without the sidecar has no FABRIC references at all.
+
+The soak's player is a survival player: a soak drives the game as a survival player's client does, with the whole
+HUD drawn, not as a creative one whose client leaves those paths out. The controller makes it one while a session
+joins, with the entity itself invulnerable and without gravity and with `mayfly`/`flying` set after the game type
+(which resets them), so it neither dies nor falls nor is hunted at the six y=160 probes; it writes the `join` once the
+client holds a live survival player too. From the join on nothing in the soak sets the game type: a row whose server
+or client game type is not `survival`, or a move that finds another type, fails the soak at once (a command, a data
+pack's function or a listener changed it, and the session is no longer the soak's). The invulnerable flag is one layer
+(NeoForge's invulnerability event or a data pack's `bypasses_invulnerability` tag can pass it; a player that dies
+fails the soak, since a respawn is asked for only while joining), and a survival player is subject to explosion
+knockback, the "moved wrongly" correction and food exhaustion, none of which hurts it. Every
+`join`/`sample` row carries what the server reports (`gameType`, `flying`, `mayfly`, `invulnerable`, `health`, `food`,
+`y`; the overworld's `raining`/`thundering` and `rainingAtPlayer`, which is null while the player's chunk is not loaded
+yet, since the controller does not load a chunk to answer it) and what the client holds (`clientInWorld`,
+`clientGameType`, `clientFlying`, `hudHidden`). `soak-run.py` applies the same rule to the evidence: it refuses a run
+with an occupied row whose `gameType` or `clientGameType` is not `survival` (a `sample` whose client had already left
+the world has no client game type to hold), and
+writes a `conditions` summary of those rows into `acceptance.json` for every run that wrote telemetry, a crashed one
+included: the game types seen, how many rows had rain and rain on the player (and in how many that was not known), the
+first of each, the joins into rain, the lowest health and the last row. `hudHidden` is recorded and not checked. The
+weather itself is not touched: it is the copied world's (`data/minecraft/weather.dat`), advancing as the game advances
+it. So the first session joins into whatever weather the source world was saved with, and the soak takes that world as
+it is (the fixture's save is shared and not tracked by git): `soak-run.py` prints it before the client starts and
+records it as the manifest's `sourceWorldWeather`. A world saved in rain makes the first join a join into rain, which
+is another run than one that joins into clear weather and meets rain later, for anything that reacts to rain; later
+sessions join where the previous one ended, at the End probe, where it does not rain on the player.
 
 Use `--control --seconds 30 --sessions 2 --dwell-ticks 20 --settle-seconds 10` only to test the controller;
 CONTROL_PASS is never release acceptance. `python3 run/compat/test_soak.py` verifies rejection of stale or

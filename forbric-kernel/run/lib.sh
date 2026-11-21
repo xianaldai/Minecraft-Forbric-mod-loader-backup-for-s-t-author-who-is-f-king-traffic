@@ -21,6 +21,19 @@ else
 fi
 RUN_OLD="$OLD/run"
 BUILD="$KERNEL/build"
+# The NeoForge live canary every gate stages. The stage's copy is built by DevPrepare from whichever tree prepared
+# the stage, which other working trees may share read-only; a tree that changes the canary's sources builds its own
+# (run/build-neolive-canary.sh) and points FORBRIC_NEOLIVE at it. The file name stays forbricneolive.jar either way:
+# gate-m18 asserts the mod resolves its own jar by that name.
+NEOLIVE="${FORBRIC_NEOLIVE:-$RUN_OLD/neoforge-runtime/forbricneolive.jar}"
+# The NeoForge builds of the real mods the gates used to stage as MinecraftForge jars from $RUN_OLD/downloads/forge-26.2.
+# Forbric refuses a MinecraftForge-only jar since Stage 3 of dropping MinecraftForge, so a gate that staged one would
+# now stop on the refusal instead of testing what it was written for; each such jar was replaced by the same mod's
+# NeoForge 26.2 build from Modrinth (same version where Modrinth has one; sha1s and version ids are recorded in
+# run/compat/reports/2026-10-30-forge-removal-baseline/stage3-fixtures.md). Local, like run/carry-on and run/modmenu:
+# not in git, linked into a worktree from the main checkout. The universal jars of that directory (FallingTree,
+# collective, starterkit), whose NeoForge half is usable, are still read from it.
+NEO_BUILDS="${FORBRIC_NEO_BUILDS:-$KERNEL/run/neoforge-builds}"
 FAIL=0
 
 # What the kernel caught and carried on from, in every JVM a gate starts. Caught.java appends each failure site to
@@ -31,13 +44,28 @@ FAIL=0
 #
 # Only a gate owns a file. Every other script sourcing this (the canary builders, the oracles) leaves an inherited
 # variable alone, so a builder a gate calls writes into the gate's file and does not report it a second time.
+#
+# A gate started BY a gate joins the outer one's file the same way. Six gates (m33, m35, m37, m38, m39, m40) start
+# their servers by running themselves again under evidence.py (`gate-mNN.sh --execute…`), and that inner run is a
+# gate-* script too. It used to take a file of its own: every JVM it started wrote there, it printed its CAUGHT line
+# into the server log the outer gate keeps as evidence, and the outer gate read its own, empty, file and printed
+# "CAUGHT none". gate-m39's server hit an NPE in the transfer interop on every run, and the gate said none. The outer
+# gate exports FORBRIC_CAUGHT_GATE (name:pid) with its file; an inner run that inherits both, while that pid is still
+# alive and the file still exists, writes into it and leaves the report to the gate that owns it. A variable left over
+# in an unrelated shell (no live owner, or no file) is not inherited ownership, and the gate takes its own file.
 case "$(basename "$0")" in
   gate-*)
-    CAUGHT_OWNER=$$
-    mkdir -p "$BUILD/caught"
-    FORBRIC_CAUGHT_FILE="$BUILD/caught/$(basename "$0" .sh).$$.tsv"
-    : > "$FORBRIC_CAUGHT_FILE"
-    export FORBRIC_CAUGHT_FILE
+    if [ -n "${FORBRIC_CAUGHT_GATE:-}" ] && [ -n "${FORBRIC_CAUGHT_FILE:-}" ] && [ -f "$FORBRIC_CAUGHT_FILE" ] \
+        && kill -0 "${FORBRIC_CAUGHT_GATE##*:}" 2>/dev/null; then
+      export FORBRIC_CAUGHT_FILE FORBRIC_CAUGHT_GATE
+    else
+      CAUGHT_OWNER=$$
+      mkdir -p "$BUILD/caught"
+      FORBRIC_CAUGHT_FILE="$BUILD/caught/$(basename "$0" .sh).$$.tsv"
+      FORBRIC_CAUGHT_GATE="$(basename "$0" .sh):$$"
+      : > "$FORBRIC_CAUGHT_FILE"
+      export FORBRIC_CAUGHT_FILE FORBRIC_CAUGHT_GATE
+    fi
     ;;
 esac
 
@@ -58,11 +86,24 @@ caught_report() {
       for (i = 1; i <= k && i <= 30; i++) { w = order[i]; printf "[kernel]   %sx %s: %s\n", (w in n ? n[w] : "?"), w, what[w] }
       if (k > 30) printf "[kernel]   ... and %d more\n", k - 30
     }' "$file"
-  # Never carried on from, strict or not: an entity-attribute event that did not finish leaves every living entity of an
-  # ecosystem without its attributes, and a base that reads forge:swim_speed for every swimming entity then crashes on
-  # the first one in water. A gate in whose JVMs that happened is red whatever its own checks say.
+  # Never carried on from, strict or not: NeoForge's entity-attribute events not finishing. CommonHooks.modifyAttributes
+  # posts EntityAttributeCreationEvent and then EntityAttributeModificationEvent, which is how NeoForge's own attributes
+  # (neoforge:swim_speed, nametag_distance) reach every living entity; one that did not finish leaves them without, and
+  # the first living entity in water then crashes. A gate in whose JVMs that happened is red whatever its own checks
+  # say. Three kernel lines say it happened (KernelLifecycle.postAttributeEvents): DefaultAttributes could not initialise
+  # before the events ("[Forbric/Attributes] ... could not initialise", the walk then fails too), the hook could not be
+  # called ("[Forbric/Lifecycle] net.neoforged.neoforge.common.CommonHooks.modifyAttributes() could not be called": the
+  # events were not posted), or the hook is not there ("[Forbric/Lifecycle] net.neoforged.neoforge.common.CommonHooks has no
+  # modifyAttributes()": the events never ran). A mod's attribute listener that throws is no longer a line here: since D82
+  # (lane STOP) it stops the boot as native NeoForge does, so the old "modifyAttributes() THREW" line has no producer.
+  # Until C5 the pattern was "[Forbric/Attributes]" with "did not finish|could not initialise": it matched the settle
+  # line (restored by c10779e3) but neither line of the hook, which is the one that runs the events.
+  # Known gap: Caught.java writes a site's FIRST failure to the file, and modifyAttributes shares its site with the
+  # other hooks KernelLifecycle.invokeGameDataOn calls. GameData's unfreezeData and vanillaSnapshot run through it
+  # before modifyAttributes; if one of them threw first, its line is the one recorded and a later modifyAttributes
+  # failure is not seen here (closing it needs a site of its own in the kernel).
   local fatal
-  fatal=$(awk -F'\t' '$1=="FAILURE" && $4 ~ /Forbric\/Attributes/ && $4 ~ /did not finish|could not initialise/ {print $3}' \
+  fatal=$(awk -F'\t' '$1=="FAILURE" && (($4 ~ /\[Forbric\/Attributes\]/ && $4 ~ /could not initialise/) || $4 ~ /CommonHooks\.modifyAttributes\(\) could not be called|CommonHooks has no modifyAttributes\(\)/) {print $3}' \
     "$file" 2>/dev/null | sort -u | wc -l | tr -d ' ')
   if [ "${fatal:-0}" -gt 0 ]; then
     printf '[kernel] FAIL %s entity-attribute event(s) did not finish — living entities are left without attributes\n' "$fatal"
@@ -76,10 +117,61 @@ caught_report() {
 
 # _gate_exit [status] — the EXIT trap: report, and under strict turn a green exit red. A gate that sets its own EXIT
 # trap calls this from it (gate-m28, canary_scratch below), because a second `trap … EXIT` replaces the first.
+#
+# Before the report it stops whatever the gate started and is still running (_stop_leftovers), so a JVM's shutdown hooks
+# write their caught lines first and nothing outlives the gate holding a port.
 _gate_exit() {
   local rc="${1:-$?}"
+  _stop_leftovers
+  _forget_server_pids
   caught_report || { [ "$rc" -eq 0 ] && rc=1; }
   exit "$rc"
+}
+
+# _stop_leftovers — stop every process this shell started that still runs: each child's whole tree, frozen first, asked
+# with TERM, killed after 10 s (stop_tree's steps over all of them at once). C5 wave 2d.
+#
+# THE GRACE is a server's, not a client's (HARN2 review A-5): a server JVM asked with TERM saves its world in its shutdown
+# hook, and a gate killed mid-run can leave one behind (gate-m1, m2 and m3 share one world). 386 gate server logs in the
+# C5 notes went from "Stopping the server" to their last line within 0-2 s by their one-second stamps; 2 s, stop_tree's
+# client grace, would cut the slowest of them short. The wait ends as soon as everything is gone, so it costs nothing on a
+# normal run, and it stays under gates-parallel.py's GATE_TERM_GRACE (20 s) for a gate the sweep is stopping.
+#
+# WHY HERE. Under heavy.sh the signal that reaches a gate is TERM (an async child of a non-interactive shell starts with
+# INT ignored), and bash runs this EXIT trap when an untrapped TERM kills the script -- at once, even with a foreground
+# child running; a trapped TERM would wait for that child to finish first. Until now the trap only reported: the gate
+# died and its server, client and evidence.py were re-parented to launchd, a JVM still on the gate's port (gate-m39's
+# evidence.py chain, measured by G-B2 in wave 2b; walls.md). The trap cannot tell a TERM from a normal end ($? is 0 in
+# both), and it needs to: anything still running when the gate's shell exits is an orphan from that moment on.
+#
+# WHY NOT THE PROCESS GROUP. A gate is not its group's leader: heavy.sh starts it with `cmd &` in a non-interactive shell
+# and gates-parallel.py with a plain Popen, so its group is its launcher's -- killing the group would kill heavy.sh, the
+# scheduler and every gate running beside it. The descendants are the gate's own processes; they are all still its
+# descendants here, because the EXIT trap runs before bash exits and re-parents them. What a gate already detached
+# itself (a Gradle daemon, which outlives the build that started it by design) is not its own and is left alone -- once
+# the Gradle client that spawned it has exited; a daemon whose client is still running at the TERM is still a descendant
+# and is stopped with it (read from the code, not measured; HARN2 review B-6).
+# Subshells and command substitutions do not run the EXIT trap, so this runs in the gate's main shell only.
+_stop_leftovers() {
+  local child pids="" pid alive i shown
+  for child in $(pgrep -P $$ 2>/dev/null); do
+    _running "$child" || continue    # the command substitution's own subshell is a child of $$ too, gone by now
+    pids="$pids $(_freeze_tree "$child")"
+  done
+  pids="$(echo $pids)"
+  [ -n "$pids" ] || return 0
+  shown="$(ps -o pid=,command= -p "$(echo "$pids" | tr ' ' ',')" 2>/dev/null | cut -c1-120 | head -5 | sed 's/^ *//' | tr '\n' ';')"
+  printf '[kernel] the gate left %s process(es) running at its exit; stopping them: %s\n' "$(echo $pids | wc -w | tr -d ' ')" "$shown"
+  for pid in $pids; do kill -TERM "$pid" 2>/dev/null; done
+  for pid in $pids; do kill -CONT "$pid" 2>/dev/null; done
+  for i in $(seq 1 40); do   # 10 s
+    alive=""
+    for pid in $pids; do _running "$pid" && alive="$alive $pid"; done
+    [ -n "$alive" ] || return 0
+    sleep 0.25
+  done
+  for pid in $pids; do _running "$pid" && kill_tree "$pid"; done
+  return 0
 }
 trap '_gate_exit $?' EXIT
 
@@ -101,6 +193,13 @@ seed_server_properties() {
 
 step() { printf '\n[kernel] ==== %s ====\n' "$1"; }
 
+# The kernel's one boot line saying where FABRIC's native references come from (NativeReferenceSources.describe). Every
+# launch path hands it the vanilla-reference sidecar (--nativeReference): launch-kernel-{client,server}.sh through
+# run/vanilla-reference-jar.sh, an installed profile through its own library. The base (NeoForge's patched game) embeds
+# no index, so the sidecar is the only FABRIC source: a launch without it still boots, with no FABRIC references, and
+# only this line tells a launch path that dropped the flag from one that kept it. gate-m1 and gate-m17 assert it.
+NATIVE_REFS_FROM_SIDECAR='Forbric/Mixin\] native references: FABRIC from the vanilla-reference sidecar'
+
 # Is there anything here to read at all? A log the run never wrote, or wrote empty, is not evidence either way,
 # and the two helpers below must not pretend otherwise.
 #
@@ -111,6 +210,52 @@ step() { printf '\n[kernel] ==== %s ====\n' "$1"; }
 # caller: every one of the 206 call sites reads a log its own run produced.
 readable() {
   [ -s "$1" ]
+}
+
+# discard_earlier_run <name-prefix> [keep-name ...] — remove every $BUILD/<name-prefix>* an earlier run of this gate left.
+#
+# readable() tells "no log" from "nothing in the log", but not this run's log from the last run's. A gate writes its logs
+# under fixed names in $BUILD, and a step that does not run leaves the earlier run's file where its checks look:
+# gate-m17 printed eighteen PASS lines in a run whose first install had failed (2026-11-20, a download: no profile, so
+# no resolved command and no client, and sixteen checks read the command and the client log of the run before). A gate
+# that calls this before it writes anything finds under $BUILD/<name-prefix>* only what it wrote itself, and a check
+# whose log this run did not produce fails with "no log to read". That is all it covers: files a gate reads elsewhere
+# (an install directory, a run directory, a cache it keeps on purpose) are the gate's own to empty or to tell apart.
+# Two kinds of file stay: each <keep-name> (one the gate keeps across runs on purpose, and that no check reads), and
+# whatever this run's own output is going to (a caller's `bash run/gate-mX.sh > build/gate-mX.out`): that one is this
+# run's already, and unlinking it would lose the run's output. It is told by fstat of this shell's stdout and stderr,
+# not by `-ef /dev/stdout`: macOS answers stat(/dev/fd/1) with the descriptor file system's own node.
+# Only a direct redirection is told that way. Output that reaches such a file through a pipe (`... | tee
+# build/gate-mX.out`, `... | cat > build/gate-mX.out`) is a pipe to this shell, the file looks like an earlier run's and
+# is removed, and the run's output goes with it: send a gate's output to a name outside its prefix (gates-parallel.py
+# writes build/gates/<gate>.log), or redirect it directly.
+discard_earlier_run() {
+  local prefix="${1:-}"
+  [ -n "$prefix" ] || { echo "[kernel] FATAL: discard_earlier_run needs the name prefix of the gate's files" >&2; exit 3; }
+  shift
+  [ -d "$BUILD" ] || return 0
+  python3 - "$BUILD" "$prefix" "$@" <<'DISCARD' || { echo "[kernel] FATAL: could not remove an earlier run's $prefix* files from $BUILD" >&2; exit 3; }
+import os, shutil, sys
+build, prefix, keep = sys.argv[1], sys.argv[2], set(sys.argv[3:])
+own = set()
+for descriptor in (1, 2):
+    try:
+        status = os.fstat(descriptor)
+        own.add((status.st_dev, status.st_ino))
+    except OSError:
+        pass
+for name in sorted(os.listdir(build)):
+    if not name.startswith(prefix) or name in keep:
+        continue
+    path = os.path.join(build, name)
+    status = os.lstat(path)
+    if (status.st_dev, status.st_ino) in own:
+        continue
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
+DISCARD
 }
 
 # -a on every grep below, and it is not cosmetic. A single NUL byte anywhere in a log makes grep treat the whole
@@ -169,34 +314,7 @@ check_exactly() {
   else printf '[kernel] FAIL %s (want exactly %s got %s)\n' "$what" "$want" "${got:-0}"; FAIL=1; fi
 }
 
-# merged_calls <class> <method> <ref>... — does the merged base this run boots make one of these calls (or
-# constructions) in <class>.<method>, any overload, or in a lambda that method captures? 0 yes, 1 no, 2 unreadable.
-# Reads $MERGED, else the staged base. Grammar and the reason only CAPTURED lambdas count are in merged_calls.py: a
-# merge that keeps both families' compiles of a lambda can leave the losing body behind with nothing calling it.
-# A leading --every asks whether EACH overload makes it (a constructor handing over to this(...) left out).
-merged_calls() {
-  local every=""
-  if [ "${1:-}" = "--every" ]; then every="--every"; shift; fi
-  python3 "$KERNEL/run/merged_calls.py" $every "${MERGED:-$RUN_OLD/merged-base/patched-mc-merged-26.2.jar}" "$@"
-}
-
-# merged_delivers <case> [--every] <class> <method> <ref>... — for a gate whose off phase expects exactly the repaired cases
-# to fail: when the merged base makes the call that decides <case> itself, append 'case' to $MERGED_NATIVE (a
-# python set body), because with the kernel's repair switched off the base still delivers it. FAILS when the base
-# cannot be read: an expectation computed from a base nobody read is no expectation.
-MERGED_NATIVE=""
-merged_delivers() {
-  local name="$1" site; shift
-  if [ "${1:-}" = "--every" ]; then site="$2.$3"; else site="$1.$2"; fi
-  merged_calls "$@"
-  case $? in
-    0) MERGED_NATIVE="$MERGED_NATIVE'$name', " ;;
-    1) ;;
-    *) printf '[kernel] FAIL cannot read %s from the merged base, so whether it delivers %s is unknown\n' "$site" "$name"; FAIL=1 ;;
-  esac
-}
-
-# check_kept_up <what> <server-log> — the one performance assertion this project has.
+# check_kept_up <what> <server-log> [client-log] — the one performance assertion this project has.
 #
 # WHY IT IS TWO ASSERTIONS. "Can't keep up! Is the server overloaded?" is vanilla's own line, and it is the only
 # performance signal anywhere in this tree: there is no tick-time, frame-time, TPS or memory assertion in any
@@ -207,27 +325,99 @@ merged_delivers() {
 # defaults to 60), so on a gate where nobody joins, "no overload warnings" is a statement about a JVM that
 # stopped ticking -- the exact shape of a green that means nothing. `logged in with entity id` is the server's
 # own line and a client never prints it, so it cannot be satisfied by the wrong log.
+#
+# FROM THE CLIENT'S DIAL ON (C5 wave 2d, VERIFY run 2's C-1, and HARN2's review A-1). Until wave 2d the count was the
+# whole log: gate-m12 went red on one overload printed 16 s before the join and 13 s before the client dialled, while the
+# gate's own client JVM was booting beside the server. What comes before the client's "Connecting to" (vanilla prints it
+# before the first packet; the client has finished booting by then) is printed, not asserted -- the same boundary
+# gate-m12's tick-lateness window opens at. Everything from the dial's second to the end of the server log counts:
+#  - the handshake. The server's "logged in" line comes after the configuration phase (known packs, registry and tag
+#    sync, NeoForge's configuration tasks, all on the server thread over several ticks), which is what gate-m16 exists
+#    for. Wave 2d's first cut opened at the join and left it out; so had gate-m12's first tick window (wave 2b review A-1).
+#  - the leave. Vanilla prints "Can't keep up!" at the START of the tick after a late one (MinecraftServer.runServer warns
+#    before processPacketsAndTick), and the leave's tick broadcasts "left the game" before PlayerList.remove fires the
+#    logged-out event and saves the player -- so a stall there is always printed after "left the game", with nothing in
+#    the log marking where that tick ended. Wave 2d's first cut closed at the leave line (matched anywhere, so a chat line
+#    saying it closed it too) and missed it. The server stops ticking at "Stopping the server": nothing after it can warn.
+# A client log with no dial in it (or none given) counts the whole server log, and so does a dial stamped before the
+# server's first line by less than half a day (a stale client log, not a run that crossed midnight): a missing or
+# doubtful boundary can only count more, never less. A warning line with no stamp counts.
 check_kept_up() {
-  local what="$1" file="$2" joined behind worst
+  local what="$1" file="$2" clog="${3:-}" cfile=/dev/null counts joined behind outside dialled worst
   if ! readable "$file"; then
     printf '[kernel] FAIL %s (no log to read: %s)\n' "$what" "$file"; FAIL=1; return
   fi
-  joined=$(grep -acE "logged in with entity id" "$file" 2>/dev/null || true)
+  if [ -n "$clog" ] && readable "$clog"; then cfile="$clog"; fi
+  # joined <tab> warnings counted <tab> warnings before the dial <tab> dial found <tab> the worst counted, as vanilla words it
+  counts=$(LC_ALL=C awk -v cfile="$cfile" '
+    function stamp(s) {
+      if (s !~ /^\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\]/) return -1
+      return substr(s, 2, 2) * 3600 + substr(s, 5, 2) * 60 + substr(s, 8, 2)
+    }
+    BEGIN {
+      dial = -1
+      while ((getline l < cfile) > 0) if (l ~ /: Connecting to / && stamp(l) >= 0) { dial = stamp(l); break }
+      close(cfile)
+      first = -1; prev = -1; wrap = 0
+    }
+    {
+      t = stamp($0)
+      if (t >= 0) {
+        if (prev >= 0 && t < prev - 43200) wrap += 86400   # the run crossed midnight
+        prev = t; t += wrap
+        if (first < 0) {
+          first = t
+          if (dial >= 0 && dial < first) { if (first - dial > 43200) dial += 86400; else dial = -1 }
+        }
+      }
+    }
+    /logged in with entity id/ { joined++; next }
+    /Can.t keep up/ {
+      if (dial >= 0 && t >= 0 && t < dial) { outside++; next }
+      inside++
+      if (match($0, /Running [0-9]+ms or [0-9]+ ticks behind/)) {
+        line = substr($0, RSTART, RLENGTH); ms = line; sub(/^Running /, "", ms); sub(/ms.*/, "", ms)
+        if (worst == "" || ms + 0 > worstms) { worst = line; worstms = ms + 0 }
+      }
+    }
+    END { printf "%d\t%d\t%d\t%d\t%s\n", joined, inside, outside, (dial >= 0), worst }' "$file" 2>/dev/null)
+  IFS=$'\t' read -r joined behind outside dialled worst <<< "$counts"
   if [ "${joined:-0}" -eq 0 ]; then
     printf '[kernel] FAIL %s (no player session in this log, so the server never had to keep up)\n' "$what"
     FAIL=1; return
   fi
-  behind=$(grep -acE "Can.t keep up" "$file" 2>/dev/null || true)
+  if [ "${dialled:-0}" -eq 0 ]; then
+    echo "[kernel] no client dial to open the window at, or one stamped before the server started (client log: ${clog:-none given}); every overload warning in the server log counts"
+  fi
+  if [ "${outside:-0}" -gt 0 ]; then
+    echo "[kernel] ${outside} overload warning(s) before the client dialled (its boot beside the server; not asserted)"
+  fi
   if [ "${behind:-0}" -eq 0 ]; then
-    printf '[kernel] PASS %s (%s player session(s), 0 overload warnings)\n' "$what" "$joined"
+    printf '[kernel] PASS %s (%s player session(s), 0 overload warnings from the client'"'"'s dial on)\n' "$what" "$joined"
   else
-    worst=$(grep -aoE "Running [0-9]+ms or [0-9]+ ticks behind" "$file" 2>/dev/null | sort -t' ' -k2 -n | tail -1)
-    printf '[kernel] FAIL %s (%s overload warning(s); worst: %s)\n' "$what" "$behind" "${worst:-unparsed}"
+    printf '[kernel] FAIL %s (%s overload warning(s) from the client'"'"'s dial on; worst: %s)\n' "$what" "$behind" "${worst:-unparsed}"
     FAIL=1
   fi
 }
 
 # assert_eq <what> <expected> <actual>
+# check_forge_family_configs_are_neoforge <what> <file> — the kernel's "[Forbric/Mixin] mixin configs:" line is there, and
+# the Forge-family count it prints equals its NeoForge count: every Forge-family mixin config the boot registered is
+# NeoForge's. A regex on the line alone only proves the line exists; grep here is ugrep on the dev machine, which has no
+# backreferences, so the two numbers are compared in the shell.
+check_forge_family_configs_are_neoforge() {
+  local what="$1" file="$2" line family neo
+  if ! readable "$file"; then
+    printf '[kernel] FAIL %s (no log to read: %s)\n' "$what" "$file"; FAIL=1; return
+  fi
+  line=$(grep -aE '\[Forbric/Mixin\] mixin configs: [0-9]+ Fabric \+ [0-9]+ Forge-family \([0-9]+ NeoForge\) ' "$file" 2>/dev/null | tail -n 1)
+  family=$(printf '%s\n' "$line" | sed -nE 's/.* \+ ([0-9]+) Forge-family \(([0-9]+) NeoForge\) .*/\1/p')
+  neo=$(printf '%s\n' "$line" | sed -nE 's/.* \+ ([0-9]+) Forge-family \(([0-9]+) NeoForge\) .*/\2/p')
+  if [ -z "$family" ] || [ -z "$neo" ]; then printf '[kernel] FAIL %s (no mixin configs line)\n' "$what"; FAIL=1
+  elif [ "$family" = "$neo" ]; then printf '[kernel] PASS %s (%s Forge-family, %s NeoForge)\n' "$what" "$family" "$neo"
+  else printf '[kernel] FAIL %s (%s Forge-family but %s NeoForge)\n' "$what" "$family" "$neo"; FAIL=1; fi
+}
+
 assert_eq() {
   if [ "$2" = "$3" ]; then printf '[kernel] PASS %s (%s)\n' "$1" "$3"
   else printf '[kernel] FAIL %s (want %s got %s)\n' "$1" "$2" "$3"; FAIL=1; fi
@@ -249,9 +439,54 @@ destination.write_bytes(re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', data))
 PY
 }
 
+# control_arm_dir <arm> <key-file> — where a CONTROL ARM's output for exactly these inputs is kept, or nothing when the
+# cache is off.
+#
+# A control arm is a game run whose inputs hold nothing of this tree. gate-m31's pure-vanilla server is the vanilla jar,
+# its libraries, the seed, the JVM and the gate's own feeder; the kernel is not in it. The facets the gate asserts on
+# (biomes, structure starts, the dungeon mob) reproduce exactly from vanilla to vanilla, so booting it again on every
+# run re-derives the same answer and can find nothing about the kernel (lane OPT, D89): about three minutes of game time
+# per run. The key file lists every input of the arm, one per line; its sha256 names the directory, beside the gate
+# verdicts in git's common directory (gate_cache.py), so every worktree shares it. The arm runs when nothing is kept for
+# its key, and its gate stores the output only after the arm's own checks passed.
+#
+# Off -- the arm always runs -- when FORBRIC_GATE_CACHE=0, or FORBRIC_GATE_FRESH=1, which gates-all exports for
+# --no-cache and --release: an acceptance measures every arm afresh.
+control_arm_dir() {
+  local arm="$1" keyfile="$2" root common key
+  if [ "${FORBRIC_GATE_CACHE:-}" = 0 ] || [ "${FORBRIC_GATE_FRESH:-}" = 1 ]; then return 0; fi
+  if [ -n "${FORBRIC_GATE_CACHE:-}" ]; then
+    root="$FORBRIC_GATE_CACHE/arms"
+  else
+    common="$(git -C "$KERNEL" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
+    [ -n "$common" ] || return 0
+    root="$common/forbric-gate-cache/arms"
+  fi
+  key="$(shasum -a 256 "$keyfile" 2>/dev/null | cut -c1-32)"
+  [ -n "$key" ] || return 0
+  printf '%s/%s/%s\n' "$root" "$arm" "$key"
+}
+
+# control_arm_store <dir> <file-or-dir>... — keeps a passed arm's output under <dir>, whole or not at all: copied into a
+# sibling first and renamed into place, with a "complete" stamp a reader requires.
+control_arm_store() {
+  local dir="$1" part item; shift
+  [ -n "$dir" ] || return 0
+  part="$dir.part.$$"
+  rm -rf "$part"; mkdir -p "$part" || return 0
+  for item in "$@"; do cp -c -R "$item" "$part/" 2>/dev/null || cp -R "$item" "$part/" || { rm -rf "$part"; return 0; }; done
+  date '+%Y-%m-%dT%H:%M:%S' > "$part/complete"
+  rm -rf "$dir"; mv "$part" "$dir" 2>/dev/null || rm -rf "$part"
+}
+
 # Rebuild the kernel jar, FAILING LOUDLY. A swallowed build error leaves a stale jar in build/libs and every
 # gate downstream then silently reports on code that is not the code in the tree.
 kernel_jar() {
+  # Prebuilt by the sweep and not rebuilt since (see launch-kernel-server.sh): nothing to do.
+  if [ -n "${FORBRIC_PREBUILT_JAR:-}" ] && [ "$(stat -c '%s:%Y' "$FORBRIC_PREBUILT_JAR" 2>/dev/null \
+       || stat -f '%z:%m' "$FORBRIC_PREBUILT_JAR" 2>/dev/null)" = "${FORBRIC_PREBUILT_STAMP:-}" ]; then
+    return 0
+  fi
   if ! "$KERNEL/gradlew" --offline -q -p "$KERNEL" jar >"$BUILD/kernel-jar.log" 2>&1; then
     echo "[kernel] FATAL: kernel jar build failed — refusing to run against a stale jar" >&2
     grep -vE 'WARNING: |native-access|Restricted method|--enable-native' "$BUILD/kernel-jar.log" >&2
@@ -266,8 +501,13 @@ kernel_classpath() {
     kernel_jar
   fi
   local cp
-  cp=$("$KERNEL/gradlew" --offline -q -p "$KERNEL" printBootClasspath 2>/dev/null \
-        | grep -vE 'WARNING|native|Restricted|enable' | tail -1)
+  if [ -n "${FORBRIC_PREBUILT_DEPS:-}" ] && [ "$(stat -c '%s:%Y' "$jar" 2>/dev/null \
+       || stat -f '%z:%m' "$jar" 2>/dev/null)" = "${FORBRIC_PREBUILT_STAMP:-}" ]; then
+    cp="$FORBRIC_PREBUILT_DEPS"
+  else
+    cp=$("$KERNEL/gradlew" --offline -q -p "$KERNEL" printBootClasspath 2>/dev/null \
+          | grep -vE 'WARNING|native|Restricted|enable' | tail -1)
+  fi
   KERNEL_CP="$jar:$cp"
 }
 
@@ -306,22 +546,111 @@ kill_tree() {
   kill -9 "$root" 2>/dev/null
 }
 
+# stop_tree <pid> [grace-seconds] — the same whole tree, asked first: TERM to every process in it, up to <grace>
+# seconds (default 2) for them to go, then SIGKILL for whatever is left. For a client a gate is done with, whose JVM
+# should get to run its shutdown hooks (Caught's per-site counts are written there).
+#
+# The clients had kept the children-only form kill_tree replaced for servers. Where the launcher execs java that is
+# the JVM itself and it worked; gate-m17 runs the resolved command as `tr … | xargs -0 env … java` in a subshell, so
+# java is the subshell's grandchild. TERM reached the subshell, tr and xargs, and the client lived on re-parented to
+# launchd with its window open. Measured on a loaded run: the gate gave up on it, printed "CAUGHT none" and exited;
+# two minutes later the orphan hit two failures (the gate's last step had reinstalled the libraries under it) and
+# wrote them into the gate's caught file, reached its world 14 s after that, and quit. A JVM that outlives its gate
+# is reported by nobody.
+#
+# The tree is frozen (STOP, parents before children, as kill_tree does) before anything is signalled, so a process
+# killed first cannot orphan a child the snapshot has not seen, and none can start a new one in between.
+stop_tree() {
+  local root="$1" grace="${2:-2}" pids pid alive i
+  case "$root" in ''|*[!0-9]*) return 0;; esac
+  pids="$(_freeze_tree "$root")"
+  [ -n "$pids" ] || return 0
+  for pid in $pids; do kill -TERM "$pid" 2>/dev/null; done
+  for pid in $pids; do kill -CONT "$pid" 2>/dev/null; done
+  for i in $(seq 1 $((grace * 4))); do
+    alive=""
+    for pid in $pids; do _running "$pid" && alive="$alive $pid"; done
+    [ -n "$alive" ] || return 0
+    sleep 0.25
+  done
+  for pid in $pids; do _running "$pid" && kill_tree "$pid"; done
+  return 0
+}
+# _freeze_tree <pid> — STOP <pid>, then each child's tree; prints every pid stopped, parents first.
+_freeze_tree() {
+  local root="$1" child
+  kill -STOP "$root" 2>/dev/null || return 0
+  echo "$root"
+  for child in $(pgrep -P "$root" 2>/dev/null); do _freeze_tree "$child"; done
+}
+# _running <pid> — alive and not a zombie (an exited child the gate has not waited for yet still answers kill -0).
+_running() {
+  local state
+  state="$(ps -o stat= -p "$1" 2>/dev/null)" || return 1
+  case "$state" in ''|Z*) return 1;; esac
+  return 0
+}
+
 # reap_stale_server <rundir> — clean up a server left running by an INTERRUPTED earlier run of this same gate.
 # Replaces the old blanket pkill pre-clean, which could never have found anything anyway.
+#
+# ONLY THE PROCESS THE FILE WAS WRITTEN FOR (HARN2 review A-3). The file holds a pid, and a pid is reused: a process that
+# started after the file was written is not the one it names, and it is left alone -- the old check (`kill -0`, then
+# SIGKILL to its tree) killed whatever had the number now. record_server_pid writes the file after `&` has started the
+# server, so the server is never younger than its file; two seconds of slack cover the one-second clocks below. Where
+# either age cannot be read, the old behaviour stands.
 reap_stale_server() {
   local pf; pf="$(_pidfile "${1:-}")"
   [ -f "$pf" ] || return 0
-  local stale; stale="$(cat "$pf" 2>/dev/null)"
+  local stale written age; stale="$(cat "$pf" 2>/dev/null)"
+  written="$(_mtime_s "$pf")"
   rm -f "$pf"
   case "$stale" in ''|*[!0-9]*) return 0;; esac
   if kill -0 "$stale" 2>/dev/null; then
+    age="$(_elapsed_s "$stale")"
+    if [ -n "$written" ] && [ -n "$age" ] && [ "$age" -lt $(( $(date +%s) - written - 2 )) ]; then
+      echo "[kernel] not reaping $stale: it started ${age}s ago, after $pf was written, so the pid was reused"
+      return 0
+    fi
     echo "[kernel] reaping server $stale left behind by an interrupted run"
     kill_tree "$stale"
     sleep 1
   fi
 }
+# _elapsed_s <pid> — seconds since <pid> started (ps's etime, [[dd-]hh:]mm:ss); nothing when it cannot be read.
+_elapsed_s() {
+  local e d=0 h=0 m s a b c
+  e="$(ps -o etime= -p "$1" 2>/dev/null | tr -d ' ')"
+  case "$e" in ''|*[!0-9:-]*) return 0;; esac
+  case "$e" in *-*) d="${e%%-*}"; e="${e#*-}";; esac
+  IFS=: read -r a b c <<< "$e"
+  if [ -n "$c" ]; then h=$a; m=$b; s=$c; else m=$a; s=$b; fi
+  echo $(( 10#$d * 86400 + 10#$h * 3600 + 10#$m * 60 + 10#${s:-0} ))
+}
+# _mtime_s <file> — its modification time in epoch seconds (GNU stat, then BSD stat); nothing when neither answers.
+_mtime_s() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true; }
 
-record_server_pid() { echo "$2" > "$(_pidfile "$1")"; }
+# record_server_pid <rundir> <pid> — and remember the file, so the gate's EXIT trap can remove it once the server is gone
+# (HARN2 review A-3). Until then every gate that exited left its file behind naming a dead pid -- since wave 2d's
+# _stop_leftovers on every exit, always -- for the next run's reap_stale_server to find. A call in a subshell writes the
+# file but cannot remember it; reap_stale_server's age check covers that one.
+_GATE_PIDFILES=""
+record_server_pid() {
+  local pf; pf="$(_pidfile "$1")"
+  echo "$2" > "$pf"
+  _GATE_PIDFILES="$_GATE_PIDFILES$pf"$'\n'
+}
+# _forget_server_pids — remove each file record_server_pid wrote whose pid no longer runs. One whose server still runs
+# (it escaped _stop_leftovers) is kept, for the next run to reap.
+_forget_server_pids() {
+  local pf pid
+  while IFS= read -r pf; do
+    [ -n "$pf" ] && [ -f "$pf" ] || continue
+    pid="$(cat "$pf" 2>/dev/null)"
+    case "$pid" in ''|*[!0-9]*) rm -f "$pf"; continue;; esac
+    _running "$pid" || rm -f "$pf"
+  done <<< "$_GATE_PIDFILES"
+}
 
 # server_ready <server-log> <seconds> [settle-seconds] — return once <seconds> have passed AND the server has printed
 # "Done (", so a console line written now is one it can run; return 1 instead when the log says the server is gone
@@ -343,14 +672,32 @@ record_server_pid() { echo "$2" > "$(_pidfile "$1")"; }
 # Vanilla 26.2, MinecraftForge's and NeoForge's bodies and the merged one are the same instructions there; the server
 # prints "An unexpected error occurred while trying to execute that command" and runs on. A gate that fed "stop" on a
 # fixed timer therefore went red as "never announced a stop" whenever the machine was loaded enough that the boot
-# outlasted the timer (measured: gate-m3 with a 28 s boot against its 22 s timer). With a boot inside the timer this
-# writes the line at the same moment the timer did; only a slower boot moves it, to <settle> (default 5) seconds after
-# "Done (", so what the gate wanted to see run after the boot still gets some ticks.
+# outlasted the timer (measured: gate-m3 with a 28 s boot against its 22 s timer). With a boot done <settle> or more
+# seconds before the timer ends this writes the line at the same moment the timer did; a later boot, inside the timer's
+# last <settle> seconds or past it, moves it to <settle> (default 5) seconds after "Done (", so what the gate wanted to
+# see run after the boot still gets some ticks.
+#
+# THE SETTLE COUNTS FROM DONE, WHENEVER DONE CAME. Until C5 the timer was a bare sleep, and a Done already in the log
+# when it ran out was taken as "the boot was inside the timer", with no settle at all. A boot that ended in the timer's
+# last second therefore got the line in the same second as its Done: gate-m3 went red under load (VERIFY run 1, Done
+# 15:16:25, "Stopping the server" 15:16:26, the canary's 20-tick ServerTickEvent line never printed), latent since the
+# helper was written. So the timer watches the log too and notes the second Done is first seen; the line goes out at
+# the later of the timer's end and that second plus <settle>. A boot that ended at least <settle> seconds before the
+# timer still gets the line when the timer ends, as before. Seconds are counted by the one-second sleeps themselves,
+# so every count runs late, never early: the timer is never shorter than <seconds> and the settle never shorter than
+# <settle>. A Done that is already in the log when this is called has no known moment and is taken as seen at 0.
+# Both counts are plain decimals: a leading zero is refused with the fraction, since bash arithmetic reads "010" as
+# octal 8 and "08" as an error that ends the whole shell (in a gate, the feeder dies and no line is ever written).
 server_ready() {
   local log="$1" seconds="$2" settle="${3:-5}" cap="${STOP_READY_CAP:-150}" stall="${STOP_READY_STALL:-60}"
-  local waited=0 still=0 size last=-1
-  sleep "$seconds"
-  until grep -aq 'Done (' "$log" 2>/dev/null; do
+  local elapsed=0 seen=-1 waited=0 still=0 size last=-1 rest
+  case "$seconds:$settle" in *[!0-9:]*|:*|*:|0[0-9]*|*:0[0-9]*) echo "server_ready: <seconds> and <settle> are whole seconds written without a leading zero, got '$seconds' '$settle'" >&2; return 1;; esac
+  while [ "$elapsed" -lt "$seconds" ]; do
+    if [ "$seen" -lt 0 ] && grep -aq 'Done (' "$log" 2>/dev/null; then seen=$elapsed; fi
+    sleep 1; elapsed=$((elapsed + 1))
+  done
+  while [ "$seen" -lt 0 ]; do
+    if grep -aq 'Done (' "$log" 2>/dev/null; then seen=$elapsed; break; fi
     # Gone or going: a line written now would only meet a closed pipe (and a pipeline under pipefail would report it).
     # The game's own stop and crash lines, every "launch stopped" the kernel prints when it refuses a launch, the
     # launcher's refusal, and a JVM that died before the game started.
@@ -360,9 +707,10 @@ server_ready() {
     size=$(wc -c < "$log" 2>/dev/null || echo 0)
     if [ "$size" = "$last" ]; then still=$((still + 1)); else still=0; last=$size; fi
     [ "$still" -ge "$stall" ] && return 1
-    sleep 1; waited=$((waited + 1))
+    sleep 1; waited=$((waited + 1)); elapsed=$((elapsed + 1))
   done
-  [ "$waited" -eq 0 ] || sleep "$settle"
+  rest=$((seen + settle - elapsed))
+  [ "$rest" -le 0 ] || sleep "$rest"
   return 0
 }
 stop_when_ready() {
@@ -450,6 +798,112 @@ canary_scratch() {
 publish_canary() {
   mkdir -p "$(dirname "$2")"
   mv -f "$1" "$2" || { echo "[kernel] FAIL could not publish $(basename "$2")" >&2; return 1; }
+}
+
+# --- shared fixtures ----------------------------------------------------------------------------------------
+# WHY THIS EXISTS. A worktree links the big client packs and the downloaded-mod directories to the main checkout's
+# (run/client-merged-pack -> /Users/.../forbric-kernel/run/client-merged-pack), and the gates wipe and write their
+# rundirs. A gate pointed at one of those links (RUNDIR=run/client-merged-pack, a fixed M*_RUNDIR default, or a scratch
+# path that resolves into one) rewrites mods/, options.txt and the world of a fixture every other worktree and the main
+# checkout read -- and nothing names it: the next run of any gate there just sees a different pack. Stage 4 lost a run
+# to exactly this (D39). So a gate with a fixed or default rundir asks first:
+#
+#   refuse_shared_rundir "$RUNDIR"
+#
+# It refuses, with a FAIL line and exit 3, a rundir whose real path equals or lies inside one of the shared fixtures
+# below (this worktree's link or directory of that name, the main checkout's, and a fixture's own home outside every
+# checkout -- forge-swap's is $FORBRIC_FORGE_SWAP, default ~/Forbric-backups/forge-swap, D54 -- because a worktree cut
+# before that fixture existed has no run/forge-swap link to find it by), and a rundir that is spelled inside this
+# worktree's run/ but resolves outside it through a symlink. A clone (`cp -c -R` of the fixture's real path) or a
+# directory the gate creates is accepted. The rundir need not exist yet; a dangling link is refused.
+SHARED_FIXTURES="client-merged-pack client-popular client-kernel client-neo-pack carry-on modmenu neoforge-builds forge-swap"
+
+# _guard_fixture_home <name> -- where a shared fixture lives when it is in no checkout at all (empty for the others)
+_guard_fixture_home() {
+  case "$1" in
+    forge-swap)
+      if [ -n "${FORBRIC_FORGE_SWAP:-}" ]; then _guard_abs "$FORBRIC_FORGE_SWAP"
+      elif [ -n "${HOME:-}" ]; then _guard_abs "$HOME/Forbric-backups/forge-swap"; fi ;;
+  esac
+}
+
+# _guard_abs <path> -- absolute and lexically normalised (. and .. folded, no symlink resolved)
+_guard_abs() {
+  local p="$1" out="" part
+  case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+  local IFS=/
+  for part in $p; do
+    case "$part" in
+      ''|.) ;;
+      ..) out="${out%/*}" ;;
+      *) out="$out/$part" ;;
+    esac
+  done
+  printf '%s\n' "${out:-/}"
+}
+
+# _guard_real <path> -- the physical path; the part that does not exist yet is appended to its nearest existing parent.
+# Prints nothing (status 1) for a dangling symlink on the way.
+_guard_real() {
+  local p rest="" base
+  p="$(_guard_abs "$1")"
+  while [ ! -e "$p" ]; do
+    [ -L "$p" ] && return 1
+    [ "$p" = / ] && break
+    rest="/${p##*/}$rest"
+    p="$(dirname "$p")"
+  done
+  base="$(cd "$p" 2>/dev/null && pwd -P)" || return 1
+  [ "$base" = / ] && base=""
+  printf '%s%s\n' "$base" "$rest"
+}
+
+# _guard_within <path> <dir> -- the path is the dir or lies inside it
+_guard_within() { [ "$1" = "$2" ] || [ "${1#"$2"/}" != "$1" ]; }
+
+# The main checkout's kernel: FORBRIC_MAIN_KERNEL, else the parent of the repository's common .git directory.
+_guard_main_kernel() {
+  if [ -n "${FORBRIC_MAIN_KERNEL:-}" ]; then printf '%s\n' "$FORBRIC_MAIN_KERNEL"; return; fi
+  local common
+  common="$(git -C "$KERNEL" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
+  [ -n "$common" ] && printf '%s/forbric-kernel\n' "$(dirname "$common")"
+}
+
+refuse_shared_rundir() {
+  local dir="${1:-}" logical real run_logical run_real main name candidate fixture_real r why=""
+  if [ -z "$dir" ]; then
+    echo "[kernel] FAIL refusing rundir '': refuse_shared_rundir was given no rundir (an unset rundir variable?)"
+    exit 3
+  fi
+  logical="$(_guard_abs "$dir")"
+  if ! real="$(_guard_real "$dir")"; then
+    echo "[kernel] FAIL refusing rundir $dir: it is (or passes through) a dangling symlink"
+    exit 3
+  fi
+  run_logical="$(_guard_abs "$KERNEL/run")"
+  run_real="$(_guard_real "$KERNEL/run")"
+  main="$(_guard_main_kernel)"
+  local roots="$run_logical $run_real"
+  [ -n "$main" ] && roots="$roots $(_guard_abs "$main/run") $(_guard_real "$main/run")"
+  for name in $SHARED_FIXTURES; do
+    for candidate in $(for r in $roots; do printf '%s/%s\n' "$r" "$name"; done; _guard_fixture_home "$name"); do
+      if _guard_within "$logical" "$candidate"; then
+        why="it is the shared fixture run/$name ($candidate)"
+      elif [ -e "$candidate" ] && fixture_real="$(_guard_real "$candidate")" && _guard_within "$real" "$fixture_real"; then
+        why="it resolves to $real, inside the shared fixture run/$name ($fixture_real)"
+      fi
+      [ -n "$why" ] && break 2
+    done
+  done
+  if [ -z "$why" ] && { _guard_within "$logical" "$run_logical" || _guard_within "$logical" "$run_real"; } \
+      && ! _guard_within "$real" "$run_real"; then
+    why="it is spelled inside $run_logical but resolves to $real, outside it, through a symlink"
+  fi
+  if [ -n "$why" ]; then
+    echo "[kernel] FAIL refusing rundir $dir: $why. Clone the fixture by its real path (cp -c -R \"\$(cd <link> && pwd -P)\" <scratch>) and point the gate's rundir variable at the clone"
+    exit 3
+  fi
+  return 0
 }
 
 # --- download caches ----------------------------------------------------------------------------------------

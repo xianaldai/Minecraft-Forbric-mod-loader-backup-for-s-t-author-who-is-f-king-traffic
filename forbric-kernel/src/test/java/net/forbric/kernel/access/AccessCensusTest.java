@@ -117,7 +117,7 @@ class AccessCensusTest {
 				new ModCatalog.Entry(Ecosystem.NEOFORGE, "xmod", "X", "1", "", List.of(), "x.jar", "", ""),
 				new ModCatalog.Entry(Ecosystem.NEOFORGE, "other", "Other", "1", "", List.of(), "other.jar", "", "")));
 		AccessCensus.unmatched("AW", "x.jar", "field com/example/Target nope J", true, true);
-		AccessCensus.unmatched("AW", "carrier:forge-runtime.jar", "field com/example/Target alsoNope J", true, true);
+		AccessCensus.unmatched("AW", "carrier:neoforge-runtime.jar", "field com/example/Target alsoNope J", true, true);
 		AccessCensus.unmatched("AT", "other.jar", "public com/example/Target stale", false, false);
 		AccessCensus.unmatched("AT", "other.jar", "public com/example/Target overload(I)V", false, true);
 		AccessCensus.report();
@@ -153,10 +153,10 @@ class AccessCensusTest {
 		ClassWriter cw = new ClassWriter(0);
 		cw.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL, OWNER, null, "java/lang/Object", null);
 		cw.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL, "secret", "I", null, null).visitEnd();
-		// A field an ECOSYSTEM re-typed: its descriptor names a class stock Minecraft does not ship, so no
-		// version of the game ever declared it that way and the miss is a cost this instance introduced.
+		// A field an ECOSYSTEM re-typed: its descriptor names a class stock Minecraft does not ship (here NeoForge's
+		// Lazy), so no version of the game ever declared it that way and the miss is a cost this instance introduced.
 		cw.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL, "lazy",
-				"Lnet/minecraftforge/common/util/ClearableLazy;", null, null).visitEnd();
+				"Lnet/neoforged/neoforge/common/util/Lazy;", null, null).visitEnd();
 		// VANILLA's own drift, and the shape that made the old rule wrong: ItemStack.item became a Holder<Item>
 		// in the game itself, on every base, so a mod carried forward names the old type and a native loader
 		// ignores the line in exactly the same way. Both descriptors are object types, so only the carrier-package
@@ -170,5 +170,19 @@ class AccessCensusTest {
 		mv.visitEnd();
 		cw.visitEnd();
 		return cw.toByteArray();
+	}
+
+	/**
+	 * A field the widener missed counts as re-typed by an ecosystem only when it now names the carrier's own package. On
+	 * NeoForge's base that is NeoForge's alone: neither the base nor the carrier names a {@code net/minecraftforge/} class,
+	 * so such a descriptor is no type this instance introduced (and a stale widener naming one is the mod's own drift).
+	 */
+	@Test
+	void onlyNeoForgesOwnPackageCountsAsAnEcosystemReTyping() {
+		assertTrue(AccessCensus.retypedByAnEcosystem(List.of("Lnet/neoforged/neoforge/common/util/Lazy;")));
+		assertEquals(false, AccessCensus.retypedByAnEcosystem(List.of("Ljava/util/function/Supplier;")),
+				"vanilla re-types fields between versions too: not an ecosystem's doing");
+		assertEquals(false, AccessCensus.retypedByAnEcosystem(List.of("Lnet/minecraftforge/common/util/ClearableLazy;")),
+				"no class of this instance is MinecraftForge's");
 	}
 }

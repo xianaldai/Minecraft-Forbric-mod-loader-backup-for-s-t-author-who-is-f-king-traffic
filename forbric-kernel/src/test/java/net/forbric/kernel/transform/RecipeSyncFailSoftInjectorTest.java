@@ -26,13 +26,13 @@ import net.forbric.kernel.TestFixtures.Fixture;
 @ResourceLock("system-properties")
 class RecipeSyncFailSoftInjectorTest {
 	private static final Path NEOFORGE_RUNTIME = TestFixtures.stagedRoot()
-			.resolve("neoforge-runtime/neoforge-runtime.jar");
+			.resolve(TestFixtures.NEO_CARRIER_JAR);
 	private static final String HOOKS = "net/neoforged/neoforge/common/CommonHooks";
 
 	@AfterEach void reset() { System.clearProperty(RecipeSyncFailSoftInjector.PROPERTY); }
 
 	@Test void thePayloadIsFilteredBetweenItsCreationAndItsSending() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(NEOFORGE_RUNTIME), "neoforge runtime not staged: " + NEOFORGE_RUNTIME);
+		TestFixtures.requireFile(Fixture.STAGED, NEOFORGE_RUNTIME, "neoforge runtime not staged: " + NEOFORGE_RUNTIME);
 		byte[] original = NativeCoremodParityTest.read(NEOFORGE_RUNTIME, HOOKS);
 		byte[] out = new RecipeSyncFailSoftInjector().transform(RecipeSyncFailSoftInjector.COMMON_HOOKS, original, null);
 		assertNotSame(original, out);

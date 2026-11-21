@@ -104,7 +104,7 @@ class KernelModInfoConfigTest {
 	void puzzlesLibReadsItsAuthorsAndHomepage() throws Exception {
 		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(PUZZLES), "the popular pack's Puzzles Lib jar is not here");
 		DiscoveredMod declared = new ForbricModDiscoverer().discoverJar(PUZZLES).get(0);
-		Path guava = KernelForgeModInfoTest.newestUnder("com/google/guava/guava");
+		Path guava = TestFixtures.newestLibrary("com/google/guava/guava");
 		TestFixtures.require(Fixture.MC_LIBRARIES, guava != null, "no Guava in the local Minecraft library tree");
 		try (URLClassLoader runtime = runtimeLoader();
 				URLClassLoader puzzles = new URLClassLoader(new URL[] {PUZZLES.toUri().toURL(), guava.toUri().toURL()}, runtime)) {
@@ -239,8 +239,8 @@ class KernelModInfoConfigTest {
 	/** The compiled game side plus the NeoForge carrier, over this suite's own classes (one night-config, one API). */
 	private static URLClassLoader runtimeLoader() throws Exception {
 		Path compiled = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
-		Path carrier = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "staged carrier absent");
+		Path carrier = STAGED.resolve(TestFixtures.NEO_CARRIER_JAR);
+		TestFixtures.requireFile(Fixture.STAGED, carrier, "staged carrier absent");
 		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "staged runtime classes absent");
 		List<URL> urls = new ArrayList<>(List.of(compiled.toUri().toURL(), carrier.toUri().toURL()));
 		return new URLClassLoader(urls.toArray(new URL[0]), KernelModInfoConfigTest.class.getClassLoader());

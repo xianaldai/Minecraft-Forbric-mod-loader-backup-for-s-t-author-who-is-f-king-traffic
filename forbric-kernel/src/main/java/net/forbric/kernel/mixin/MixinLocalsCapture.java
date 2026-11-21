@@ -27,9 +27,9 @@ import net.forbric.kernel.util.ForbricLog;
 /**
  * Turns a guest mixin's {@code @Inject(locals = CAPTURE_FAILHARD)} into {@code CAPTURE_FAILSOFT}.
  *
- * <p>A locals-capturing injector is written against ONE method body's local variable table. On the merged base
+ * <p>A locals-capturing injector is written against ONE method body's local variable table. On the base
  * the body a mixin targets can carry the other family's patch — architectury's {@code MixinServerPlayerGameMode}
- * captures {@code (BlockEntity, BlockState)} from {@code destroyBlock}, and the merged method has NeoForge's
+ * captures {@code (BlockEntity, BlockState)} from {@code destroyBlock}, and the current method has NeoForge's
  * {@code BreakBlockEvent} local in between. FAIL_HARD makes that an {@code InjectionError}, an {@link Error} no
  * mixin error handler sees, thrown from inside the class load of the target: the popular-set server died in
  * {@code WorldLoader}. FAIL_SOFT is Mixin's own answer to exactly this: the one injection is skipped with a WARN
@@ -102,7 +102,7 @@ public final class MixinLocalsCapture {
 			}
 			if (!changed) continue;
 			softened++;
-			ForbricLog.info("[Forbric/Mixin] %s.%s: require %s → 0 — if the merged game no longer has what it injects into, "
+			ForbricLog.info("[Forbric/Mixin] %s.%s: require %s → 0 — if the game no longer has what it injects into, "
 					+ "this one injector goes unattached and its mod is reported, instead of Mixin abandoning the target "
 					+ "class for every mod", mixinName.replace('/', '.'), handler, before == null ? "(allow dropped)" : before);
 		}
@@ -131,7 +131,7 @@ public final class MixinLocalsCapture {
 						&& LOCAL_CAPTURE_DESC.equals(enumValue[0]) && "CAPTURE_FAILHARD".equals(enumValue[1])) {
 					injector.values.set(i + 1, new String[] { LOCAL_CAPTURE_DESC, "CAPTURE_FAILSOFT" });
 					softened++;
-					ForbricLog.info("[Forbric/Mixin] %s: @Inject.locals CAPTURE_FAILHARD → CAPTURE_FAILSOFT — if the merged "
+					ForbricLog.info("[Forbric/Mixin] %s: @Inject.locals CAPTURE_FAILHARD → CAPTURE_FAILSOFT — if the current "
 							+ "method's locals differ from the ones this mixin was written against, that one injection is "
 							+ "skipped with Mixin's own warning instead of killing the game", mixinName.replace('/', '.'));
 				}

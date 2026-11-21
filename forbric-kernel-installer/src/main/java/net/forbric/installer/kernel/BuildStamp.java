@@ -26,7 +26,7 @@ import java.nio.file.Path;
  *
  * <p><b>Why this exists.</b> Every builder's reuse test used to be "the output file exists and is not empty", and
  * none of the artifacts carries its version in its filename — {@code neoforge-runtime.jar},
- * {@code patched-mc-neoforge-26.2.jar}, {@code patched-mc-merged-26.2.jar}. So moving the NeoForge pin from
+ * {@code patched-mc-neoforge-26.2.jar}. So moving the NeoForge pin from
  * {@code 26.2.0.38-beta} to {@code 26.2.0.88} and re-running the installer on a machine that had built before
  * printed {@code neoforge=26.2.0.88} in its own pin line and then {@code [neoforge-runtime] up-to-date} — and
  * installed the OLD carrier. Nothing failed; the install said "Installed." and the game came up. What it came up
@@ -37,8 +37,8 @@ import java.nio.file.Path;
  * install was a cold one and the cache path was never exercised at a bump.
  *
  * <p><b>Every artifact is stamped with the WHOLE pin set</b>, not with the subset that feeds it. A per-artifact
- * key would avoid rebuilding the MinecraftForge half when only NeoForge moves, and would also be a second place
- * to get wrong — omit one input and the cache is silently stale again, which is the bug being fixed. The cost of
+ * key would avoid rebuilding the runtime when only NFRT moves, and would also be a second place to get wrong — omit
+ * one input and the cache is silently stale again, which is the bug being fixed. The cost of
  * over-invalidating is one rebuild of a few minutes on a pin bump; the cost of under-invalidating is an install
  * that is wrong and says nothing.
  *
@@ -51,42 +51,22 @@ final class BuildStamp {
 	}
 
 	/**
-	 * The key an artifact is stamped with: the pins, plus a digest of the merge tools that ride in this installer.
+	 * The key an artifact is stamped with: the pins, and nothing else.
 	 *
-	 * <p>The tools are not a pin and they change without one — the merge tool's lambda-realignment pass changed no
-	 * version at all and changed every merged class it fixed. Keying only on pins would have served the old merged
-	 * base out of the cache to exactly the people who needed the new one.
+	 * <p>It used to add {@code tools=<sha1>} of the merge-tools jar the installer carried, because that jar once built
+	 * the merged base: its lambda-realignment pass changed no version and changed every merged class it fixed, so a key
+	 * of pins alone would have served the old base to exactly the people who needed the new one. Since the merged base
+	 * went, the installer's only tool is the link checker ({@link LinkCheckTool}), which reads the artifacts and shapes
+	 * none of them, so its digest is no input of theirs. Keying on it (or on the kernel jar the checker now comes from)
+	 * would rebuild the base and the runtime, minutes and a download, on every kernel update for every player, and
+	 * change nothing in what they hold.
+	 *
+	 * <p>Dropping it changes the stamp's text, so an install made by an installer that wrote the old form rebuilds its
+	 * artifacts once, as a missing stamp does; after that a cached reinstall is served from the cache again.
 	 */
 	private static String key() {
-		return Pins.stamp() + " tools=" + toolsDigest();
+		return Pins.stamp();
 	}
-
-	private static volatile String toolsDigest;
-
-	/** SHA-1 of the bundled merge-tools jar, or {@code "absent"} when this installer carries none. */
-	private static String toolsDigest() {
-		String cached = toolsDigest;
-		if (cached != null) return cached;
-		String computed = "absent";
-		try (java.io.InputStream in = BuildStamp.class.getResourceAsStream(TOOLS_RESOURCE)) {
-			if (in != null) {
-				java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
-				byte[] buf = new byte[8192];
-				for (int n; (n = in.read(buf)) > 0; ) md.update(buf, 0, n);
-				StringBuilder sb = new StringBuilder();
-				for (byte b : md.digest()) sb.append(String.format("%02x", b));
-				computed = sb.toString();
-			}
-		} catch (Exception unreadable) {
-			// An unreadable tools jar means an unstable key, which would rebuild every time. "unknown" is stable
-			// and still changes nothing that pins already cover.
-			computed = "unknown";
-		}
-		toolsDigest = computed;
-		return computed;
-	}
-
-	private static final String TOOLS_RESOURCE = "/forbric/tools/forbric-merge-tools.jar";
 
 	/** The sibling file that records what produced {@code artifact}. */
 	private static Path stampFile(Path artifact) {

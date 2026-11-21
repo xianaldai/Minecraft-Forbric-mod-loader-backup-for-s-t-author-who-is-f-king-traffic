@@ -32,8 +32,8 @@ class MixinTailCaptureNativeTest {
 	private static final String ITEM = "item(Lnet/minecraft/world/entity/LivingEntity;Lnet/minecraft/world/level/Level;Lnet/minecraft/world/item/ItemStack;III)V";
 
 	private static byte[] merged() throws Exception {
-		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "merged base required: " + jar);
+		Path jar = TestFixtures.stagedBase();
+		TestFixtures.requireFile(Fixture.STAGED, jar, "staged base required: " + jar);
 		try (ZipFile zip = new ZipFile(jar.toFile())) { return zip.getInputStream(zip.getEntry(GUI + ".class")).readAllBytes(); }
 	}
 
@@ -84,14 +84,14 @@ class MixinTailCaptureNativeTest {
 	}
 
 	/**
-	 * What each platform's own GUI item held at its tail, read from the hash-pinned original bytes the merged base ships
+	 * What each platform's own GUI item held at its tail, read from the hash-pinned original bytes the launch's native references hold
 	 * (NativeGameReferences' source): vanilla's (what a Fabric mod is compiled against) returned early and held the
 	 * render state to its last return; NeoForge's and MinecraftForge's recompiled bodies folded the guard and did not. So
 	 * the same capture moves for a Fabric mod and stays, as it runs on its own platform, for a NeoForge or Forge mod.
 	 */
 	@Test void eachPlatformsOwnGuiItemTailDecidesTheMove() throws Exception {
 		ClassNode split = node(new VanillaEarlyReturns().transform(GUI.replace('/', '.'), merged(), null));
-		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+		Path jar = TestFixtures.stagedBase();
 		NativeGameReferences references = new NativeGameReferences(path -> {
 			try (ZipFile zip = new ZipFile(jar.toFile())) {
 				var entry = zip.getEntry(path);
@@ -99,8 +99,8 @@ class MixinTailCaptureNativeTest {
 			} catch (java.io.IOException unreadable) {
 				return null;
 			}
-		});
-		for (Ecosystem ecosystem : List.of(Ecosystem.FABRIC, Ecosystem.NEOFORGE, Ecosystem.FORGE)) {
+		}, null, TestFixtures.launchSources(jar));
+		for (Ecosystem ecosystem : List.of(Ecosystem.FABRIC, Ecosystem.NEOFORGE)) {
 			ClassNode own = references.get(ecosystem, GUI);
 			assertNotNull(own, ecosystem.name());
 			ClassNode mixin = capture();

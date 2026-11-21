@@ -25,26 +25,25 @@ import net.forbric.kernel.TestFixtures;
 import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
- * The merged actuallyHurt reads its damage before armour again, ahead of MinecraftForge's Hurt seam — on the real
- * LivingEntity and Player, with the seams applied first as the chain applies them.
+ * NeoForge's actuallyHurt reads its damage parameter before armour again, as vanilla's does — on the real LivingEntity
+ * and Player of the staged base, and on synthetic bodies for the rule that decides it.
  */
 @ResourceLock("system-properties")
 class VanillaDamageReadInjectorTest {
 	private static final Path MERGED = TestFixtures.stagedRoot()
-			.resolve("merged-base/patched-mc-merged-26.2.jar");
+			.resolve(TestFixtures.BASE_JAR);
 
 	@AfterEach void reset() { System.clearProperty(VanillaDamageReadInjector.PROPERTY); }
 
 	/**
-	 * MinecraftForge's Hurt sits in this body either as the kernel's seam or, on a merge that keeps both sides' edits,
-	 * as Forge's own {@code ForgeHooks.onLivingHurt} right after the invulnerability check. Either way the vanilla read
-	 * must come first, and the first {@code fload 3} — the one a mod's injector binds to — must be the read's.
+	 * The vanilla read is placed right after the invulnerability check, ahead of armour, and the first {@code fload 3} —
+	 * the one a mod's injector binds to — is the read's. (MinecraftForge's Hurt seam, which the read used to be placed
+	 * ahead of, went with MinecraftForge.)
 	 */
-	@Test void livingEntityReadsBeforeArmourAndBeforeTheForgeSeam() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "merged base not staged: " + MERGED);
+	@Test void livingEntityReadsBeforeArmour() throws Exception {
+		TestFixtures.requireFile(Fixture.STAGED, MERGED, "base not staged: " + MERGED);
 		byte[] original = NativeCoremodParityTest.read(MERGED, "net/minecraft/world/entity/LivingEntity");
-		byte[] seamed = new ForgeDamageSeamsInjector().transform("net.minecraft.world.entity.LivingEntity", original, null);
-		assertTrue(forgeHurt(code(hurt(seamed))) >= 0, "premise: MinecraftForge's Hurt is in actuallyHurt, natively or by the seam");
+		byte[] seamed = original;
 		byte[] out = new VanillaDamageReadInjector().transform("net.minecraft.world.entity.LivingEntity", seamed, null);
 		assertNotSame(seamed, out, "NeoForge's body armours the container: the read must be placed");
 		MethodNode hurt = hurt(out);
@@ -52,9 +51,8 @@ class VanillaDamageReadInjectorTest {
 		int firstRead = firstIndex(code, i -> i instanceof VarInsnNode v && v.getOpcode() == Opcodes.FLOAD && v.var == 3);
 		int armour = firstIndex(code, i -> i instanceof MethodInsnNode c && c.name.equals("getDamageAfterArmorAbsorb"));
 		int read = firstIndex(code, i -> i instanceof MethodInsnNode c && c.name.equals("vanillaRead"));
-		int seam = forgeHurt(code);
 		assertTrue(firstRead >= 0 && firstRead < armour, "first read " + firstRead + " vs armour " + armour);
-		assertTrue(read > firstRead && read < seam, "vanillaRead " + read + " must come before MinecraftForge's Hurt " + seam);
+		assertTrue(read > firstRead && read < armour, "vanillaRead " + read + " must come before armour " + armour);
 		assertTrue(code.get(read - 2) == code.get(firstRead), "the first fload 3 is the read's own argument");
 		assertEquals(Opcodes.IFNE, code.get(4).getOpcode());
 		assertTrue(code.get(5) instanceof VarInsnNode v && v.getOpcode() == Opcodes.ALOAD && v.var == 0, "placed right after the invulnerability check");
@@ -65,7 +63,7 @@ class VanillaDamageReadInjectorTest {
 	}
 
 	@Test void playerOverridesTheSameWayAndGetsTheSameRead() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "merged base not staged: " + MERGED);
+		TestFixtures.requireFile(Fixture.STAGED, MERGED, "base not staged: " + MERGED);
 		byte[] original = NativeCoremodParityTest.read(MERGED, "net/minecraft/world/entity/player/Player");
 		byte[] out = new VanillaDamageReadInjector().transform("net.minecraft.world.entity.player.Player", original, null);
 		assertNotSame(original, out);
@@ -79,24 +77,28 @@ class VanillaDamageReadInjectorTest {
 
 	/**
 	 * What decides it is what the armour call takes, not whether the parameter is read before it: vanilla's flow
-	 * (armour takes {@code fload 3}) needs nothing; a container-armouring body does, also when MinecraftForge's own
-	 * Hurt hook reads the parameter first (the edit-splicing merge's shape), and the read then lands ahead of it.
+	 * (armour takes {@code fload 3}) needs nothing, also when an earlier hook rewrites the parameter first; a
+	 * container-armouring body does, also when an earlier hook reads the parameter first (the shape the old merged base
+	 * had, with MinecraftForge's Hurt hook there), and the read then lands ahead of that hook.
 	 */
 	@Test void theArmourCallsArgumentDecidesNotAnEarlierRead() {
 		assertFalse(VanillaDamageReadInjector.repair(body(false, false)), "vanilla's flow: armour takes the parameter");
-		assertFalse(VanillaDamageReadInjector.repair(body(false, true)), "MinecraftForge's flow: the hook's result is armoured");
+		assertFalse(VanillaDamageReadInjector.repair(body(false, true)), "an earlier hook's result is what gets armoured");
 		MethodNode neo = body(true, false);
 		assertTrue(VanillaDamageReadInjector.repair(neo), "NeoForge's flow: armour takes the container's amount");
-		MethodNode spliced = body(true, true);
-		assertTrue(VanillaDamageReadInjector.repair(spliced), "a pre-armour read that feeds only Forge's hook is not vanilla's");
-		List<AbstractInsnNode> code = code(spliced);
+		MethodNode hooked = body(true, true);
+		assertTrue(VanillaDamageReadInjector.repair(hooked), "a pre-armour read that feeds only another hook is not vanilla's");
+		List<AbstractInsnNode> code = code(hooked);
 		assertTrue(firstIndex(code, i -> i instanceof MethodInsnNode c && c.name.equals("vanillaRead"))
-				< firstIndex(code, i -> i instanceof MethodInsnNode c && c.name.equals("onLivingHurt")), "the read precedes Forge's Hurt");
-		assertFalse(VanillaDamageReadInjector.repair(spliced), "a second pass adds nothing");
+				< firstIndex(code, i -> i instanceof MethodInsnNode c && c.name.equals(EARLIER_HOOK)), "the read precedes the earlier hook");
+		assertFalse(VanillaDamageReadInjector.repair(hooked), "a second pass adds nothing");
 	}
 
-	/** {@code actuallyHurt}'s opening: the invulnerability check, optionally Forge's Hurt, then the armour call. */
-	private static MethodNode body(boolean containerArmour, boolean forgeHurt) {
+	/** A static hook ahead of armour that takes the damage and answers a new amount; no ecosystem's, any would do. */
+	private static final String EARLIER_HOOK_OWNER = "org/example/damage/EarlierHooks", EARLIER_HOOK = "onHurt";
+
+	/** {@code actuallyHurt}'s opening: the invulnerability check, optionally an earlier hook, then the armour call. */
+	private static MethodNode body(boolean containerArmour, boolean earlierHook) {
 		String living = VanillaDamageReadInjector.LIVING, source = "Lnet/minecraft/world/damagesource/DamageSource;";
 		MethodNode m = new MethodNode(Opcodes.ACC_PROTECTED, "actuallyHurt", VanillaDamageReadInjector.HURT_DESC, null, null);
 		org.objectweb.asm.tree.LabelNode end = new org.objectweb.asm.tree.LabelNode();
@@ -105,11 +107,11 @@ class VanillaDamageReadInjectorTest {
 		m.instructions.add(new VarInsnNode(Opcodes.ALOAD, 2));
 		m.instructions.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, living, "isInvulnerableTo", "(Lnet/minecraft/server/level/ServerLevel;" + source + ")Z", false));
 		m.instructions.add(new org.objectweb.asm.tree.JumpInsnNode(Opcodes.IFNE, end));
-		if (forgeHurt) {
+		if (earlierHook) {
 			m.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
 			m.instructions.add(new VarInsnNode(Opcodes.ALOAD, 2));
 			m.instructions.add(new VarInsnNode(Opcodes.FLOAD, 3));
-			m.instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "net/minecraftforge/common/ForgeHooks", "onLivingHurt", "(L" + living + ";" + source + "F)F", false));
+			m.instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, EARLIER_HOOK_OWNER, EARLIER_HOOK, "(L" + living + ";" + source + "F)F", false));
 			m.instructions.add(new VarInsnNode(Opcodes.FSTORE, 3));
 		}
 		m.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
@@ -121,8 +123,8 @@ class VanillaDamageReadInjectorTest {
 			m.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
 			m.instructions.add(new org.objectweb.asm.tree.FieldInsnNode(Opcodes.GETFIELD, living, "damageContainers", "Ljava/util/Stack;"));
 			m.instructions.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "java/util/Stack", "peek", "()Ljava/lang/Object;", false));
-			m.instructions.add(new org.objectweb.asm.tree.TypeInsnNode(Opcodes.CHECKCAST, ForgeDamageSeamsInjector.CONTAINER));
-			m.instructions.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, ForgeDamageSeamsInjector.CONTAINER, "getNewDamage", "()F", false));
+			m.instructions.add(new org.objectweb.asm.tree.TypeInsnNode(Opcodes.CHECKCAST, VanillaDamageReadInjector.CONTAINER));
+			m.instructions.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, VanillaDamageReadInjector.CONTAINER, "getNewDamage", "()F", false));
 		} else {
 			m.instructions.add(new VarInsnNode(Opcodes.FLOAD, 3));
 		}
@@ -133,11 +135,6 @@ class VanillaDamageReadInjectorTest {
 		return m;
 	}
 
-	/** MinecraftForge's Hurt: the kernel's seam, or the merged body's own ForgeHooks.onLivingHurt. */
-	private static int forgeHurt(List<AbstractInsnNode> code) {
-		return firstIndex(code, i -> i instanceof MethodInsnNode c && (c.owner.equals(ForgeDamageSeamsInjector.RUNTIME) && c.name.equals("hurt")
-				|| c.owner.equals("net/minecraftforge/common/ForgeHooks") && c.name.equals("onLivingHurt")));
-	}
 
 	private static MethodNode hurt(byte[] bytes) {
 		ClassNode node = new ClassNode();

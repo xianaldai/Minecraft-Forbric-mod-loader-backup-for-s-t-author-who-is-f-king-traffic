@@ -62,17 +62,17 @@ RuntimeInteropPatcher}` + `run/{build-merged-base,assemble-*-runtime}.sh` 产出
 | `gate-m0` | 构建 + 整个单元测试套件（依据 JUnit XML 断言，不看 gradle 的退出码）+ 发现结果与一个独立解析器的比对 |
 | `gate-m1` / `gate-m3` | 合并基底在零 mod 下启动到 Done；两个 Forge 系的基线 + 一个真实的 `@Mod`，以原生方式加载 |
 | `gate-m2` / `gate-m2b` | 先是一个真实的 Fabric mod，再是完整的 fabric-api，全程没有任何 Fabric Loader |
-| `gate-m4` / `gate-m4-canary` / `gate-m7-neo` | 三个生态的真实第三方 mod 同在一个服务端；纯 NeoForge |
+| `gate-m4` / `gate-m4-canary` / `gate-m7-neo` | 真实的第三方 Fabric 和 NeoForge mod 同在一个服务端（运行时里仍带着 MinecraftForge）；纯 NeoForge |
 | `gate-m9-client` | 客户端这一半：97 个 jar 的整合包进入世界、统一的 Mods 界面、干净退出 |
-| `gate-m12` … `gate-m16` | 走真实 socket 的多人游戏、一款反作弊的判定、纯 Fabric 服务端、两个 Forge 系的网络 |
+| `gate-m12` … `gate-m16` | 走真实 socket 的多人游戏、一款反作弊的判定、纯 Fabric 服务端（带一个必须按 Fabric 加载的 Forge+Fabric 通用 jar）、通用 jar 经 NeoForge 半边的网络频道、NeoForge 配置阶段的配置同步 |
 | `gate-m17` | 安装器，按启动器的方式解析并启动 |
 | `gate-m24` | 一个故意失败的 mod：其余 mod 照常加载，失败也能归因 |
 | `gate-m24c` | 写进 `forbric-disabled.txt` 的 jar 谁都不加载，并在 `load-report.txt` 里点名；对照组照常加载它 |
-| `gate-m25-worldgen` | 两个 Forge 系的生物群系修改器金丝雀 mod 在保存下来的区域文件里留下各自不同的方块 |
-| `gate-m26-forgeclient` | Forge 客户端收到按键、渲染器、着色（tint）、提示框、几何加载器和创造模式物品栏的注册事件，并且 CLIENT_INIT/REGISTRATION 的桥清单报告完整 |
+| `gate-m25-worldgen` | NeoForge 的生物群系和结构修改器在保存下来的区域文件里留下金丝雀 mod 的方块，它的方块和交互事件原样返回 |
+| `gate-m26-forgeclient` | NeoForge 和 Fabric 的客户端金丝雀 mod 收到各自的注册事件，并能从实际使用的表里读回；客户端上只有 MinecraftForge 半边的 mod 被拒绝，并在游戏里询问玩家 |
 | `gate-m27-frame` | 97 个 jar 的客户端产出一张新生成的、不是黑屏的 Minecraft 截图 |
-| `gate-m28-forgeconfig` | Forge 的 COMMON 配置只加载一次，随后它原生的文件监视器读到对文件的实时修改；专用服务器从不打开 CLIENT 配置 |
-| `gate-m29-forgecaps` | 合并基底上的 MinecraftForge capability：僵尸和熔炉的 item-handler capability，并补跑了丢失的字段初始化器 |
+| `gate-m28-forgeconfig` | NeoForge 的 COMMON 配置只加载一次，随后它原生的文件监视器读到对文件的实时修改；专用服务器从不打开 CLIENT 配置 |
+| `gate-m29-forgecaps` | 只有 MinecraftForge 半边的 jar（金丝雀 mod，以及一个 Fabric 和 NeoForge 半边都是假的真实构建）被点名拒绝，中英文各一遍，记为 CONFIRMED 的必需项并有一行 FAILED，strict 服务端因此停下；只装 NeoForge 金丝雀 mod 时照常到 Done |
 | `gate-m30-attribution` | 只丢了自身**一部分**的 mod（某个 mixin 被排除或在创建世界时失败、某个订阅者无法注册、某个监听器挂在死事件上、某个延迟任务抛出异常、某个 jar 针对另一版 NeoForge 编译），日志、Mods 界面和 `load-report.txt` 都会点名该 mod 并给出原因；`load-report.txt` 会在世界启动后重写一次 |
 | `gate-m31-vanilla-parity` | 在零 mod、同一种子下，Forbric 的主世界和旁边同时生成的纯原版 26.2 服务端有相同的生物群系和相同的结构起点 |
 
@@ -84,13 +84,20 @@ RuntimeInteropPatcher}` + `run/{build-merged-base,assemble-*-runtime}.sh` 产出
 # GATE-PARALLEL: rundirs=server-kernel,canary mem=1500
 ```
 
-`rundirs` 写明它运行期间独占哪些目录（写了同一个名字的两个闸门从不一起运行），`mem` 是它占用的内存。`clone=<dir>:<VAR>` 则是申请共享夹具的一份私有副本：需要 `run/client-merged-pack` 的四个闸门各拿一份，在 APFS 上克隆那个 434 MB 的安装目录只要 0.17s，而且不占磁盘。之所以要有这一行，而不是直接用 `xargs -P`，是因为有三种冲突。第一，每个启动服务端的闸门都会把端口写进 `server.properties`，端口争抢的落败方会打印 `FAILED TO BIND TO PORT`，写一份崩溃报告，然后照样打印 `Stopping server`，于是干净关闭的断言通过，闸门改在 “Done” 那一条上变红，看起来像内核没能启动，而不是端口被占（`lib.sh` 的 `port_was_free` 现在会直接说出是哪个端口）。第二，`gate-m1`/`m2`/`m3` 共用 `run/server-kernel`，`gate-m9`/`m17`/`m22`/`m23`/`m27` 共用 `run/client-merged-pack`。第三，每个内核 JVM 启动时都不带 `-Xmx`，所以各自继承 JVM ergonomics 给出的“物理内存四分之一”上限。调度器给每个并发槽位分配独立的端口段，从不把写了同一个 rundir 的闸门排在一起，并把正在运行的集合控制在内存预算之内。**没有 `# GATE-PARALLEL:` 行的闸门会单独运行**，运行时也会在 stderr 上说明这一点。新闸门只会变慢，不会悄无声息地坏掉。
+`rundirs` 写明它运行期间独占哪些目录（写了同一个名字的两个闸门从不一起运行），`mem` 是它占用的内存。`clone=<dir>:<VAR>` 则是申请共享夹具的一份私有副本：需要 `run/client-merged-pack` 的四个闸门各拿一份，在 APFS 上克隆那个 434 MB 的安装目录只要 0.17s，而且不占磁盘。之所以要有这一行，而不是直接用 `xargs -P`，是因为有三种冲突。第一，每个启动服务端的闸门都会把端口写进 `server.properties`，端口争抢的落败方会打印 `FAILED TO BIND TO PORT`，写一份崩溃报告，然后照样打印 `Stopping server`，于是干净关闭的断言通过，闸门改在 “Done” 那一条上变红，看起来像内核没能启动，而不是端口被占（`lib.sh` 的 `port_was_free` 现在会直接说出是哪个端口）。第二，`gate-m1`/`m2`/`m3` 共用 `run/server-kernel`，`gate-m9`/`m17`/`m22`/`m23`/`m27` 共用 `run/client-merged-pack`。第三，每个内核 JVM 启动时都不带 `-Xmx`，所以各自继承 JVM ergonomics 给出的“物理内存四分之一”上限。调度器给每个并发槽位分配独立的端口段，从不把写了同一个 rundir 的闸门排在一起，并把正在运行的集合控制在内存预算之内。**没有 `# GATE-PARALLEL:` 行的闸门会单独运行**，运行时也会在 stderr 上说明这一点。新闸门只会变慢，不会悄无声息地坏掉。判据本身是计时的闸门在这一行里再加一个不带值的 `alone`，同样单独运行：gate-m12 的迟到 tick 上限和 `check_kept_up`（m12、m16）会把旁边闸门占用的 CPU 算成服务端跟不上；用了其中任何一项却没写 `alone` 的闸门，`GatesAllTest` 会报红。这一行里出现别的词，或者一个词都没有，整轮扫描在任何闸门运行之前就会停下（以前拼错的 `alon` 会被悄悄跳过）；说明文字写在同一行的 ` # ` 之后。
+
+有四件事让验证变短（开关见 `gates-all.sh --help`，理由见 `run/compat/gate_cache.py`）：
+
+- **最长的先跑。** 槽位多于一个时，闸门按上次测得的耗时从长到短启动（先验值在 `run/compat/gate-durations.tsv`）。按编号顺序时，最长的 `gate-m58` 最后才启动，然后独自跑了十二分钟。
+- **一次扫描只构建一次。** `gates-all.sh` 只构建一次 jar、只解析一次启动类路径，交给每一次启动（`FORBRIC_PREBUILT_*`）；只要 jar 没变，启动器就跳过自己的两次 Gradle。
+- **判定缓存。** 输入与某次 GREEN 运行完全相同的闸门不再重跑，直接报 `GREEN (…; cached: …)` 并附上那次运行的日志。输入包括：仓库里所有非说明文字的文件、闸门自己的脚本（跑单元测试的闸门还包括所有闸门脚本和 `run/compat/reports/` 以外的说明文字，因为测试会读它们）、暂存/游戏目录下和 `run/` 下的每个 jar（`run/canary/` 除外：那是 canary 构建脚本的产物，计入的是它们的源码；按条目 CRC，不看时间戳）、继承的 `FORBRIC_*`/`MC_*`/`JAVA_*` 环境变量、启动器读的 `BASE`/`NEO_RT`/`NATIVE_REF`/`VANILLA_*`，以及 JVM。所有工作树共用这份缓存；`--release` 从不读它；`--no-cache` 关掉它——手改过夹具里的存档之后必须用。
+- **不再跑中文。** 会随语言变化的只有加载报告、合并报告、崩溃归因和对话框；闸门断言的每一行日志在任何语言下都是英文。普通单元测试会对每个读系统语言的组件分别强制 zh_CN 和英文并断言两种文字，所以单元测试和闸门扫描都不再用中文另跑一遍。
 
 可移植的 Windows 基线采集和负控制见[兼容性协议](run/compat/PROTOCOL.md)。
 
 其余闸门（`m8`、`m10`、`m11`、`m18`–`m23`）各自锁定一个曾经发布出去的缺陷。上次统计时，二十五个闸门里有十六个已有一天没跑过，其中一个一直是红的。所以 `gate-m0` 现在拒绝为没有实际执行的测试任务出报告。
 
-旧的 `forbric-loader` 仍保持可运行，用作**差分对照基准**，并且仍负责构建内核所用的共享游戏产物。它无法验证被移除的有状态父类；声明 `required-ancestor-compositions.tsv` 的基底必须使用已注册状态协议证明的内核。
+旧的 `forbric-loader` 仍保持可运行，用作**差分对照基准**，并且仍负责构建内核所用的共享游戏产物。它会拒绝声明了被移除的有状态父类（`required-ancestor-compositions.tsv`）的合并基底；内核运行在 NeoForge 自己的基底上，而该基底不声明任何此类父类。
 
 ## 通用兼容规则与协议扩展
 
@@ -98,9 +105,9 @@ Mixin 的跳过、接口保留、调用重定位和局部变量选择来自实�
 
 mod 写给其他 mod 的声明可以跨生态读取（`CrossEcosystemDeclarations`）。Fabric mod 的 `custom` 值会出现在它的 `[modproperties]` 表里，类型与 FML 读 TOML 得到的一致。它在带命名空间的 entrypoint 键下声明的类名也会出现在同名键下，前提是某个读取方自己的字节码把这个键当 `String` 读，且没有读取方把它当成别的类型。Forge 家族 mod 带命名空间、值是它自己 jar 里定义的类名的属性，会成为同名键的 Fabric entrypoint；其他值只保留为属性。一个从 Forge 家族 `ModList` 读 `getModProperties()` 的类，在这个类里能看到有声明的 Fabric mod（`DeclarationReaderModListInjector`）；追加这些 Fabric mod 时如果出错，这个类拿到原生结果，并记一条点名它的 `SUSPECTED` finding；Mods 界面、握手、版本检查等其他 `ModList` 读取方仍然只看到原生列表。
 
-可选 SDK 通过 `META-INF/services/net.forbric.api.ProtocolExtension` 提供独立协议适配器，每个游戏类加载器拥有自己的注册表。新增协议可以提供缺失 API、注册转换、接收配置生命周期和提供配置界面。合并掉有状态父类时，产物会声明 `required-ancestor-compositions.tsv` 要求；`AncestorComposition` 必须证明最终定义保留了该状态协议，否则加载会明确失败。
+可选 SDK 通过 `META-INF/services/net.forbric.api.ProtocolExtension` 提供独立协议适配器，每个游戏类加载器拥有自己的注册表。新增协议可以提供缺失 API、注册转换、接收配置生命周期和提供配置界面。
 
-共享 API 提供 `VirtualGetters`，按完整 JVM 返回类型选择公开 getter；`VirtualProperties` 根据已定义的公开 getter 证明可写存储。它们可以用于任意声明类，并保留虚调用分派；属性写入前必须先获得实际 getter/字段证据。协议提供者在构造时不能链接游戏类，应通过 `Context.gameLoader()` 解析游戏对象，具体约定见 `ProtocolExtension`。
+共享 API 提供 `VirtualProperties`，根据已定义的公开 getter 证明可写存储。它可以用于任意声明类，并保留虚调用分派；属性写入前必须先获得实际 getter/字段证据。协议提供者在构造时不能链接游戏类，应通过 `Context.gameLoader()` 解析游戏对象，具体约定见 `ProtocolExtension`。
 
 ## 构建与运行
 

@@ -32,7 +32,7 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TryCatchBlockNode;
 
 /**
- * Two calls in the registration window that used to cost far more than themselves when they failed.
+ * Calls in the registration window that used to cost far more than themselves when they failed.
  *
  * <p>These are bytecode-shape assertions, in the idiom {@link KernelLifecycleFailureReportingTest} already uses,
  * because what is being pinned is structural: whether a call sits inside a handler of its own. Driving the real
@@ -43,62 +43,84 @@ class KernelRegistrationIsolationTest {
 	private static final Path CLASSES =
 			Path.of(System.getProperty("user.dir"), "build", "classes", "java", "main").normalize();
 
+	/**
+	 * What NeoForge's {@code GameData.postRegisterEvents} throws stops the boot, as native NeoForge stops it (owner ruling D82):
+	 * the handler covering the reflective call hands the throw to {@code RegistrationStop.stop} and throws what it returns,
+	 * and does not cover the Fabric step after it, which a stop must skip; the window's outer catch lets the stop through
+	 * instead of reporting "could not register ecosystem content" and booting on.
+	 *
+	 * <p>This used to pin the opposite — the dispatch's failure stopping at dispatchRegisterEvents so the rest of the window
+	 * ran — which was the containment D82 retired: NeoForge rolls every registry back to vanilla on that throw, and the boot
+	 * carried on with every mod's content gone. RegisterEventsSeamWeaveTest drives the behaviour; this pins the shape.
+	 */
 	@Test
-	void fireRegisterEventsCannotTakeTheRestOfTheWindowWithIt() throws Exception {
-		// It resolves a GAME-side class reflectively, so a LinkageError inside it reaches the window's outer
-		// catch and skips everything after: the traditional-Forge baseline, the Fabric main entrypoints, the
-		// attribute events, the spawn-placement event, BlockEntityTypeAddBlocksEvent and the modded creative-tab
-		// categories. The one WARN that reported it blamed the window rather than the call.
+	void whatTheRegisterEventDispatchThrowsStopsTheBoot() throws Exception {
+		MethodNode dispatch = method("net/forbric/kernel/boot/KernelLifecycle", "dispatchRegisterEvents");
+		assertTrue(dispatch != null,
+				"KernelLifecycle.dispatchRegisterEvents not found in the compiled src/main classes, which exist before any "
+						+ "test runs");
+		assertTrue(caughtAndIsolatedFrom(dispatch, "postRegisterEvents", "runAfterDispatch"),
+				"postRegisterEvents must sit in a Throwable handler of its own that does not also cover the Fabric step");
+		assertTrue(handlerCallsThenThrows(dispatch, "postRegisterEvents", "stop"),
+				"the handler covering postRegisterEvents must hand the throw to RegistrationStop.stop and throw the stop");
 		MethodNode window = method("net/forbric/kernel/boot/KernelLifecycle", "registerNeoForgeContent");
-		assertTrue(window != null,
-				"KernelLifecycle.registerNeoForgeContent not found in the compiled src/main classes, which exist "
-						+ "before any test runs");
+		assertTrue(window != null && indexOfCall(window, "dispatchRegisterEvents") >= 0,
+				"registerNeoForgeContent must dispatch RegisterEvent through dispatchRegisterEvents");
+		assertTrue(handlerCallsThenThrows(window, "dispatchRegisterEvents", "isStop"),
+				"registerNeoForgeContent's catch around the dispatch must let RegistrationStop's stop through");
+	}
 
-		// "Is it inside SOME try block" is not the question, and asking it is how this assertion was toothless
-		// for its first draft: the whole window body already sits in one. The question is whether the handler
-		// that covers this call ALSO covers the work that has to survive it. KernelForgeBaseline.register is that
-		// work -- the traditional-Forge baseline is the first thing the old failure skipped.
-		assertTrue(isolatedFrom(window, "fireRegisterEvents", "register"),
-				"fireRegisterEvents must sit in a handler that does NOT also cover KernelForgeBaseline.register, "
-						+ "or a LinkageError inside it still takes the Forge baseline and everything after it");
+	/**
+	 * True when a Throwable handler covers {@code calleeName} and its code, up to its first {@code ATHROW}, calls a
+	 * {@code RegistrationStop} method named {@code stopCall}.
+	 */
+	private static boolean handlerCallsThenThrows(MethodNode method, String calleeName, String stopCall) {
+		int at = indexOfCall(method, calleeName);
+		if (at < 0) return false;
+		AbstractInsnNode[] body = method.instructions.toArray();
+		for (TryCatchBlockNode block : method.tryCatchBlocks) {
+			if (!"java/lang/Throwable".equals(block.type)) continue;
+			int start = method.instructions.indexOf(block.start);
+			int end = method.instructions.indexOf(block.end);
+			if (at <= start || at >= end) continue;
+			boolean called = false;
+			for (int i = method.instructions.indexOf(block.handler); i < body.length; i++) {
+				if (body[i] instanceof MethodInsnNode call && call.owner.equals("net/forbric/kernel/boot/RegistrationStop")
+						&& call.name.equals(stopCall)) called = true;
+				if (body[i].getOpcode() == org.objectweb.asm.Opcodes.ATHROW) {
+					if (called) return true;
+					break;
+				}
+			}
+		}
+		return false;
 	}
 
 	@Test
 	void theSiblingCallsThisWasModelledOnAreStillGuardedToo() {
-		// If registerAll ever loses ITS handler, the assertion above is still green while the same class of
-		// failure is back -- so the model is pinned as well as the copy.
+		// The kernel's own wiring of the mods' @EventBusSubscriber classes is not NeoForge's registration: a LinkageError
+		// there is the kernel's to report, and it must not skip the window, so it keeps a handler of its own.
 		MethodNode window = method("net/forbric/kernel/boot/KernelLifecycle", "registerNeoForgeContent");
 		assertTrue(window != null,
 				"KernelLifecycle.registerNeoForgeContent not found in the compiled src/main classes, which exist "
 						+ "before any test runs");
 
-		assertTrue(isolatedFrom(window, "registerAll", "register"),
+		assertTrue(isolatedFrom(window, "registerAll", "dispatchRegisterEvents"),
 				"KernelEventSubscribers.registerAll is guarded for the same reason and its comment says so");
 	}
 
-	@Test
-	void oneForgeModsRegistryListenerCannotCostEveryOtherModsRegistries() throws Exception {
-		// Traditional Forge's NewRegistryEvent goes out on a GLOBAL bus, so there is no seam between listeners.
-		// There is one between the post and the fill, and that is where the cost was: a listener throwing used to
-		// skip fill() entirely, losing every Forge custom registry in the instance -- including those created by
-		// listeners that had already run.
-		MethodNode fire = method("net/forbric/kernel/boot/KernelForgeBaseline", "fireNewRegistryEvent");
-		assertTrue(fire != null,
-				"KernelForgeBaseline.fireNewRegistryEvent not found in the compiled src/main classes, which exist "
-						+ "before any test runs");
-
-		// The post is reflective -- KernelForgeModContext.single(bus.getClass(), "post").invoke(...) -- so it is
-		// located by the resolver call, not by a method named "post", which does not exist in the bytecode.
-		int post = indexOfCall(fire, "single");
-		int fill = indexOfCall(fire, "getDeclaredMethod");
-		assertTrue(post >= 0, "the event is still posted through KernelForgeModContext.single here");
-		assertTrue(fill >= 0, "and fill is still resolved here");
-
-		assertTrue(guardedRange(fire, post), "the post needs a handler of its own, or one mod's listener takes "
-				+ "fill() with it");
-		assertTrue(fill > post, "and fill must still be reached after it");
-		assertTrue(fire.tryCatchBlocks.size() >= 2,
-				"the outer handler alone means the post and the fill still share a fate");
+	/** True when a catch-all (Throwable) handler covers {@code calleeName} and does NOT cover {@code survivorName}. */
+	private static boolean caughtAndIsolatedFrom(MethodNode method, String calleeName, String survivorName) {
+		int at = indexOfCall(method, calleeName);
+		int survivor = indexOfCall(method, survivorName);
+		if (at < 0 || survivor < 0) return false;
+		for (TryCatchBlockNode block : method.tryCatchBlocks) {
+			if (!"java/lang/Throwable".equals(block.type)) continue;
+			int start = method.instructions.indexOf(block.start);
+			int end = method.instructions.indexOf(block.end);
+			if (at > start && at < end && !(survivor > start && survivor < end)) return true;
+		}
+		return false;
 	}
 
 	/**
@@ -117,16 +139,6 @@ class KernelRegistrationIsolationTest {
 			int start = method.instructions.indexOf(block.start);
 			int end = method.instructions.indexOf(block.end);
 			if (at > start && at < end && !(survivor > start && survivor < end)) return true;
-		}
-		return false;
-	}
-
-	/** True when instruction {@code index} lies inside some try/catch range of this method. */
-	private static boolean guardedRange(MethodNode method, int index) {
-		for (TryCatchBlockNode block : method.tryCatchBlocks) {
-			int start = method.instructions.indexOf(block.start);
-			int end = method.instructions.indexOf(block.end);
-			if (index > start && index < end) return true;
 		}
 		return false;
 	}

@@ -21,7 +21,7 @@ import org.objectweb.asm.tree.MethodNode;
 
 import net.forbric.kernel.transform.ItemUseOnInjector;
 
-/** fabric-api's ItemEvents.USE_ON wrap, as shipped, against the merged ItemStack with and without the kernel's relay. */
+/** fabric-api's ItemEvents.USE_ON wrap, as shipped, against the staged (NeoForge) ItemStack with and without the kernel's relay. */
 @ResourceLock("system-properties")
 class MixinRelocatedCallTest {
 	private static final String STACK_MIXIN = "net/fabricmc/fabric/mixin/event/interaction/ItemStackMixin";
@@ -39,12 +39,51 @@ class MixinRelocatedCallTest {
 		assertEquals(0, MixinRelocatedCall.adapt(mixin, name -> stack), "a second pass changes nothing");
 	}
 
+	/**
+	 * The genuine NeoForge base: its useOn posts ITEM_AFTER_BLOCK itself and makes the call in CommonHooks.onPlaceItemIntoWorld
+	 * (server) and a lambda (client), never in useOn, so fabric-api's wrap has nothing to bind until ItemUseOnInjector routes
+	 * both through the relay.
+	 */
+	@Test void onTheGenuineBaseFabricsUseOnWrapSelectsTheRelay() throws Exception {
+		byte[] raw = net.forbric.kernel.transform.ChainReferences.read(net.forbric.kernel.transform.ChainReferences.genuineJars(),
+				"net/minecraft/world/item/ItemStack");
+		ClassNode genuine = node(raw), mixin = fabric();
+		assertEquals(0, MixinRelocatedCall.adapt(mixin, name -> genuine), "premise: NeoForge's body alone has no relay to move to");
+		assertEquals(List.of("useOn"), selectors(mixin, "handleUseOnEvent"));
+		ClassNode stack = node(new ItemUseOnInjector().transform("net.minecraft.world.item.ItemStack", raw, null));
+		assertEquals(1, MixinRelocatedCall.adapt(mixin, name -> stack));
+		assertEquals(List.of(RELAY), selectors(mixin, "handleUseOnEvent"));
+		assertEquals(List.of("use"), selectors(mixin, "handleUseEvent"), "the use wrap binds in use and is not touched");
+	}
+
+	private static ClassNode node(byte[] bytes) {
+		ClassNode node = new ClassNode();
+		new ClassReader(bytes).accept(node, 0);
+		return node;
+	}
+
 	@Test void nothingMovesWithoutTheRelay() throws Exception {
-		ClassNode mixin = fabric(), merged = merged(false);
-		assertEquals(0, MixinRelocatedCall.adapt(mixin, name -> merged), "the transformer did not run: no proof");
+		ClassNode mixin = fabric(), base = staged(false);
+		assertEquals(0, MixinRelocatedCall.adapt(mixin, name -> base), "the transformer did not run: no proof");
 		assertEquals(List.of("useOn"), selectors(mixin, "handleUseOnEvent"));
 		ClassNode vanilla = game(TestFixtures.vanillaJar());
 		assertEquals(0, MixinRelocatedCall.adapt(mixin, name -> vanilla), "vanilla's useOn makes the call itself");
+	}
+
+	/**
+	 * A NeoForge useOn ItemUseOnInjector declines — its client lambda does one thing more than {@code getItem().useOn(context)}
+	 * — keeps fabric-api's wrap where it was compiled: the class gains only a bridge that calls Item.useOn itself and no
+	 * relay. useOn still makes no Item.useOn call, which is the half of the proof a declined body always meets, so the
+	 * relay is the whole of what stops the move. Measured before: the relay went in ahead of the decline, and the wrap
+	 * moved onto a method only the server's call reached.
+	 */
+	@Test void aDeclinedBodyGivesTheWrapNoRelayToMoveTo() throws Exception {
+		ClassNode declined = staged(true, true), routed = relayed();
+		assertTrue(declined.methods.stream().anyMatch(m -> m.name.equals("forbric$useOnItemFor")), "premise: the bridge went in");
+		ClassNode mixin = fabric();
+		assertEquals(0, MixinRelocatedCall.adapt(mixin, name -> declined));
+		assertEquals(List.of("useOn"), selectors(mixin, "handleUseOnEvent"), "the wrap stays on useOn");
+		assertEquals(1, MixinRelocatedCall.adapt(mixin, name -> routed), "control: the same wrap moves onto a routed body");
 	}
 
 	@Test void theSwitchLeavesItAlone() throws Exception {
@@ -88,19 +127,37 @@ class MixinRelocatedCallTest {
 	}
 
 	private static ClassNode relayed() throws Exception {
-		return merged(true);
+		return staged(true);
 	}
 
-	private static ClassNode merged(boolean relayed) throws Exception {
-		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), "actual game required");
+	private static ClassNode staged(boolean relayed) throws Exception {
+		return staged(relayed, false);
+	}
+
+	/** {@code declined}: the client lambda gets a {@code dup; pop} after {@code getItem()}, which is not the reviewed shape. */
+	private static ClassNode staged(boolean relayed, boolean declined) throws Exception {
+		Path jar = TestFixtures.stagedBase();
+		TestFixtures.requireFile(Fixture.STAGED, jar, "actual game required");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			byte[] bytes = zip.getInputStream(zip.getEntry("net/minecraft/world/item/ItemStack.class")).readAllBytes();
+			if (declined) bytes = offShape(bytes);
 			if (relayed) bytes = new ItemUseOnInjector().transform("net.minecraft.world.item.ItemStack", bytes, null);
 			ClassNode node = new ClassNode();
 			new ClassReader(bytes).accept(node, 0);
 			return node;
 		}
+	}
+
+	private static byte[] offShape(byte[] bytes) {
+		ClassNode stack = node(bytes);
+		MethodNode lambda = stack.methods.stream().filter(m -> m.name.equals("lambda$useOn$0")).findFirst().orElseThrow();
+		org.objectweb.asm.tree.AbstractInsnNode getItem = java.util.Arrays.stream(lambda.instructions.toArray())
+				.filter(i -> i instanceof org.objectweb.asm.tree.MethodInsnNode call && call.name.equals("getItem")).findFirst().orElseThrow();
+		lambda.instructions.insert(getItem, new org.objectweb.asm.tree.InsnNode(org.objectweb.asm.Opcodes.POP));
+		lambda.instructions.insert(getItem, new org.objectweb.asm.tree.InsnNode(org.objectweb.asm.Opcodes.DUP));
+		org.objectweb.asm.ClassWriter writer = new org.objectweb.asm.ClassWriter(org.objectweb.asm.ClassWriter.COMPUTE_MAXS);
+		stack.accept(writer);
+		return writer.toByteArray();
 	}
 
 	private static ClassNode game(Path jar) throws Exception {

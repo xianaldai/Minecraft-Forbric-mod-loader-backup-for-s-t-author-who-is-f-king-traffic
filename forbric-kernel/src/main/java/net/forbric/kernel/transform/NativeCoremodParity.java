@@ -23,19 +23,18 @@ import org.objectweb.asm.tree.MethodNode;
  * What NeoForge's own coremods do to the game, done by the kernel, after Mixin, where NeoForge does it.
  *
  * <p>NeoForge ships its coremods in a separate jar ({@code neoforge-coremods}, a {@code ClassProcessorProvider}) that
- * the kernel never loads, so on the merged base — whose bodies are mostly NeoForge's and are written for those
- * rewrites — none of them ever ran:
+ * the kernel never loads, so on NeoForge's base — whose bodies are written for those rewrites — none of them would
+ * run:
  * <ul>
  *   <li>{@code FlowerPotBlock.potted} → {@code getPotted()}. NeoForge's constructors store null in the field and
  *       keep the plant in a supplier, so every pot threw on pick-block, planting and taking a plant out.</li>
  *   <li>{@code Biome.climateSettings}/{@code specialEffects} → {@code getModifiedClimateSettings()}/
  *       {@code getModifiedSpecialEffects()}, and {@code Structure.settings} → {@code getModifiedStructureSettings()}.
- *       Without them NeoForge's (and the bridged MinecraftForge) biome and structure modifiers changed nothing that
- *       reads climate, colours, structure biomes, spawns, step or terrain adaptation.</li>
+ *       Without them NeoForge's biome and structure modifiers changed nothing that reads climate, colours, structure
+ *       biomes, spawns, step or terrain adaptation.</li>
  *   <li>{@code mob.finalizeSpawn(...)} in the 26 classes of NeoForge's {@code finalize_spawn_targets.json} →
- *       its event hook. Neither family's finalization event was ever posted outside a spawner. Here the calls go
- *       to KernelFinalizeSpawn, which posts both families' events and finalizes once; TrialSpawner's call, which
- *       the merged base already routes to NeoForge's spawner hook, goes to its two-family twin.</li>
+ *       {@code EventHooks.finalizeMobSpawn}, the call NeoForge's coremod writes there. NeoForge's finalization event
+ *       was never posted outside a spawner.</li>
  * </ul>
  *
  * <p>The rules are NeoForge's own: a field read is rewritten in every method of the class except one whose
@@ -61,17 +60,12 @@ public final class NativeCoremodParity {
 	public static final String STRUCTURE = "forbric.structureModifiedView";
 	public static final String FINALIZE = "forbric.finalizeSpawnRedirect";
 
-	static final String RUNTIME = "net/forbric/kernel/runtime/KernelFinalizeSpawn";
 	static final String FINALIZE_NAME = "finalizeSpawn";
+	/** NeoForge's own hook, where its coremod sends each {@code finalizeSpawn} call: the mob first, then the same arguments. */
+	static final String NEO_FINALIZE_HOOK = "finalizeMobSpawn";
 	static final String FINALIZE_DESC = "(Lnet/minecraft/world/level/ServerLevelAccessor;Lnet/minecraft/world/DifficultyInstance;"
 			+ "Lnet/minecraft/world/entity/EntitySpawnReason;Lnet/minecraft/world/entity/SpawnGroupData;)Lnet/minecraft/world/entity/SpawnGroupData;";
-	static final String TRIAL_SPAWNER = "net/minecraft/world/level/block/entity/trialspawner/TrialSpawner";
 	static final String NEO_HOOKS = "net/neoforged/neoforge/event/EventHooks";
-	static final String NEO_SPAWNER_HOOK = "finalizeMobSpawnSpawner";
-	static final String NEO_SPAWNER_DESC = "(Lnet/minecraft/world/entity/Mob;Lnet/minecraft/world/level/ServerLevelAccessor;"
-			+ "Lnet/minecraft/world/DifficultyInstance;Lnet/minecraft/world/entity/EntitySpawnReason;"
-			+ "Lnet/minecraft/world/entity/SpawnGroupData;Lnet/neoforged/neoforge/common/extensions/IOwnedSpawner;Z)"
-			+ "Lnet/neoforged/neoforge/event/entity/living/FinalizeSpawnEvent;";
 
 	/** One field-to-getter rewrite: {@code GETFIELD owner.field:desc} becomes {@code owner.getter()desc}. */
 	record FieldGetter(String field, String desc, String getter, String property) {
@@ -89,7 +83,7 @@ public final class NativeCoremodParity {
 					new FieldGetter("settings", "Lnet/minecraft/world/level/levelgen/structure/Structure$StructureSettings;",
 							"getModifiedStructureSettings", STRUCTURE)));
 
-	/** NeoForge 26.2.0.88's {@code finalize_spawn_targets.json}; MinecraftForge's list is the same plus TrialSpawner. */
+	/** NeoForge 26.2.0.88's {@code finalize_spawn_targets.json} (the coremods jar of 26.2.0.93 is entry-for-entry the same). */
 	static final Set<String> FINALIZE_TARGETS = Set.of(
 			"net/minecraft/gametest/framework/GameTestEntityBuilder",
 			"net/minecraft/server/commands/RaidCommand",
@@ -128,7 +122,7 @@ public final class NativeCoremodParity {
 
 	/** Whether {@code apply} would look at this class at all (a cheap test, for the loader's hot path). */
 	static boolean concerns(String internalName) {
-		return GETTERS.containsKey(internalName) || FINALIZE_TARGETS.contains(internalName) || TRIAL_SPAWNER.equals(internalName);
+		return GETTERS.containsKey(internalName) || FINALIZE_TARGETS.contains(internalName);
 	}
 
 	/**
@@ -142,7 +136,7 @@ public final class NativeCoremodParity {
 		try {
 			ClassNode node = new ClassNode();
 			new ClassReader(bytes).accept(node, 0);
-			int reads = 0, finalizes = 0, trial = 0;
+			int reads = 0, finalizes = 0;
 			for (FieldGetter rule : GETTERS.getOrDefault(internalName, List.of())) {
 				if (on(rule.property())) reads += rewriteReads(node, rule);
 			}
@@ -150,15 +144,14 @@ public final class NativeCoremodParity {
 				finalizes = redirectFinalize(node);
 				if (finalizes == 0) {
 					report(internalName, "finalize-spawn-redirect", "NeoForge rewrites mob.finalizeSpawn in this class, "
-							+ "but it has no such call on this base; its spawns post neither family's finalization event");
+							+ "but it has no such call on this base; its spawns post no finalization event");
 				}
 			}
-			if (TRIAL_SPAWNER.equals(internalName) && on(FINALIZE)) trial = routeTrialSpawner(node);
-			if (reads <= 0 && finalizes == 0 && trial == 0) return bytes;
+			if (reads <= 0 && finalizes == 0) return bytes;
 			ClassWriter writer = new ClassWriter(0);
 			node.accept(writer);
 			ForbricLog.info("[Forbric/Coremod] %s: %s", internalName.substring(internalName.lastIndexOf('/') + 1),
-					describe(reads, finalizes, trial));
+					describe(reads, finalizes));
 			return writer.toByteArray();
 		} catch (Throwable failure) {
 			Caught.warn(failure, "[Forbric/Coremod] left %s as Mixin wove it", internalName);
@@ -166,16 +159,12 @@ public final class NativeCoremodParity {
 		}
 	}
 
-	private static String describe(int reads, int finalizes, int trial) {
+	private static String describe(int reads, int finalizes) {
 		StringBuilder out = new StringBuilder();
 		if (reads > 0) out.append(reads).append(" field read(s) now go through NeoForge's getter");
 		if (finalizes > 0) {
 			if (out.length() > 0) out.append("; ");
-			out.append(finalizes).append(" finalizeSpawn call(s) now post both families' events and finalize once");
-		}
-		if (trial > 0) {
-			if (out.length() > 0) out.append("; ");
-			out.append("the trial spawner's finalization now also posts MinecraftForge's event");
+			out.append(finalizes).append(" finalizeSpawn call(s) now go through NeoForge's finalization hook");
 		}
 		return out.toString();
 	}
@@ -203,7 +192,9 @@ public final class NativeCoremodParity {
 		}
 		int rewritten = 0;
 		for (MethodNode method : node.methods) {
-			if (method.desc.equals(getterDesc) || method.name.equals("<init>") || method.instructions == null) continue;
+			if (method.name.equals("<init>") || method.instructions == null) continue;
+			// NeoForge keeps every method shaped like the getter raw.
+			if (method.desc.equals(getterDesc)) continue;
 			for (AbstractInsnNode insn : method.instructions.toArray()) {
 				if (insn.getOpcode() == Opcodes.GETFIELD && insn instanceof FieldInsnNode read && read.owner.equals(node.name)
 						&& read.name.equals(rule.field()) && read.desc.equals(rule.desc())) {
@@ -235,42 +226,13 @@ public final class NativeCoremodParity {
 			for (AbstractInsnNode insn : method.instructions.toArray()) {
 				if (insn.getOpcode() == Opcodes.INVOKEVIRTUAL && insn instanceof MethodInsnNode call
 						&& call.name.equals(FINALIZE_NAME) && call.desc.equals(FINALIZE_DESC)) {
-					method.instructions.set(call, new MethodInsnNode(Opcodes.INVOKESTATIC, RUNTIME, "finalizeMobSpawn",
+					method.instructions.set(call, new MethodInsnNode(Opcodes.INVOKESTATIC, NEO_HOOKS, NEO_FINALIZE_HOOK,
 							"(Lnet/minecraft/world/entity/Mob;" + FINALIZE_DESC.substring(1), false));
 					redirected++;
 				}
 			}
 		}
 		return redirected;
-	}
-
-	/**
-	 * The trial spawner's NeoForge finalization hook goes to the kernel, which posts MinecraftForge's event too — except in
-	 * a method that already calls MinecraftForge's own spawner hook (a merge that keeps both sides' edits can write both
-	 * families' calls into one body), where it would post MinecraftForge's a second time.
-	 */
-	static int routeTrialSpawner(ClassNode node) {
-		int routed = 0, native_ = 0;
-		for (MethodNode method : node.methods) {
-			if (method.instructions == null) continue;
-			if (SpawnerFinalizeInjector.carriesForgeFinalize(node.name, method)) {
-				native_++;
-				continue;
-			}
-			for (AbstractInsnNode insn : method.instructions) {
-				if (insn.getOpcode() == Opcodes.INVOKESTATIC && insn instanceof MethodInsnNode call && call.owner.equals(NEO_HOOKS)
-						&& call.name.equals(NEO_SPAWNER_HOOK) && call.desc.equals(NEO_SPAWNER_DESC)) {
-					call.owner = RUNTIME;
-					call.name = "finalizeTrialSpawner";
-					routed++;
-				}
-			}
-		}
-		if (routed == 0 && native_ == 0) {
-			report(node.name, "finalize-spawn-trial", "the trial spawner does not call NeoForge's spawner finalization hook "
-					+ "on this base; MinecraftForge's finalization event is not posted for its mobs");
-		}
-		return routed;
 	}
 
 	private static void report(String internalName, String id, String detail) {

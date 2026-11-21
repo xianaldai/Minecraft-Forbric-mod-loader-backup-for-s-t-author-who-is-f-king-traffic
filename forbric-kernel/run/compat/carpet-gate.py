@@ -12,22 +12,34 @@ import subprocess
 import tempfile
 import zipfile
 
-CHECKS = 27
+CHECKS = 34
 # Exactly these fail without the adapter (-Dforbric.playerWorldCallbacks=off): each needs a callback it restores.
 # fill.direct.lamp.false is not one any more: MixinRetarget's helper-edge rule carries Level_fillUpdatesMixin's
 # updateNeighborsMaybe redirect from setBlock onto markAndNotifyBlock on its own, so it passes with the adapter off too
 # (measured on HEAD 4f83bc06 and after; native Fabric passes it as well).
-CARPET = {'fill.shape.false', 'fluid.blackstone.true', 'fluid.deepslate.true',
-          'fluid.blackstone.neighbor', 'fluid.deepslate.neighbor',
+# fluid.blackstone.true and fluid.deepslate.true are not either: NeoForge 26.2.0.93's LiquidBlock.onPlace calls vanilla's
+# shouldSpreadLiquid (javap offset 4), so Carpet's two fluid rules bind there as compiled and run on placement with the
+# adapters off (measured on the genuine stage). Only a neighbour change asks NeoForge's registry instead.
+CARPET = {'fill.shape.false', 'fluid.blackstone.neighbor', 'fluid.deepslate.neighbor',
           'swap.scarpetCancel.true', 'swap.scarpetCancel.false', 'swap.scarpetClearsMain', 'swap.nativeVeto',
           'break.creative.scarpetCancel.true', 'break.creative.scarpetCancel.false',
           'break.survival.scarpetCancel.true', 'break.survival.scarpetCancel.false',
           'break.creative.bedCancel', 'break.survival.unstableTntCancel'}
-# Vanilla's own lava/water reactions. They failed in the baseline too until FluidInteractionsInjector: placement asked
-# MinecraftForge's neutered registry, and only Carpet's adapter happened to fall back to NeoForge's. Not Carpet's;
-# they must pass with the adapter off.
+# Vanilla's own lava/water reactions, not Carpet's: they must pass in every run. On placement NeoForge's LiquidBlock.onPlace
+# calls vanilla's shouldSpreadLiquid; on a neighbour change its neighborChanged asks NeoForge's FluidInteractionRegistry
+# (vanilla's reactions, in vanilla's direction order), which the kernel's neighbour-change wrap asks after running Carpet's
+# rules where vanilla would have reached them. The .neighbor twins are that wrap's negative controls: with Carpet's rules
+# on, a source stays obsidian, a reaction above zero stays cobblestone, the rule off gives cobblestone, basalt keeps
+# precedence over blackstone and (blue ice reached before water) over deepslate, lava with no water stays lava, and
+# flowing water next to water stays water.
 BASE_FLUID = {'fluid.sourceStaysObsidian', 'fluid.aboveZeroStaysCobblestone', 'fluid.basaltPrecedesBlackstone',
-              'fluid.deepslate.false'}
+              'fluid.deepslate.false', 'fluid.sourceStaysObsidian.neighbor', 'fluid.aboveZeroStaysCobblestone.neighbor',
+              'fluid.deepslate.false.neighbor', 'fluid.basaltPrecedesBlackstone.neighbor',
+              'fluid.basaltPrecedesDeepslate.neighbor', 'fluid.noWaterNoDeepslate.neighbor',
+              'fluid.flowingWaterStaysWater.neighbor'}
+# Exactly these fail with only the neighbour-change wrap off (-Dforbric.fluidReactionNeighbourChange=off): the rules then
+# run where NeoForge's base runs them, on placement alone.
+NEIGHBOUR = {'fluid.blackstone.neighbor', 'fluid.deepslate.neighbor'}
 # The mixins the adapters rewrite. With them on, the preflight census judges what Mixin is handed, so none of these
 # may be left suspected or "applies only partially"; with them off, the first two must be (the check can fail).
 ADAPTED = ('Level_fillUpdatesMixin', 'ServerPlayerGameMode_scarpetEventsMixin',
@@ -48,7 +60,8 @@ def stale(console, compatibility):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--carpet', type=Path, required=True, help='Unmodified fabric-carpet-26.2+v260616.jar')
-    parser.add_argument('--staged-root', type=Path, help='The shared forbric-loader/run directory')
+    parser.add_argument('--staged-root', type=Path, help='The staged run/ directory (default: $FORBRIC_OLD/run)')
+    parser.add_argument('--port', type=int, default=0, help='First server port; each run takes the next (0: any free one)')
     parser.add_argument('--output', type=Path, help='A new directory for logs, worlds and reports')
     args = parser.parse_args()
     kernel = Path(__file__).resolve().parents[2]
@@ -62,15 +75,15 @@ def main():
     output = (args.output or kernel / 'build/verification' / ('carpet-' + datetime.now().strftime('%Y%m%d-%H%M%S'))).resolve()
     output.mkdir(parents=True, exist_ok=False)
     root = kernel / 'canary/carpet'
+    # NeoForge's patched game and its carrier: what the probe (a NeoForge mod) is built against and what the launcher runs.
     game = stage / 'neoforge-patched/patched-mc-neoforge-26.2.jar'
-    forge = stage / 'merged-base/forge-runtime-interop.jar'
     neo = stage / 'neoforge-runtime/neoforge-runtime.jar'
-    cp = [game, forge, neo, carpet]
+    cp = [game, neo, carpet]
     for lib in json.loads((mc / 'versions/26.2/26.2.json').read_text())['libraries']:
         path = lib.get('downloads', {}).get('artifact', {}).get('path')
         if path and (mc / 'libraries' / path).is_file():
             cp.append(mc / 'libraries' / path)
-    for path in cp[:4]:
+    for path in cp[:3]:
         if not path.is_file():
             parser.error(f'Missing prerequisite: {path}')
     with tempfile.TemporaryDirectory(prefix='carpet-probe-', dir=output) as temp:
@@ -83,7 +96,7 @@ def main():
                 jar.write(path, path.relative_to(classes).as_posix())
             jar.write(root / 'META-INF/neoforge.mods.toml', 'META-INF/neoforge.mods.toml')
     results = {}
-    for phase in ('baseline', 'fixed'):
+    for index, phase in enumerate(('baseline', 'fixed', 'neighbour-off')):
         run = output / phase
         (run / 'mods').mkdir(parents=True)
         (run / 'world/scripts').mkdir(parents=True)
@@ -91,12 +104,13 @@ def main():
         shutil.copy2(carpet, run / 'mods' / carpet.name)
         shutil.copy2(root / 'forbric_carpet_probe.sc', run / 'world/scripts')
         (run / 'server.properties').write_text(
-            'server-ip=127.0.0.1\nserver-port=0\nlevel-name=world\nlevel-type=minecraft:flat\n'
+            f'server-ip=127.0.0.1\nserver-port={args.port + index if args.port else 0}\nlevel-name=world\nlevel-type=minecraft:flat\n'
             'generate-structures=false\nonline-mode=false\nmax-tick-time=-1\npause-when-empty-seconds=0\n'
             'view-distance=2\nsimulation-distance=2\nspawn-protection=0\n')
         env = dict(os.environ, FORBRIC_OLD=str(stage.parent), RUNDIR=str(run),
                    FORBRIC_COMPAT_POLICY='strict' if phase == 'fixed' else 'continue',
-                   FORBRIC_JVM='-Xmx2G' + (' -Dforbric.playerWorldCallbacks=off' if phase == 'baseline' else ''))
+                   FORBRIC_JVM=os.environ.get('FORBRIC_JVM', '') + ' -Xmx2G' + {'baseline': ' -Dforbric.playerWorldCallbacks=off',
+                                           'neighbour-off': ' -Dforbric.fluidReactionNeighbourChange=off'}.get(phase, ''))
         with (run / 'console.log').open('w') as log:
             subprocess.run([str(kernel / 'run/launch-kernel-server.sh')], env=env,
                            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)
@@ -125,6 +139,10 @@ def main():
             reported = {m for m in ADAPTED for r in rows if re.search(rf'\.{m}(#|$)', r)}
             if not {'Level_fillUpdatesMixin', 'ServerPlayerGameMode_scarpetEventsMixin'} <= reported:
                 raise RuntimeError(f'Negative control failed: the unadapted census reported rows={rows} lines={lines}')
+        elif phase == 'neighbour-off':
+            if failed != NEIGHBOUR:
+                raise RuntimeError(f'Neighbour-change control failed: unexpected {sorted(failed - NEIGHBOUR)}, '
+                                   f'did not fail {sorted(NEIGHBOUR - failed)}')
         else:
             confirmed = [f for f in compatibility['findings'] if f.get('modId') == 'carpet' and f.get('confidence') == 'CONFIRMED']
             if failed or confirmed or compatibility['policy'] != 'STRICT':

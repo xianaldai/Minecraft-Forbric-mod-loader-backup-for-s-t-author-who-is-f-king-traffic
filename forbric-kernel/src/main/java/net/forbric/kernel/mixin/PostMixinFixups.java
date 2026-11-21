@@ -18,55 +18,51 @@ package net.forbric.kernel.mixin;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.AnnotationNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldInsnNode;
-import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.InsnList;
-import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
-import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
+import net.forbric.api.Ecosystem;
+import net.forbric.kernel.boot.KernelRegistryAliases;
 import net.forbric.kernel.util.ByteScan;
 import net.forbric.kernel.util.ForbricLog;
+import net.forbric.kernel.util.ForbricSwitches;
 
 /**
- * Repairs the few classes a guest mixin wove <em>incorrectly</em> because the Forge/NeoForge byte-merge restructured
- * the target — the cases the pre-mixin adapter ({@link KernelGuestMixinAdapter}) cannot pre-empt because the damage
- * is done by Mixin's own weaving. Runs on the post-Mixin bytes, so it can see mixin-added members.
+ * Repairs the few classes a guest mixin wove into a shape its own platform never gives it, because the carrier's class
+ * differs from the one the mixin was written against — the cases the pre-mixin adapter ({@link KernelGuestMixinAdapter})
+ * cannot pre-empt because the damage is done by Mixin's own weaving. Runs on the post-Mixin bytes, so it can see
+ * mixin-added members.
  *
- * <p>A mixin's field initialiser that Mixin put after a merged constructor's own constructions of its class, instead of
- * after {@code super()}, is moved back there by {@link MixinFieldInitialiserPlacement} — recognised by the woven class's
- * shape and the mixin's native class, whichever mod's field it is.
+ * <p>A mixin's field initialiser that Mixin put after the carrier's own constructions of its class inside the constructor,
+ * instead of after {@code super()}, is moved back there by {@link MixinFieldInitialiserPlacement} — recognised by the woven
+ * class's shape and the mixin's native class, whichever mod's field it is.
  */
 public final class PostMixinFixups {
-	private static final String GUI_RENDERER = "net/minecraft/client/gui/render/GuiRenderer";
-	private static final String PIP_RENDERERS = "pictureInPictureRenderers";
-	private static final String MAP_DESC = "Ljava/util/Map;";
 	/** Mixin names every injected callback {@code handler$<id>$<method>}. */
 	private static final String HANDLER_PREFIX = "handler$";
-
-	/**
-	 * Merged-base fields this class SEEDS, as {@code owner#field}. {@link MixinFit} consults this so it does not
-	 * report a repaired field as an orphan: it resolves against pre-mixin bytes, which are also pre-repair, and
-	 * would otherwise suppress the very mixins the repair exists to keep working.
-	 */
-	public static final java.util.Set<String> SEEDED_FIELDS = java.util.Set.of(GUI_RENDERER + "#" + PIP_RENDERERS);
-
-	/** Whether {@link #SEEDED_FIELDS} covers {@code owner#field} — and the repair pass is actually on. */
-	public static boolean isSeeded(String owner, String field) {
-		return enabled() && SEEDED_FIELDS.contains(owner + "#" + field);
-	}
+	private static final String MIXIN_MERGED = "Lorg/spongepowered/asm/mixin/transformer/meta/MixinMerged;";
 
 	/** {@code -Dforbric.postMixinFixups=off} disables these repairs. */
 	static final String PROPERTY = "forbric.postMixinFixups";
+	/**
+	 * {@code -Dforbric.postMixinFixups.nativeDelegation=off} stops the delegated-constructor replay from leaving a
+	 * handler where the mixin's own platform delegates the same way into a private constructor, so it moves every such
+	 * handler as it did before NeoForge's own base.
+	 */
+	static final String NATIVE_DELEGATION_PROPERTY = "forbric.postMixinFixups.nativeDelegation";
 
 	public static boolean enabled() {
 		return !"off".equalsIgnoreCase(System.getProperty(PROPERTY, "on"));
@@ -82,46 +78,45 @@ public final class PostMixinFixups {
 		bytes = MixinFieldInitialiserPlacement.repair(bytes, NativeGameReferences::reference, MixinStubRebind::ecosystemOf);
 		// A value a guest changed, whose native consumer the carrier replaced: handed to the carrier's own consumer of it.
 		bytes = NativeDeadValueConsumers.apply(internal, bytes, NativeGameReferences::reference, MixinStubRebind::ecosystemOf);
-		if (GUI_RENDERER.equals(internal)) return seedOrphanedPipRenderers(bytes);
 		if (MAPPED_REGISTRY.equals(internal)) bytes = askTheRegistryWhetherAnAliasTargetExists(bytes);
 		// The fuel table a native build hands its caller, after every return hook (FabricFuelValuesInjector.afterMixin).
 		bytes = net.forbric.kernel.transform.FabricFuelValuesInjector.afterMixin(internal, bytes);
-		return replayDelegatedConstructorInjections(internal, bytes);
+		return replayDelegatedConstructorInjections(internal, bytes, NativeGameReferences::reference, MixinStubRebind::ecosystemOf);
 	}
 
 	private static final String MAPPED_REGISTRY = "net/minecraft/core/MappedRegistry";
-	/** {@code off} leaves a mixin's alias-target warning reading {@code byLocation} directly. */
-	static final String ALIAS_PRESENCE_PROPERTY = "forbric.aliasPresenceParity";
-	/** The registry's vanilla id map, which a MinecraftForge wrapper never fills. */
+	/** {@code off} leaves the alias-target warning as Mixin wove it, so NeoForge's alias-first order warns again. */
+	static final String ALIAS_PRESENCE_PROPERTY = KernelRegistryAliases.PROPERTY;
+	/** The registry's id map, which fabric-registry-sync's warning reads. */
 	private static final String BY_LOCATION = "byLocation";
 
 	/**
-	 * Makes a mixin's "alias target doesn't exist" warning ask the registry, not its vanilla map.
+	 * Lets fabric-registry-sync's "alias target doesn't exist" warning hear about NeoForge's alias-first order.
 	 *
 	 * <p>fabric-registry-sync's mixin-added {@code MappedRegistry.addAlias} warns when {@code !this.byLocation.containsKey(target)}.
-	 * On the merged base {@code BuiltInRegistries.BLOCK} and {@code ITEM} are MinecraftForge
-	 * {@code NamespacedWrapper}s: their {@code register} goes to a {@code ForgeRegistry} and never writes the
-	 * inherited {@code byLocation}, so the check fails even when the target was registered first. More Nemo's
-	 * Woodcutter Variants registers each woodcutter and then aliases its old id to it, and every one of them — 11
-	 * blocks and 11 items — logged "Adding … as an alias for …, but the latter doesn't exist" on Forbric and nowhere
-	 * else. The alias itself was recorded and resolves (RegistryAliasParityInjector); only the warning was wrong.
+	 * On NeoForge {@code MappedRegistry} extends NeoForge's {@code BaseMappedRegistry}, whose own {@code addAlias} the mixin's
+	 * method overrides, and NeoForge's {@code DeferredRegister.addEntries} applies a mod's aliases BEFORE it registers that
+	 * mod's entries, in the same call. So every NeoForge mod alias reached fabric-api's warning before its target existed:
+	 * sophisticatedcore's "Adding sophisticatedcore:render_info_tag as an alias for …, but the latter doesn't exist" on every
+	 * boot, for an entry registered a few lines later. NeoForge's own {@code addAlias} never warns about its own order.
 	 *
-	 * <p>The map read becomes {@code this.keySet()}, whose {@code contains} is the same exact, non-resolving lookup:
-	 * {@code byLocation}'s key set on a vanilla or NeoForge registry, the ForgeRegistry's own names on a wrapper.
-	 * Not {@code containsKey(Identifier)}, which an alias mixin's {@code @ModifyVariable} and the parity injector both
-	 * resolve through aliases, so an alias chain would change what the warning says. The answer then goes through
-	 * {@code KernelRegistryAliases.aliasTargetPresent}, which also knows NeoForge's own alias-first order.
+	 * <p>The {@code containsKey} becomes {@code KernelRegistryAliases.aliasTargetPresent(byLocation, target)}: the same exact,
+	 * non-resolving lookup of the same map, and yes besides while NeoForge's {@code DeferredRegister.addEntries} is the
+	 * caller. Not {@code containsKey(Identifier)}, which an alias mixin's {@code @ModifyVariable} and the parity injector
+	 * both resolve through aliases, so an alias chain would change what the warning says.
 	 *
-	 * <p>Only a check whose only consequence is a warning: {@code this.byLocation.containsKey(x)} whose "absent" path
-	 * goes straight into a logger's {@code warn} without throwing or returning first — whatever the method and the
-	 * message are called. The collision check before it ("already present in registry", which throws) reads the same
-	 * map for the ALIAS, and is left alone: making it see the wrapper's names would turn a collision the game accepts
-	 * today into a crash for a Forge-family mod. Straight-line replacement with the same stack shape (the receiver,
-	 * then the id, then a boolean), so every frame stays valid. {@code -Dforbric.aliasPresenceParity=off} leaves the
-	 * method as Mixin wove it.
+	 * <p>Only a check whose only consequence is a warning: {@code this.byLocation.containsKey(x)} whose "absent" path goes
+	 * straight into a logger's {@code warn} without throwing or returning first — whatever the method and the message are
+	 * called. The collision check before it ("already present in registry", which throws) reads the same map for the ALIAS,
+	 * and is left alone. Straight-line replacement with the same stack shape (the map, then the id, then a boolean), so
+	 * every frame stays valid. {@code -Dforbric.aliasPresenceParity=off} leaves the method as Mixin wove it.
+	 *
+	 * <p>On the merged base this also swapped the map read for the registry's {@code keySet()}, because MinecraftForge's
+	 * registry wrappers never filled {@code byLocation}. NeoForge's registries fill it and {@code keySet()} is a view of it,
+	 * so the read is the mixin's own again.
 	 */
 	static byte[] askTheRegistryWhetherAnAliasTargetExists(byte[] bytes) {
-		if ("off".equalsIgnoreCase(System.getProperty(ALIAS_PRESENCE_PROPERTY, "on"))) return bytes;
+		if ("off".equalsIgnoreCase(ForbricSwitches.get(ALIAS_PRESENCE_PROPERTY, "on"))) return bytes;
 		if (!ByteScan.contains(bytes, BY_LOCATION_NEEDLE) || !ByteScan.contains(bytes, WARN_NEEDLE)) return bytes;
 		ClassNode node = new ClassNode();
 		new ClassReader(bytes).accept(node, 0);
@@ -139,20 +134,17 @@ public final class PostMixinFixups {
 						|| !(map instanceof FieldInsnNode field) || field.getOpcode() != Opcodes.GETFIELD
 						|| !field.owner.equals(node.name) || !field.name.equals(BY_LOCATION) || !field.desc.equals("Ljava/util/Map;")
 						|| !onlyWarnsWhenAbsent(contains)) continue;
-				method.instructions.set(field, new MethodInsnNode(Opcodes.INVOKEVIRTUAL, node.name, "keySet",
-						"()Ljava/util/Set;", false));
 				method.instructions.set(contains, new MethodInsnNode(Opcodes.INVOKESTATIC,
 						"net/forbric/kernel/boot/KernelRegistryAliases", "aliasTargetPresent",
-						"(Ljava/util/Set;Ljava/lang/Object;)Z", false));
+						"(Ljava/util/Map;Ljava/lang/Object;)Z", false));
 				repaired++;
 			}
 			if (repaired > before) where.add(method.name);
 		}
 		if (repaired == 0) return bytes;
-		ForbricLog.info("[Forbric/Aliases] post-mixin repair: %s.%s asks the registry's own key set whether the target "
-				+ "it warns about exists — MinecraftForge's wrapped registries (block, item, …) never fill the map it read, "
-				+ "so every alias to a registered block warned that the block did not exist", node.name.replace('/', '.'),
-				String.join(", ", where));
+		ForbricLog.info("[Forbric/Aliases] post-mixin repair: %s.%s no longer warns that an alias target is missing while "
+				+ "NeoForge's DeferredRegister is applying its aliases, which it does before it registers their targets",
+				node.name.replace('/', '.'), String.join(", ", where));
 		ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
 		node.accept(writer);
 		return writer.toByteArray();
@@ -193,19 +185,33 @@ public final class PostMixinFixups {
 
 	/**
 	 * Moves a guest mixin's constructor-injected handler from a DELEGATING constructor into the one it delegates to,
-	 * so the handler still runs when callers use the constructor the merge made canonical.
+	 * so the handler still runs when callers use the constructor the carrier made canonical.
 	 *
-	 * <p>The merge routinely adds a wider constructor overload and rewrites the vanilla-shaped one to delegate to it.
-	 * A guest mixin, written against vanilla, injects into the only constructor it knew about — the narrow one — so
-	 * every caller that uses the wide one now skips the mixin's field initialization entirely. The failure surfaces
-	 * far away, as a null field with no stack frame pointing at the cause.
+	 * <p>NeoForge adds wider constructor overloads to vanilla classes and rewrites the vanilla-shaped one to delegate to
+	 * them. A guest mixin written against vanilla injects into the only constructor it knew about — the narrow one — so
+	 * every caller that uses the wide one skips the mixin's field initialization entirely. The failure surfaces far away,
+	 * as a null field with no stack frame pointing at the cause.
 	 *
 	 * <p>Measured archetype: NeoForge made {@code BakedQuad}'s 12-arg constructor (adding {@code BakedNormals} +
 	 * {@code BakedColors}) canonical and made the vanilla 10-arg one delegate to it with {@code UNSPECIFIED} /
-	 * {@code DEFAULT}. Sodium's {@code BakedQuadMixin} injects into the 10-arg one to compute its {@code @Unique
+	 * {@code DEFAULT}. Sodium's {@code BakedQuadMixin} injected into the 10-arg one to compute its {@code @Unique
 	 * normalFace}, so every quad built through the 12-arg constructor carried a null {@code normalFace} and Sodium's
-	 * chunk mesher threw {@code NullPointerException} at {@code EncodingFormat.normalFace} — the crash that made
-	 * terrain unbuildable once the mesher was no longer being suppressed outright.
+	 * chunk mesher threw {@code NullPointerException} at {@code EncodingFormat.normalFace}. On NeoForge's own base the
+	 * same shape holds for fabric-object-builder's {@code BlockEntityType} blocks set, fabric-data-generation's
+	 * {@code TagsProvider} path resolver and fabric-model-loading's {@code ModelBakery} hook: each wide constructor is
+	 * NeoForge's and not vanilla's.
+	 *
+	 * <p>Only where the mixin's own platform does not delegate that way itself: when the class as the mixin's ecosystem
+	 * compiled it (its native reference) has the narrow constructor delegating to the same wide one, and that wide
+	 * constructor is private there and in the carrier's class — vanilla's own {@code CommandSourceStack} does both — then
+	 * only the class itself reaches the wide constructor, the handler natively runs for callers of the narrow one only,
+	 * and moving it would run it where it never runs natively. A wide constructor that is not private is moved even when
+	 * the platform delegates the same way: the carrier may have moved a native caller of the narrow constructor onto it
+	 * (NeoForge's {@code RegistryBuilder.create} builds every datapack registry through {@code MappedRegistry}'s wide
+	 * constructor, where vanilla's {@code RegistryLoadTask} called the narrow one), and only the move keeps the handler
+	 * running for that caller. A NeoForge mixin's native class is the base itself, so it is never moved. A mixin whose
+	 * ecosystem or native class is unknown — no vanilla reference staged — is moved as before, and so is every handler
+	 * with {@code -Dforbric.postMixinFixups.nativeDelegation=off}.
 	 *
 	 * <p><b>The move is only performed when it is provably equivalent</b>, which is what keeps this general rather
 	 * than a hand-patch. It requires that, in the delegating constructor, the handler call sits immediately after the
@@ -215,7 +221,8 @@ public final class PostMixinFixups {
 	 * direct callers of the wide one. The argument sequence is cloned verbatim: the narrow constructor's parameters
 	 * are a prefix of the wide one's with identical types, so the local slots it loads are valid unchanged.
 	 */
-	private static byte[] replayDelegatedConstructorInjections(String internal, byte[] bytes) {
+	static byte[] replayDelegatedConstructorInjections(String internal, byte[] bytes,
+			BiFunction<Ecosystem, String, ClassNode> natives, Function<String, Ecosystem> ecosystemOf) {
 		// Cheapest pre-check first, on the raw bytes. This runs for EVERY class the game loads, and the one below
 		// it — cheap only by comparison — still parses the whole class including every instruction of every
 		// method. A class Mixin never wove cannot contain a handler name, and a method name lives in the constant
@@ -245,6 +252,10 @@ public final class PostMixinFixups {
 			if (!parametersArePrefix(replay.call.desc, wide.desc)) continue;
 			// If the mixin already injected into the wide constructor too, adding a second call would double-run it.
 			if (callsHandler(wide, replay.call)) continue;
+			// Natively the narrow constructor delegates the same way into a private wide one, so the handler natively
+			// skips the wide one's callers.
+			if (nativeDelegationEnabled()
+					&& nativeDelegatesTheSameWay(node, narrow.desc, delegation.desc, replay.call, natives, ecosystemOf)) continue;
 
 			for (AbstractInsnNode insn = wide.instructions.getFirst(); insn != null; insn = insn.getNext()) {
 				if (insn.getOpcode() != Opcodes.RETURN) continue;
@@ -256,7 +267,7 @@ public final class PostMixinFixups {
 			changed = true;
 
 			ForbricLog.info("[Forbric/Mixin] post-mixin repair: replayed %s's constructor injection %s into the "
-					+ "constructor it delegates to (%s) — the merge made that overload canonical, so callers of it "
+					+ "constructor it delegates to (%s) — the carrier made that overload canonical, so callers of it "
 					+ "were skipping the guest mixin's initializer", internal.replace('/', '.'), replay.call.name,
 					delegation.desc);
 		}
@@ -265,6 +276,51 @@ public final class PostMixinFixups {
 		ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
 		node.accept(writer);
 		return writer.toByteArray();
+	}
+
+	static boolean nativeDelegationEnabled() {
+		return !"off".equalsIgnoreCase(System.getProperty(NATIVE_DELEGATION_PROPERTY, "on"));
+	}
+
+	/**
+	 * Whether the class as the handler's mixin's ecosystem compiled it has constructor {@code narrowDesc} delegating
+	 * {@code this(...)} to {@code wideDesc}, and that wide constructor is private both there and in {@code node}: then
+	 * natively, too, only the narrow constructor's callers run the handler, and no caller outside the class can have
+	 * been moved onto the wide one. A NeoForge mixin's native class is the base itself. Unknown ecosystem, no native
+	 * reference, or a wide constructor that is not private on either side: false.
+	 */
+	static boolean nativeDelegatesTheSameWay(ClassNode node, String narrowDesc, String wideDesc, MethodInsnNode handler,
+			BiFunction<Ecosystem, String, ClassNode> natives, Function<String, Ecosystem> ecosystemOf) {
+		if (ecosystemOf == null) return false;
+		Ecosystem ecosystem = ecosystemOf.apply(mixinOf(node, handler));
+		if (ecosystem == Ecosystem.NEOFORGE) return true;
+		if (ecosystem == null || natives == null) return false;
+		MethodNode carrierWide = findOwn(node, "<init>", wideDesc);
+		if (carrierWide == null || (carrierWide.access & Opcodes.ACC_PRIVATE) == 0) return false;
+		ClassNode original = natives.apply(ecosystem, node.name);
+		if (original == null) return false;
+		MethodNode nativeWide = findOwn(original, "<init>", wideDesc);
+		if (nativeWide == null || (nativeWide.access & Opcodes.ACC_PRIVATE) == 0) return false;
+		MethodNode narrow = findOwn(original, "<init>", narrowDesc);
+		if (narrow == null) return false;
+		MethodInsnNode delegation = thisDelegation(original, narrow);
+		return delegation != null && delegation.desc.equals(wideDesc);
+	}
+
+	/** The mixin (internal name) the handler method was merged from ({@code @MixinMerged}), or null. */
+	private static String mixinOf(ClassNode node, MethodInsnNode handler) {
+		MethodNode method = findOwn(node, handler.name, handler.desc);
+		if (method == null) return null;
+		for (List<AnnotationNode> annotations : List.of(
+				method.visibleAnnotations == null ? List.<AnnotationNode>of() : method.visibleAnnotations,
+				method.invisibleAnnotations == null ? List.<AnnotationNode>of() : method.invisibleAnnotations)) {
+			for (AnnotationNode annotation : annotations) {
+				if (!MIXIN_MERGED.equals(annotation.desc)) continue;
+				Object mixin = MixinFit.value(annotation, "mixin");
+				if (mixin instanceof String name) return name.replace('.', '/');
+			}
+		}
+		return null;
 	}
 
 	/** A handler call plus the argument loads that feed it, as a contiguous instruction range. */
@@ -402,96 +458,5 @@ public final class PostMixinFixups {
 			}
 		}
 		return ctors > 1 && woven;
-	}
-
-	/**
-	 * Seeds {@code GuiRenderer.pictureInPictureRenderers} with an empty map, repairing the orphan instead of
-	 * suppressing the mixins that read it.
-	 *
-	 * <p>NeoForge won the byte-merge of {@code GuiRenderer.<init>}, re-typed its third parameter and replaced
-	 * vanilla's {@code pictureInPictureRenderers} map with its own {@code pictureInPictureRendererPools}. The field
-	 * survives but nothing assigns it, and generic erasure hides that from Mixin (both descriptors are just
-	 * {@code List}), so any mixin that {@code @Shadow}s it applies cleanly and then reads null.
-	 *
-	 * <p>Suppressing those mixins is not a fix, because the damage is not confined to the mixin that reads the
-	 * field. Measured: dropping {@code mixins.malilib.json:gui.MixinGuiRenderer} left MaLiLib's sibling
-	 * {@code MixinGameRenderer} calling {@code RenderUtils.registerSpecialGuiRenderers}, which does
-	 * {@code ImmutableMap.Builder.putAll(map)} on the map the dropped mixin was supposed to populate → a NEW
-	 * {@code NullPointerException} during {@code Minecraft.<init>}. That coupling runs through mod-owned STATE, not
-	 * through an interface, so the cast-contract closure cannot see it and no suppression policy can be made safe.
-	 *
-	 * <p>An empty map degrades honestly: mods that register custom picture-in-picture renderers get no effect
-	 * (NeoForge's pool mechanism owns that path in the merged base), but every read succeeds and both ecosystems'
-	 * GUI mixins apply. This is the same shape as the {@code Pack.parentsPredicate} repair above — a field the merge
-	 * left unassigned, seeded where the original initializer would have run.
-	 */
-	private static byte[] seedOrphanedPipRenderers(byte[] bytes) {
-		ClassNode node = new ClassNode();
-		new ClassReader(bytes).accept(node, 0);
-
-		boolean declared = false;
-		if (node.fields != null) {
-			for (FieldNode f : node.fields) {
-				if (PIP_RENDERERS.equals(f.name) && MAP_DESC.equals(f.desc)) {
-					declared = true;
-					break;
-				}
-			}
-		}
-		if (!declared) return bytes;
-		// If a CONSTRUCTOR already assigns it, the merge did not orphan it — leave well alone.
-		//
-		// Scanning every method instead would defeat the repair: these are post-mixin bytes, and the very mixin this
-		// exists to support writes the field back inside its own handler
-		// (`handler$…$mutableSpecialElementRenderers` does `new IdentityHashMap(pictureInPictureRenderers)` and
-		// stores the result). That write happens AFTER the null read that crashes, so it must not count as an
-		// initializer. Only a write on the constructor's own path proves the field is initialized before use.
-		for (MethodNode m : node.methods) {
-			if (!m.name.equals("<init>")) continue;
-			for (AbstractInsnNode insn = m.instructions.getFirst(); insn != null; insn = insn.getNext()) {
-				if (insn instanceof FieldInsnNode fi && fi.getOpcode() == Opcodes.PUTFIELD
-						&& PIP_RENDERERS.equals(fi.name)) {
-					return bytes;
-				}
-			}
-		}
-
-		boolean changed = false;
-		for (MethodNode m : node.methods) {
-			if (!m.name.equals("<init>")) continue;
-			AbstractInsnNode superCall = superInitCall(m);
-			if (superCall == null) continue;
-
-			InsnList init = new InsnList();
-			init.add(new VarInsnNode(Opcodes.ALOAD, 0));
-			init.add(new TypeInsnNode(Opcodes.NEW, "java/util/IdentityHashMap"));
-			init.add(new InsnNode(Opcodes.DUP));
-			init.add(new MethodInsnNode(Opcodes.INVOKESPECIAL, "java/util/IdentityHashMap", "<init>", "()V", false));
-			init.add(new FieldInsnNode(Opcodes.PUTFIELD, GUI_RENDERER, PIP_RENDERERS, MAP_DESC));
-			m.instructions.insert(superCall, init);
-			m.maxStack = Math.max(m.maxStack, 3);
-			changed = true;
-		}
-		if (!changed) return bytes;
-
-		ForbricLog.info("[Forbric/Mixin] post-mixin repair: seeded GuiRenderer.%s with an empty map — NeoForge won the "
-				+ "byte-merge of the constructor and replaced it with pictureInPictureRendererPools, orphaning the "
-				+ "field that guest GUI mixins @Shadow", PIP_RENDERERS);
-		ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
-		node.accept(writer);
-		return writer.toByteArray();
-	}
-
-	/** The {@code invokespecial Object.<init>()} that opens a super()-calling ctor, or null for a this()-delegating one. */
-	private static AbstractInsnNode superInitCall(MethodNode ctor) {
-		for (AbstractInsnNode insn = ctor.instructions.getFirst(); insn != null; insn = insn.getNext()) {
-			if (insn.getOpcode() != Opcodes.INVOKESPECIAL) continue;
-			MethodInsnNode call = (MethodInsnNode) insn;
-			if (!call.name.equals("<init>")) continue;
-			// The first <init> invokespecial in a ctor is its own chain call: super() (owner Object) or this() (owner
-			// Pack). Only the super()-calling ctor should carry the field init; the this()-delegating one inherits it.
-			return call.owner.equals("java/lang/Object") ? call : null;
-		}
-		return null;
 	}
 }

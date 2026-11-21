@@ -19,6 +19,7 @@ package net.forbric.kernel.discovery;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -29,6 +30,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.jar.Attributes;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
@@ -69,6 +71,12 @@ class ForbricModDiscovererTest {
 			+ "config=\"exampleforge.mixins.json\"\n";
 
 	private static Path writeJar(Path dir, String fileName, Map<String, String> entries, String implVersion) throws Exception {
+		return writeJar(dir, fileName, entries, Map.of(), implVersion);
+	}
+
+	/** {@code classes} are written as they are: a class file does not survive a trip through a String. */
+	private static Path writeJar(Path dir, String fileName, Map<String, String> entries, Map<String, byte[]> classes,
+			String implVersion) throws Exception {
 		Path jar = dir.resolve(fileName);
 
 		Manifest manifest = new Manifest();
@@ -83,6 +91,11 @@ class ForbricModDiscovererTest {
 			for (Map.Entry<String, String> e : entries.entrySet()) {
 				jos.putNextEntry(new ZipEntry(e.getKey()));
 				jos.write(e.getValue().getBytes(StandardCharsets.UTF_8));
+				jos.closeEntry();
+			}
+			for (Map.Entry<String, byte[]> e : classes.entrySet()) {
+				jos.putNextEntry(new ZipEntry(e.getKey()));
+				jos.write(e.getValue());
 				jos.closeEntry();
 			}
 		}
@@ -115,34 +128,50 @@ class ForbricModDiscovererTest {
 	}
 
 	@Test
-	void dualTomlJarReportsBothFamilies(@TempDir Path mods) throws Exception {
-		// A multiloader build shipping one toml per Forge family: BOTH are reported truthfully, each under
-		// its own ecosystem — the boot policy (active game base) picks which one loads.
+	void aDualTomlJarIsDiscoveredAsItsNeoForgeHalfOnly(@TempDir Path mods) throws Exception {
+		// A multiloader build shipping one toml per Forge family is read as NeoForge reads it: its neoforge.mods.toml. The
+		// MinecraftForge mods.toml yields no mod (Forbric loads none), and MultiLoaderArbiter reads the jar's manifests
+		// itself to say it set that half aside.
 		Map<String, String> entries = entry("META-INF/mods.toml", FORGE_TOML);
 		entries.put("META-INF/neoforge.mods.toml", FORGE_TOML.replace("mandatory=true", "type=\"required\""));
 		Path jar = writeJar(mods, "dual-mod.jar", entries, "5.6.7");
 
 		List<DiscoveredMod> found = new ForbricModDiscoverer().discoverJar(jar);
 
-		assertEquals(2, found.size());
-		assertEquals(1, found.stream().filter(m -> m.getEcosystem() == Ecosystem.NEOFORGE).count());
-		assertEquals(1, found.stream().filter(m -> m.getEcosystem() == Ecosystem.FORGE).count());
-		assertTrue(found.stream().allMatch(m -> "exampleforge".equals(m.getId())));
+		assertEquals(1, found.size(), String.valueOf(found));
+		assertEquals(Ecosystem.NEOFORGE, found.get(0).getEcosystem());
+		assertEquals("exampleforge", found.get(0).getId());
+
+		// Its MinecraftForge manifest is not parsed into mods, so one NeoForge would never read cannot fail the jar either.
+		Map<String, String> broken = entry("META-INF/mods.toml", "modLoader=\"javafml\"\n[[mods]\nthis is not toml");
+		broken.put("META-INF/neoforge.mods.toml", FORGE_TOML.replace("mandatory=true", "type=\"required\""));
+		Path brokenJar = writeJar(mods, "dual-broken.jar", broken, "5.6.7");
+		assertEquals(1, new ForbricModDiscoverer().discoverJar(brokenJar).size());
+		assertEquals(Set.of(), MetadataFailures.failedFamilies(brokenJar), String.valueOf(MetadataFailures.of(brokenJar)));
 	}
 
 	@Test
 	void discoversBothEcosystemsInOneFolder(@TempDir Path mods) throws Exception {
 		writeJar(mods, "fabric-mod.jar", entry("fabric.mod.json", FABRIC_JSON), null);
+		// The Forge-family mod is a NeoForge one: the toml, the ${file.jarVersion} placeholder and the range translation
+		// are read the same way from both manifests, and only NeoForge's mods still load.
+		String neoToml = FORGE_TOML.replace("exampleforge", "exampleneo").replace("modId=\"forge\"", "modId=\"neoforge\"")
+				.replace("mandatory=true", "type=\"required\"");
+		Map<String, String> neoEntries = entry("META-INF/neoforge.mods.toml", neoToml);
+		neoEntries.put("exampleneo.mixins.json", "{ \"package\": \"com.example.mixin\" }"); // declared configs must exist in the jar
+		writeJar(mods, "neo-mod.jar", neoEntries, "5.6.7");
+
+		// A MinecraftForge-only jar beside them is refused: Forbric no longer loads MinecraftForge mods.
 		Map<String, String> forgeEntries = entry("META-INF/mods.toml", FORGE_TOML);
-		forgeEntries.put("exampleforge.mixins.json", "{ \"package\": \"com.example.mixin\" }"); // declared configs must exist in the jar
-		writeJar(mods, "forge-mod.jar", forgeEntries, "5.6.7");
+		forgeEntries.put("exampleforge.mixins.json", "{ \"package\": \"com.example.mixin\" }");
+		Path forgeOnly = writeJar(mods, "forge-mod.jar", forgeEntries, "5.6.7");
 
 		// A jar that ships nothing recognizable must be ignored.
 		writeJar(mods, "not-a-mod.jar", entry("com/example/Thing.class", "noise"), null);
 
 		List<DiscoveredMod> found = new ForbricModDiscoverer().discover(mods);
 
-		assertEquals(2, found.size(), "should find exactly the Fabric and Forge mods");
+		assertEquals(2, found.size(), "should find exactly the Fabric and NeoForge mods: " + found);
 
 		DiscoveredMod fabric = byId(found, "examplefabric");
 		assertNotNull(fabric);
@@ -154,41 +183,57 @@ class ForbricModDiscovererTest {
 		assertTrue(fabric.getDependencies().stream()
 				.anyMatch(d -> d.getModId().equals("fabricloader") && d.getVersionConstraint().equals(">=0.15.0")));
 
-		DiscoveredMod forge = byId(found, "exampleforge");
-		assertNotNull(forge);
-		assertEquals(Ecosystem.FORGE, forge.getEcosystem());
-		assertEquals("5.6.7", forge.getVersion(), "${file.jarVersion} should resolve from the manifest");
-		assertTrue(forge.getMixinConfigs().contains("exampleforge.mixins.json"));
+		DiscoveredMod neo = byId(found, "exampleneo");
+		assertNotNull(neo);
+		assertEquals(Ecosystem.NEOFORGE, neo.getEcosystem());
+		assertEquals("5.6.7", neo.getVersion(), "${file.jarVersion} should resolve from the manifest");
+		assertTrue(neo.getMixinConfigs().contains("exampleneo.mixins.json"));
 
-		UnifiedDependency forgeDep = forge.getDependencies().get(0);
-		assertEquals("forge", forgeDep.getModId());
-		assertEquals(">=47", forgeDep.getVersionConstraint(), "Maven range [47,) should translate to >=47");
-		assertTrue(forgeDep.isMandatory());
+		UnifiedDependency neoDep = neo.getDependencies().get(0);
+		assertEquals("neoforge", neoDep.getModId());
+		assertEquals(">=47", neoDep.getVersionConstraint(), "Maven range [47,) should translate to >=47");
+		assertTrue(neoDep.isMandatory());
+
+		assertNull(byId(found, "exampleforge"), "a MinecraftForge-only jar yields no mod");
+		assertTrue(MetadataFailures.unsupported(forgeOnly), "it is recorded as refused: " + MetadataFailures.of(forgeOnly));
 	}
 
 	@Test
 	void aSingleJarMayDeclareBothLoaders(@TempDir Path mods) throws Exception {
+		// A Forge+Fabric universal jar is discovered as its Fabric half, as Fabric reads it: the MinecraftForge mods.toml
+		// yields no mod. The Fabric half has to be real for the jar to be universal at all (not refused), so its main
+		// entrypoint is a class that can initialise.
 		Map<String, String> both = new LinkedHashMap<>();
 		both.put("fabric.mod.json", FABRIC_JSON);
 		both.put("META-INF/mods.toml", FORGE_TOML);
 
-		Path jar = writeJar(mods, "multi-loader.jar", both, "9.9.9");
+		Path jar = writeJar(mods, "multi-loader.jar", both, Map.of("com/example/FabricMod.class",
+				LoaderHalfJudgeTest.plain("com/example/FabricMod", "net/fabricmc/api/ModInitializer", true)), "9.9.9");
 
 		List<DiscoveredMod> found = new ForbricModDiscoverer().discoverJar(jar);
 
-		assertEquals(2, found.size());
-		assertEquals(1, found.stream().filter(m -> m.getEcosystem() == Ecosystem.FABRIC).count());
-		assertEquals(1, found.stream().filter(m -> m.getEcosystem() == Ecosystem.FORGE).count());
+		assertEquals(1, found.size(), String.valueOf(found));
+		assertEquals(Ecosystem.FABRIC, found.get(0).getEcosystem());
+		assertFalse(MetadataFailures.unsupported(jar), "a universal jar is not refused: " + MetadataFailures.of(jar));
+
+		// Without that class the Fabric half names an entrypoint the jar lacks, and without fabric.mod.json there is no
+		// other half: either way the jar is a MinecraftForge-only build, refused, and nothing of it is discovered.
+		Path fakeHalf = writeJar(mods, "fake-half.jar", both, "9.9.9");
+		Path forgeOnly = writeJar(mods, "forge-only.jar", entry("META-INF/mods.toml", FORGE_TOML), "9.9.9");
+		for (Path refused : List.of(fakeHalf, forgeOnly)) {
+			assertEquals(List.of(), new ForbricModDiscoverer().discoverJar(refused), refused.getFileName().toString());
+			assertTrue(MetadataFailures.unsupported(refused), refused.getFileName() + ": " + MetadataFailures.of(refused));
+		}
 	}
 
 	@Test
 	void dropsDeclaredButAbsentMixinConfig(@TempDir Path mods) throws Exception {
-		// Multiloader jars often over-declare a sibling loader's mixin config (a NeoForge-style [[mixins]] block
-		// listing a *.neoforge.mixins.json that only ships in the NeoForge jar). Handing such a phantom config to
+		// Multiloader jars often over-declare a sibling build's mixin config (a [[mixins]] block listing a config that
+		// only ships in the sibling loader's jar). Handing such a phantom config to
 		// Mixin aborts the game, so a declared config that isn't present in the jar must be dropped; one that is
 		// present is kept.
 		String toml = "modLoader=\"javafml\"\n"
-				+ "loaderVersion=\"[47,)\"\n"
+				+ "loaderVersion=\"[4,)\"\n"
 				+ "[[mods]]\n"
 				+ "modId=\"multimixin\"\n"
 				+ "version=\"1.0.0\"\n"
@@ -197,15 +242,22 @@ class ForbricModDiscovererTest {
 				+ "[[mixins]]\n"
 				+ "config=\"multimixin.neoforge.mixins.json\"\n"; // absent -> dropped
 
-		Map<String, String> entries = entry("META-INF/mods.toml", toml);
+		Map<String, String> entries = entry("META-INF/neoforge.mods.toml", toml);
 		entries.put("multimixin.mixins.json", "{ \"package\": \"com.example.mixin\" }");
 
 		Path jar = writeJar(mods, "multimixin.jar", entries, "1.0.0");
-		DiscoveredMod forge = byId(new ForbricModDiscoverer().discoverJar(jar), "multimixin");
+		DiscoveredMod mod = byId(new ForbricModDiscoverer().discoverJar(jar), "multimixin");
 
-		assertNotNull(forge);
-		assertTrue(forge.getMixinConfigs().contains("multimixin.mixins.json"), "present config kept");
-		assertFalse(forge.getMixinConfigs().contains("multimixin.neoforge.mixins.json"), "absent config dropped");
+		assertNotNull(mod);
+		assertTrue(mod.getMixinConfigs().contains("multimixin.mixins.json"), "present config kept");
+		assertFalse(mod.getMixinConfigs().contains("multimixin.neoforge.mixins.json"), "absent config dropped");
+
+		// The same jar as a MinecraftForge build (that toml as its mods.toml) is refused before any config is looked at.
+		Map<String, String> forgeEntries = entry("META-INF/mods.toml", toml);
+		forgeEntries.put("multimixin.mixins.json", "{ \"package\": \"com.example.mixin\" }");
+		Path forgeJar = writeJar(mods, "multimixin-forge.jar", forgeEntries, "1.0.0");
+		assertEquals(List.of(), new ForbricModDiscoverer().discoverJar(forgeJar));
+		assertTrue(MetadataFailures.unsupported(forgeJar), MetadataFailures.of(forgeJar).toString());
 	}
 
 	/**

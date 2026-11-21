@@ -1,0 +1,368 @@
+package net.forbric.kernel.boot;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.Opcodes;
+
+import net.forbric.api.CompatibilityFinding;
+import net.forbric.api.CompatibilityFindings;
+import net.forbric.api.Ecosystem;
+import net.forbric.api.ModCatalog;
+import net.forbric.kernel.discovery.ForbricModDiscoverer;
+import net.forbric.kernel.discovery.LoaderKind;
+import net.forbric.kernel.discovery.MetadataFailures;
+import net.forbric.kernel.ui.CompatibilityDecision;
+import net.forbric.kernel.ui.DialogLang;
+
+/**
+ * The user-visible half of dropping MinecraftForge: a MinecraftForge-only jar in {@code mods/} is refused with a
+ * reason, end to end — no mod of it is discovered, it is a Lost row and a confirmed required finding, a strict launch or
+ * a dedicated server stops on it, and the load report says what to get instead, in Chinese and in English. A
+ * Forge+Fabric universal jar beside it is not refused: it loads through Fabric.
+ *
+ * <p>Red-checked: with the refusal in {@code ForbricModDiscoverer.parseJar} removed the Forge-only jar was discovered as a
+ * MinecraftForge mod and every assertion on the finding failed; with {@code recordRefusal}'s {@code installed} forced
+ * false the finding was a mere suspicion and both stops returned true.
+ */
+@ResourceLock("ModCatalog")
+@ResourceLock("system-properties")
+class MinecraftForgeRefusalTest {
+	@TempDir Path temporary;
+	private Path mods;
+	private Path forgeOnly;
+	private Path universal;
+	private Path neo;
+
+	@BeforeEach @AfterEach void reset() {
+		MetadataFailures.reset();
+		DuplicateModArbiter.reset();
+		MultiLoaderArbiter.reset();
+		CompatibilityFindings.reset();
+		CompatibilityDecision.reset();
+		ModCatalog.publish(List.of());
+		KernelLoadReport.reset();
+		System.clearProperty(DialogLang.SWITCH);
+		System.clearProperty(CompatibilityDecision.PROPERTY);
+	}
+
+	@BeforeEach void install() throws Exception {
+		mods = Files.createDirectories(temporary.resolve("mods"));
+		forgeOnly = jar(mods.resolve("onlyforge-1.0-forge.jar"), new String[][] {
+				{"META-INF/mods.toml", toml("onlyforge", "Only Forge", "forge")}},
+				"example/OnlyForge.class", mod("example/OnlyForge", "Lnet/minecraftforge/fml/common/Mod;", "onlyforge"));
+		universal = jar(mods.resolve("arch-1.0.jar"), new String[][] {
+				{"META-INF/mods.toml", toml("arch", "Arch", "forge")},
+				{"fabric.mod.json", "{\"schemaVersion\":1,\"id\":\"arch\",\"version\":\"1\",\"entrypoints\":{\"main\":[\"example.ArchFabric\"]}}"}},
+				"example/ArchForge.class", mod("example/ArchForge", "Lnet/minecraftforge/fml/common/Mod;", "arch"),
+				"example/ArchFabric.class", fabricInit("example/ArchFabric"));
+		neo = jar(mods.resolve("goodneo-1.0.jar"), new String[][] {
+				{"META-INF/neoforge.mods.toml", toml("goodneo", "Good Neo", "neoforge")}},
+				"example/GoodNeo.class", mod("example/GoodNeo", "Lnet/neoforged/fml/common/Mod;", "goodneo"));
+	}
+
+	@Test void aMinecraftForgeOnlyJarIsRefusedAndAUniversalOneLoadsAsFabric() throws Exception {
+		// Discovery: nothing of the refused jar, and the universal jar is not a Forge-family jar any more.
+		KernelBoot.ForgeFamilyMods found = KernelBoot.discoverForgeFamilyModJars(mods, DuplicateModArbiter.Decision.none());
+		assertEquals(List.of(neo), found.jars());
+		assertEquals(List.of(), new ForbricModDiscoverer().discoverJar(forgeOnly));
+		assertTrue(MetadataFailures.unsupported(forgeOnly));
+		assertFalse(MetadataFailures.unsupported(universal));
+
+		// Arbitration: refused is a claim of its own — no owner, never unowned (a library) — suppressed for everyone;
+		// the universal jar is Fabric's.
+		assertEquals(new JarClaim.Refused(LoaderKind.MINECRAFTFORGE), MultiLoaderArbiter.claimOf(forgeOnly));
+		assertThrows(IllegalStateException.class, () -> MultiLoaderArbiter.ownerOf(forgeOnly),
+				"a refused jar has no owner, and is not answered as a library's null");
+		assertFalse(MultiLoaderArbiter.claimOf(forgeOnly).unowned(), "a refused jar is not a plain library");
+		assertTrue(MultiLoaderArbiter.refused(forgeOnly));
+		for (Ecosystem family : Ecosystem.values()) assertTrue(MultiLoaderArbiter.suppressedFor(forgeOnly, family), family.name());
+		for (Ecosystem family : Ecosystem.values()) assertFalse(MultiLoaderArbiter.claimOf(forgeOnly).ownedBy(family), family.name());
+		assertEquals(Ecosystem.FABRIC, MultiLoaderArbiter.ownerOf(universal));
+		assertTrue(MultiLoaderArbiter.claimOf(universal).ownedBy(Ecosystem.FABRIC));
+		assertFalse(MultiLoaderArbiter.suppressedFor(universal, Ecosystem.FABRIC));
+		assertNull(DuplicateModArbiter.claimOf(new ForbricModDiscoverer(), forgeOnly, null, new java.util.ArrayList<>()),
+				"a refused jar claims no id");
+
+		// The finding: confirmed, required, on the mod's own id, naming the mod, in the player's language.
+		System.setProperty(DialogLang.SWITCH, "en");
+		MetadataFailures.recordFindings(MultiLoaderArbiter::ownerOf, List.of(), mods, jar -> false);
+		List<CompatibilityFinding> required = CompatibilityFindings.confirmedRequired();
+		assertEquals(List.of("onlyforge:" + MetadataFailures.UNSUPPORTED_FINDING), required.stream().map(CompatibilityFinding::key).toList());
+		String detail = required.get(0).detail();
+		assertTrue(detail.contains("Only Forge (onlyforge-1.0-forge.jar) is a MinecraftForge mod"), detail);
+		assertTrue(detail.contains("no longer supports MinecraftForge"), detail);
+		assertTrue(detail.contains("NeoForge or Fabric build of Only Forge"), detail);
+		assertTrue(required.get(0).evidence().contains("unsupported=minecraftforge"), required.get(0).evidence().toString());
+
+		// The Lost row the Mods screen and the load report read.
+		KernelModCatalog.publish(new ForbricModDiscoverer().discoverJar(neo), mods);
+		ModCatalog.Entry row = ModCatalog.all().stream().filter(e -> e.modId().equals("onlyforge")).findFirst()
+				.orElseThrow(() -> new AssertionError("no row: " + ModCatalog.all()));
+		assertEquals(ModCatalog.Status.FAILED, row.status());
+		assertEquals("Only Forge", row.name());
+		assertTrue(row.refused(), "a refusal is no ecosystem's claim");
+		assertNull(row.ecosystem());
+		assertEquals("MinecraftForge", row.loaderName(), "shown under the loader it was built for");
+		assertEquals(1, ModCatalog.refusedCount(), "and counted apart, under no ecosystem");
+		assertEquals(List.of(), CompatibilityFindings.unattributed(), "it belongs to the row of the mod the player installed");
+
+		// The decision: a strict launch and a dedicated server stop.
+		System.setProperty(CompatibilityDecision.PROPERTY, "strict");
+		assertFalse(CompatibilityDecision.check(true), "strict stops, client or not");
+		System.setProperty(CompatibilityDecision.PROPERTY, "ask");
+		assertFalse(CompatibilityDecision.check(false), "a dedicated server has nobody to ask and stops");
+		assertThrows(CompatibilityDecision.LaunchStopped.class, () -> CompatibilityDecision.requireContinuation(false));
+		System.clearProperty(CompatibilityDecision.PROPERTY);
+
+		// The load report, in both languages.
+		Set<String> refused = Set.of("onlyforge-1.0-forge.jar");
+		String en = KernelLoadReport.render(false, ModCatalog.failures(), CompatibilityFindings.unattributed(), List.of(),
+				List.of(), refused);
+		assertTrue(en.contains("Only Forge  (onlyforge)"), en);
+		assertTrue(en.contains("not loaded: Forbric no longer supports MinecraftForge"), en);
+		assertTrue(en.contains("Get the NeoForge or Fabric build of Only Forge and put it in the mods folder in place of "
+				+ "onlyforge-1.0-forge.jar."), en);
+		assertTrue(en.contains("Forbric now loads Fabric and NeoForge mods only."), en);
+		assertFalse(en.contains("their classes did load"), "the general advice is not true of a refused mod: " + en);
+		String zh = KernelLoadReport.render(true, ModCatalog.failures(), CompatibilityFindings.unattributed(), List.of(),
+				List.of(), refused);
+		assertTrue(zh.contains("没有加载：Forbric 已不再支持 MinecraftForge"), zh);
+		assertTrue(zh.contains("请下载 Only Forge 的 NeoForge 或 Fabric 版本，放进 mods 文件夹替换 onlyforge-1.0-forge.jar。"), zh);
+		assertTrue(zh.contains("Forbric 现在只加载 Fabric 和 NeoForge mod。"), zh);
+		assertFalse(zh.contains("Forbric no longer supports MinecraftForge"), "no English refusal wording in the Chinese report: " + zh);
+
+		// And the writer finds the refusal by itself, from the Lost rows.
+		Path file = temporary.resolve("load-report.txt");
+		Locale before = Locale.getDefault();
+		try {
+			Locale.setDefault(Locale.ENGLISH);
+			KernelLoadReport.writeTo(file);
+		} finally {
+			Locale.setDefault(before);
+		}
+		assertTrue(Files.readString(file).contains("not loaded: Forbric no longer supports MinecraftForge"), Files.readString(file));
+	}
+
+	@Test void theFindingSpeaksChineseToAChinesePlayer() throws Exception {
+		new ForbricModDiscoverer().discoverJar(forgeOnly);
+		System.setProperty(DialogLang.SWITCH, "zh_cn");
+		MetadataFailures.recordFindings(MultiLoaderArbiter::ownerOf, List.of(), mods, jar -> false);
+		CompatibilityFinding finding = CompatibilityFindings.confirmedRequired().get(0);
+		assertEquals("Only Forge（onlyforge-1.0-forge.jar）是 MinecraftForge mod。Forbric 已不再支持 MinecraftForge，所以它不会被加载。"
+				+ "请改用 Only Forge 的 NeoForge 或 Fabric 版本。", finding.detail());
+	}
+
+	@Test void aJarThePlayerSwitchedOffOrAnotherModBundlesStopsNothing() throws Exception {
+		new ForbricModDiscoverer().discoverJar(forgeOnly);
+		MetadataFailures.recordFindings(MultiLoaderArbiter::ownerOf, List.of(), mods, forgeOnly::equals);
+		assertEquals(List.of(), CompatibilityFindings.all(), "switched off in forbric-disabled.txt: nothing to ask about");
+		assertEquals(List.of(), MetadataFailures.lost());
+
+		// The same jar where a parent's JarJar put it: a note, and no Lost row.
+		Path bundled = Files.copy(forgeOnly, Files.createDirectories(temporary.resolve("candidates")).resolve("inner.jar"));
+		new ForbricModDiscoverer().discoverJar(bundled);
+		MetadataFailures.recordFindings(MultiLoaderArbiter::ownerOf, List.of(), mods, forgeOnly::equals);
+		assertEquals(List.of(), CompatibilityFindings.confirmedRequired());
+		assertEquals(1, CompatibilityFindings.suspected().size(), CompatibilityFindings.all().toString());
+		assertEquals(List.of(), MetadataFailures.lost());
+	}
+
+	/**
+	 * The player downloaded every file the mod page offered: the MinecraftForge build and the NeoForge build of the same
+	 * mod sit side by side. The mod loads, from the NeoForge build, so the refusal of the other file costs nothing — a
+	 * note naming the file the mod loads from, no Lost row, no required finding, and above all nothing on the row of the
+	 * build that loads and nothing that stops a dedicated server. Red-checked: with {@code recordFindings} handed
+	 * {@code id -> null} instead of {@code DuplicateModArbiter::loadedClaimant} the refusal was a confirmed required
+	 * finding on {@code foo}, the NeoForge build's row was DEGRADED and the dedicated server stopped.
+	 */
+	@Test void aMinecraftForgeBuildBesideTheNeoForgeBuildOfTheSameModIsOnlyANote() throws Exception {
+		Path pair = Files.createDirectories(temporary.resolve("pair").resolve("mods"));
+		Path forge = jar(pair.resolve("foo-1.0-forge.jar"), new String[][] {
+				{"META-INF/mods.toml", toml("foo", "Foo", "forge")}},
+				"x/FooForge.class", mod("x/FooForge", "Lnet/minecraftforge/fml/common/Mod;", "foo"));
+		Path neoBuild = jar(pair.resolve("foo-1.0-neoforge.jar"), new String[][] {
+				{"META-INF/neoforge.mods.toml", toml("foo", "Foo", "neoforge")}},
+				"x/FooNeo.class", mod("x/FooNeo", "Lnet/neoforged/fml/common/Mod;", "foo"));
+		System.setProperty(DialogLang.SWITCH, "en");
+		DuplicateModArbiter.Decision decision = DuplicateModArbiter.arbitrate(pair, net.fabricmc.api.EnvType.SERVER, null);
+		assertFalse(decision.suppressed(neoBuild), "the NeoForge build loads");
+		assertEquals(neoBuild.toAbsolutePath(), DuplicateModArbiter.loadedClaimant("foo"));
+		new ForbricModDiscoverer().discoverJar(forge);
+		assertTrue(MetadataFailures.unsupported(forge));
+
+		MetadataFailures.recordFindings(MultiLoaderArbiter::ownerOf, List.of(), pair, decision::suppressed,
+				DuplicateModArbiter::loadedClaimant);
+		assertEquals(List.of(), CompatibilityFindings.confirmedRequired());
+		assertEquals(List.of(), MetadataFailures.lost(), "the mod is not lost: it loads");
+		List<CompatibilityFinding> notes = CompatibilityFindings.suspected().stream()
+				.filter(f -> f.id().equals(MetadataFailures.UNSUPPORTED_FINDING)).toList();
+		assertEquals(1, notes.size(), CompatibilityFindings.all().toString());
+		assertEquals("Foo (foo-1.0-forge.jar) is the MinecraftForge build. Forbric no longer supports MinecraftForge, so "
+				+ "it is left out; Foo loads from foo-1.0-neoforge.jar instead.", notes.get(0).detail());
+		assertFalse(notes.get(0).required());
+
+		KernelModCatalog.publish(new ForbricModDiscoverer().discoverJar(neoBuild), pair);
+		ModCatalog.Entry row = ModCatalog.all().stream().filter(e -> e.modId().equals("foo")).findFirst()
+				.orElseThrow(() -> new AssertionError("no row: " + ModCatalog.all()));
+		assertEquals("foo-1.0-neoforge.jar", row.jar());
+		assertNotEquals(ModCatalog.Status.DEGRADED, row.status(), row.statusDetail());
+		assertNotEquals(ModCatalog.Status.FAILED, row.status(), row.statusDetail());
+
+		System.setProperty(CompatibilityDecision.PROPERTY, "ask");
+		assertTrue(CompatibilityDecision.check(false), "a dedicated server does not stop over a mod that loads");
+		System.setProperty(CompatibilityDecision.PROPERTY, "strict");
+		assertTrue(CompatibilityDecision.check(true), "nor does a strict launch");
+	}
+
+	/**
+	 * A MinecraftForge jar whose fabric.mod.json does not parse has no usable half because that file is broken — and it
+	 * may be the Fabric build. The player is told which file is broken, not to fetch "the Fabric build".
+	 */
+	@Test void aRefusalCausedByABrokenFabricManifestNamesTheBrokenFile() throws Exception {
+		Path broken = jar(mods.resolve("brk-1.0.jar"), new String[][] {
+				{"META-INF/mods.toml", toml("brk", "Broken", "forge")},
+				{"fabric.mod.json", "{\"schemaVersion\":1,\"id\":\"brk\",\"version\":\"1\", // a comment\n}"}},
+				"example/Brk.class", mod("example/Brk", "Lnet/minecraftforge/fml/common/Mod;", "brk"));
+		new ForbricModDiscoverer().discoverJar(broken);
+		System.setProperty(DialogLang.SWITCH, "en");
+		MetadataFailures.recordFindings(MultiLoaderArbiter::ownerOf, List.of(), mods, jar -> false);
+		CompatibilityFinding finding = CompatibilityFindings.confirmedRequired().stream()
+				.filter(f -> f.modId().equals("brk")).findFirst().orElseThrow(() -> new AssertionError(CompatibilityFindings.all()));
+		assertEquals("Broken (brk-1.0.jar) is a MinecraftForge mod, and its fabric.mod.json cannot be read, so it does not "
+				+ "load through that either. Forbric no longer supports MinecraftForge, so it is not loaded. Tell the author "
+				+ "of Broken that the fabric.mod.json in brk-1.0.jar is broken.", finding.detail());
+		System.setProperty(DialogLang.SWITCH, "zh_cn");
+		CompatibilityFindings.reset();
+		MetadataFailures.recordFindings(MultiLoaderArbiter::ownerOf, List.of(), mods, jar -> false);
+		assertTrue(CompatibilityFindings.confirmedRequired().get(0).detail().contains("brk-1.0.jar 里的 fabric.mod.json 已损坏"),
+				CompatibilityFindings.all().toString());
+	}
+
+	/**
+	 * With duplicate arbitration switched off there is no candidate plan and Fabric discovery lists mods/ itself; a
+	 * refused jar that carries a (fake) fabric.mod.json must still not become a Fabric candidate or reach the classpath.
+	 * Red-checked: with the refusal taken out of the scan's skip test the refused jar was a Fabric classpath jar.
+	 */
+	@Test void aRefusedJarWithAFabricManifestStaysOffTheClasspathWithoutAPlan() throws Exception {
+		Path fake = jar(mods.resolve("wrongloader-1.0-forge.jar"), new String[][] {
+				{"META-INF/mods.toml", toml("wrongloader", "Wrong Loader", "forge")},
+				{"fabric.mod.json", "{\"schemaVersion\":1,\"id\":\"wrongloader\",\"version\":\"1\","
+						+ "\"entrypoints\":{\"main\":[\"example.Missing\"]}}"}},
+				"example/WrongLoader.class", mod("example/WrongLoader", "Lnet/minecraftforge/fml/common/Mod;", "wrongloader"));
+		assertTrue(MultiLoaderArbiter.refused(fake));
+		var discovery = KernelFabricEcosystem.scan(net.fabricmc.api.EnvType.SERVER, temporary,
+				DuplicateModArbiter.Decision.none(), "26.2", List.of());
+		List<Path> classpath = discovery.getClasspathJars().stream().map(p -> p.toAbsolutePath().normalize()).toList();
+		assertFalse(classpath.contains(fake.toAbsolutePath().normalize()), classpath.toString());
+		assertTrue(classpath.contains(universal.toAbsolutePath().normalize()), "the universal jar still loads as Fabric: "
+				+ classpath);
+	}
+
+	@Test void minecraftForgeInThePreferenceIsIgnored() throws Exception {
+		System.setProperty("forbric.multiLoaderPreference", "minecraftforge,fabric");
+		try {
+			assertEquals(List.of(Ecosystem.FABRIC), MultiLoaderArbiter.preference());
+			System.setProperty("forbric.multiLoaderPreference", "minecraftforge");
+			assertEquals(List.of(Ecosystem.NEOFORGE, Ecosystem.FABRIC), MultiLoaderArbiter.preference(),
+					"nothing left: the default order");
+		} finally {
+			System.clearProperty("forbric.multiLoaderPreference");
+		}
+	}
+
+	// --------------------------------------------------------------------------------------------------------------
+
+	private static String toml(String id, String name, String loader) {
+		return "modLoader=\"javafml\"\nloaderVersion=\"[1,)\"\nlicense=\"MIT\"\n[[mods]]\nmodId=\"" + id + "\"\nversion=\"1\"\n"
+				+ "displayName=\"" + name + "\"\n[[dependencies." + id + "]]\nmodId=\"" + loader
+				+ "\"\ntype=\"required\"\nversionRange=\"[1,)\"\n";
+	}
+
+	private static Path jar(Path path, String[][] texts, Object... classes) throws Exception {
+		try (var out = new java.util.jar.JarOutputStream(Files.newOutputStream(path))) {
+			for (String[] text : texts) {
+				out.putNextEntry(new java.util.jar.JarEntry(text[0]));
+				out.write(text[1].getBytes(StandardCharsets.UTF_8));
+				out.closeEntry();
+			}
+			for (int i = 0; i < classes.length; i += 2) {
+				out.putNextEntry(new java.util.jar.JarEntry((String) classes[i]));
+				out.write((byte[]) classes[i + 1]);
+				out.closeEntry();
+			}
+		}
+		return path;
+	}
+
+	private static byte[] mod(String name, String annotation, String id) {
+		ClassWriter out = new ClassWriter(0);
+		out.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null);
+		var mod = out.visitAnnotation(annotation, true);
+		mod.visit("value", id);
+		mod.visitEnd();
+		out.visitEnd();
+		return out.toByteArray();
+	}
+
+	private static byte[] fabricInit(String name) {
+		ClassWriter out = new ClassWriter(0);
+		out.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", new String[] {"net/fabricmc/api/ModInitializer"});
+		var ctor = out.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+		ctor.visitCode();
+		ctor.visitVarInsn(Opcodes.ALOAD, 0);
+		ctor.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+		ctor.visitInsn(Opcodes.RETURN);
+		ctor.visitMaxs(1, 1);
+		ctor.visitEnd();
+		var init = out.visitMethod(Opcodes.ACC_PUBLIC, "onInitialize", "()V", null, null);
+		init.visitCode();
+		init.visitInsn(Opcodes.RETURN);
+		init.visitMaxs(0, 1);
+		init.visitEnd();
+		out.visitEnd();
+		return out.toByteArray();
+	}
+
+	/**
+	 * With no {@code -Dforbric.dialogLanguage}, the finding's detail follows the system language: a player on a Chinese
+	 * system reads it in Chinese, an English one in English. gate-m29 used to boot a whole server under zh_CN for this;
+	 * the boot's other checks were the English boot's on the same jars (D88b). Red-checked: with
+	 * {@code DialogLang.ofSystem} answering {@code EN} regardless of the locale, and with the zh_cn table's
+	 * {@code unsupported.forge.detail} replaced by the English text, the first assertion failed.
+	 */
+	@Test void theFindingFollowsTheSystemLanguageWhenNoLanguageIsNamed() throws Exception {
+		Locale before = Locale.getDefault();
+		String zh, en;
+		try {
+			System.clearProperty(DialogLang.SWITCH);
+			Locale.setDefault(Locale.SIMPLIFIED_CHINESE);
+			new ForbricModDiscoverer().discoverJar(forgeOnly);
+			MetadataFailures.recordFindings(MultiLoaderArbiter::ownerOf, List.of(), mods, jar -> false);
+			zh = CompatibilityFindings.confirmedRequired().get(0).detail();
+
+			reset();
+			Locale.setDefault(Locale.ENGLISH);
+			new ForbricModDiscoverer().discoverJar(forgeOnly);
+			MetadataFailures.recordFindings(MultiLoaderArbiter::ownerOf, List.of(), mods, jar -> false);
+			en = CompatibilityFindings.confirmedRequired().get(0).detail();
+		} finally {
+			Locale.setDefault(before);
+		}
+		assertEquals("Only Forge（onlyforge-1.0-forge.jar）是 MinecraftForge mod。Forbric 已不再支持 MinecraftForge，所以它不会被加载。"
+				+ "请改用 Only Forge 的 NeoForge 或 Fabric 版本。", zh);
+		assertTrue(en.startsWith("Only Forge (onlyforge-1.0-forge.jar) is a MinecraftForge mod. Forbric no longer supports"), en);
+	}
+}

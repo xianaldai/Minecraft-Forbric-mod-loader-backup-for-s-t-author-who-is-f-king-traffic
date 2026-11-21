@@ -24,19 +24,20 @@ import net.forbric.kernel.TestFixtures;
 import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
- * On the real merged CustomPacketPayload: NeoForge's codec overload goes through vanilla's from outside a build,
+ * On the real CustomPacketPayload as the chain hands it over (vanilla's overload restored by the twins): NeoForge's codec overload goes through vanilla's from outside a build,
  * vanilla's hands back to NeoForge's inside one, and both keep their own bodies after the prologue.
  */
 @ResourceLock("system-properties")
 class PayloadCodecFunnelInjectorTest {
 	private static final Path MERGED = TestFixtures.stagedRoot()
-			.resolve("merged-base/patched-mc-merged-26.2.jar");
+			.resolve(TestFixtures.BASE_JAR);
 
 	@AfterEach void reset() { System.clearProperty(PayloadCodecFunnelInjector.PROPERTY); }
 
 	@Test void neoForgesOverloadGoesThroughVanillasAndVanillasHandsBack() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED), "merged base not staged: " + MERGED);
-		byte[] original = NativeCoremodParityTest.read(MERGED, PayloadCodecFunnelInjector.OWNER);
+		TestFixtures.requireFile(Fixture.STAGED, MERGED, "base not staged: " + MERGED);
+		// As the chain hands it over: the vanilla twins restore vanilla's two-argument codec on the genuine base first.
+		byte[] original = PreMixinView.of(PayloadCodecFunnelInjector.OWNER, NativeCoremodParityTest.read(MERGED, PayloadCodecFunnelInjector.OWNER));
 		byte[] out = new PayloadCodecFunnelInjector().transform(PayloadCodecFunnelInjector.TARGET, original, null);
 		assertNotSame(original, out);
 		ClassNode node = new ClassNode();

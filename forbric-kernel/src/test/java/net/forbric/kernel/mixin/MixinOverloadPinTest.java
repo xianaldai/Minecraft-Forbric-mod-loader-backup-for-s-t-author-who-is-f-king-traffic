@@ -39,20 +39,19 @@ import org.objectweb.asm.tree.MethodNode;
 /**
  * Explaining a mixin failure whose reason is two files away.
  *
- * <p>Apoli's sky-skip targets {@code lambda$addSkyPass$0(GpuBufferSlice, SkyRenderState)} — vanilla's shape, and
- * the one MinecraftForge's base also has. The merge kept NeoForge's body of {@code addSkyPass}, whose lambda is
- * {@code (SkyRenderState, Matrix4fc, GpuBufferSlice)}, and the duplicate-lambda pruner then dropped the vanilla
- * chain because binding a mixin into dead code is worse than not binding. All Mixin can say after that is
+ * <p>Apoli's sky-skip targets {@code lambda$addSkyPass$0(GpuBufferSlice, SkyRenderState)} — vanilla's shape. NeoForge's
+ * body of {@code addSkyPass} has the lambda as {@code (SkyRenderState, Matrix4fc, GpuBufferSlice)}. All Mixin can say is
  * "Invalid descriptor", which is true and tells nobody anything.
  *
- * <p>The diagnosis must be all-or-nothing: said only when the shape the handler fits really was dropped from
- * that class, and never for a selector that binds. It changes no bytes — asserted here, because a lambda's name is a
+ * <p>The diagnosis must be all-or-nothing: said only when the shape the handler fits is vanilla's (the FABRIC reference)
+ * and the class no longer declares it, and never for a selector that binds. It changes no bytes — asserted here, because a lambda's name is a
  * counter, and repointing it would move an injection somewhere the mod did not ask for, silently.
  *
  * <p>The pin (issue #56) is the other half: a bare name Mixin would bind to the other ecosystem's overload, declared
  * first, is pinned to the one overload its handler was written for — only when the first cannot take the handler, and
  * only when exactly one other can.
  */
+@org.junit.jupiter.api.extension.ExtendWith(net.forbric.kernel.mixin.VanillaLambdaReference.class)
 class MixinOverloadPinTest {
 	private static final String TARGET = "net/minecraft/client/renderer/LevelRenderer";
 	private static final String SLICE = "Lcom/mojang/blaze3d/buffers/GpuBufferSlice;";
@@ -67,7 +66,7 @@ class MixinOverloadPinTest {
 	private static final String CLICK = "handleCustomClickAction";
 	private static final String ID = "Lnet/minecraft/resources/Identifier;";
 	private static final String OPTIONAL = "Ljava/util/Optional;";
-	/** NeoForge's overload, declared first on the merged base: fire the event, then call vanilla's. */
+	/** NeoForge's overload, declared first on the staged base: fire the event, then call vanilla's. */
 	private static final String CARRIER_CLICK = "(" + ID + OPTIONAL + "Lnet/minecraft/server/level/ServerPlayer;"
 			+ "Lcom/mojang/authlib/GameProfile;)V";
 	private static final String VANILLA_CLICK = "(" + ID + OPTIONAL + ")V";
@@ -78,14 +77,14 @@ class MixinOverloadPinTest {
 	}
 
 	@Test
-	void aSelectorWhoseShapeTheMergeDroppedIsExplained() {
+	void aSelectorWhoseShapeACarrierPatchChangedIsExplained() {
 		ClassNode mixin = mixinWith("(" + SLICE + SKY + CI + ")V", NAME);
 		byte[] before = selectorsOf(mixin).toString().getBytes();
 
 		assertEquals(0, MixinOverloadPin.pin(mixin, targets(neoForgeLambdaOnly())), "a lambda is never pinned");
-		assertEquals("its skipSkyRenderingForPhasingBlindness targets lambda$addSkyPass$0, a lambda of the addSkyPass "
-				+ "body the byte merge did not keep", MixinOverloadPin.reasonFor(MIXIN),
-				"the handler fits a shape this class no longer declares, and the pruner is why");
+		assertEquals("its skipSkyRenderingForPhasingBlindness targets lambda$addSkyPass$0, a lambda of addSkyPass whose "
+				+ "captures a carrier patch changed from vanilla's", MixinOverloadPin.reasonFor(MIXIN),
+				"the handler fits vanilla's shape, which this class no longer declares");
 		assertEquals(new String(before), selectorsOf(mixin).toString(),
 				"the diagnosis changes nothing: repointing the selector would move the injection somewhere the "
 						+ "mod did not ask for");
@@ -100,17 +99,16 @@ class MixinOverloadPinTest {
 	}
 
 	/**
-	 * A selector that binds is not explained EVEN IF a same-named body was dropped that it would also have fit.
+	 * A selector that binds is not explained EVEN IF the reference declares a same-named shape it would also have fit.
 	 *
-	 * <p>The pruner drops a body per name, and a class can lose one that looks like the one it kept. Without the
-	 * short-circuit on a binding target, every such mixin would be told its injection has no live target while it
+	 * <p>Without the short-circuit on a binding target, every such mixin would be told its injection has no live target while it
 	 * is running perfectly well — a false diagnosis is worse than none, because it sends the reader somewhere
 	 * there is nothing to find.
 	 */
 	@Test
-	void aSelectorThatBindsIsNotExplainedEvenWhenItsShapeWasAlsoDropped() {
+	void aSelectorThatBindsIsNotExplainedEvenWhenTheReferenceAlsoHasItsShape() {
 		ClassNode target = neoForgeLambdaOnly();
-		net.forbric.kernel.transform.DuplicateLambdaPruneInjector.recordDroppedForTest(
+		net.forbric.kernel.mixin.VanillaLambdaReference.declare(
 				TARGET, NAME, "(" + SKY + MATRIX + SLICE + ")V");
 
 		ClassNode mixin = mixinWith("(" + SKY + MATRIX + SLICE + CI + ")V", NAME);
@@ -119,8 +117,8 @@ class MixinOverloadPinTest {
 	}
 
 	/**
-	 * A handler that fits neither what is there NOR what was dropped is a mod targeting something this game never
-	 * had. Saying "the merge dropped it" would be a guess wearing a fact's clothes.
+	 * A handler that fits neither what is there NOR vanilla's shape is a mod targeting something this game never had.
+	 * Saying "a carrier patch changed it" would be a guess wearing a fact's clothes.
 	 */
 	@Test
 	void aHandlerThatFitsNothingIsNotExplained() {
@@ -327,7 +325,7 @@ class MixinOverloadPinTest {
 		MethodNode handler = mixin.methods.get(0);
 		assertTrue(MixinOverloadPin.explain(mixin, handler, CLICK, List.of(SERVER), targets(server)));
 		assertEquals("its onClick selects handleCustomClickAction by name, which binds the first of 2 methods the "
-				+ "merged class declares with that name, " + CARRIER_CLICK + "; the handler was written for " + VANILLA_CLICK,
+				+ "current class declares with that name, " + CARRIER_CLICK + "; the handler was written for " + VANILLA_CLICK,
 				MixinOverloadPin.reasonFor(mixin.name));
 
 		MixinOverloadPin.clearReasons();
@@ -354,8 +352,8 @@ class MixinOverloadPinTest {
 	@Test
 	void theRealMergedServerIsPinnedToVanillasOverload() throws Exception {
 		java.nio.file.Path merged = net.forbric.kernel.TestFixtures.stagedRoot()
-				.resolve("merged-base/patched-mc-merged-26.2.jar").normalize();
-		net.forbric.kernel.TestFixtures.requireFiles(net.forbric.kernel.TestFixtures.Fixture.STAGED, "the merged base", merged);
+				.resolve(net.forbric.kernel.TestFixtures.BASE_JAR).normalize();
+		net.forbric.kernel.TestFixtures.requireFiles(net.forbric.kernel.TestFixtures.Fixture.STAGED, "the staged base", merged);
 		ClassNode server = new ClassNode();
 		try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(merged.toFile())) {
 			new org.objectweb.asm.ClassReader(zip.getInputStream(zip.getEntry(SERVER + ".class")).readAllBytes())
@@ -394,9 +392,9 @@ class MixinOverloadPinTest {
 		return mixin;
 	}
 
-	/** What the merged base looks like AFTER the pruner: NeoForge's lambda only, vanilla's recorded as dropped. */
+	/** NeoForge's class: its lambda only; vanilla's shape is in the FABRIC reference. */
 	private static ClassNode neoForgeLambdaOnly() {
-		net.forbric.kernel.transform.DuplicateLambdaPruneInjector.recordDroppedForTest(TARGET, NAME, VANILLA_SHAPE);
+		net.forbric.kernel.mixin.VanillaLambdaReference.declare(TARGET, NAME, VANILLA_SHAPE);
 		ClassNode target = new ClassNode();
 		target.name = TARGET;
 		target.methods = new ArrayList<>(List.of(method(NAME, "(" + SKY + MATRIX + SLICE + ")V")));

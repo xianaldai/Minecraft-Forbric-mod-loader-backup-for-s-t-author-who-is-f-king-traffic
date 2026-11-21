@@ -79,12 +79,12 @@ import net.forbric.kernel.util.ForbricLog;
  *
  * <h2>Which classes: only those from a jar arbitrated to Fabric</h2>
  *
- * <p>Fabric's own scope is "everything Knot loads except Minecraft". In one process holding three ecosystems that
- * translates to the jars {@code MultiLoaderArbiter} gave to Fabric. The merged base, the runtime carriers, the MC
+ * <p>Fabric's own scope is "everything Knot loads except Minecraft". In one process holding two ecosystems that
+ * translates to the jars {@code MultiLoaderArbiter} gave to Fabric. The game base, the runtime carrier, the MC
  * libraries and the kernel's own jars are Minecraft's side of that line (Fabric strips Minecraft only in a
- * development environment). A jar arbitrated to MinecraftForge or NeoForge is left alone even when it also ships a
+ * development environment). A jar arbitrated to NeoForge is left alone even when it also ships a
  * {@code fabric.mod.json} and carries the annotations -- tcdcommons and betterstats carry 85 such classes -- because
- * neither of those loaders strips anything, so that is what the mod was tested against.
+ * NeoForge strips nothing, so that is what the mod was tested against.
  *
  * <p>The family is asked of the jar the class loader WILL read the class from, not of the class it has defined:
  * Mixin inspects a class through the same chain before it is defined, and a mixin class is never defined at all. The
@@ -159,7 +159,7 @@ public final class EnvironmentStripTransformer implements ClassTransformer {
 
 	/**
 	 * @param familyOf the loader family of the jar a binary class name will be read from, or {@code null} when that
-	 *                 jar is unowned (merged base, carrier, library, a jar declaring no loader) or absent --
+	 *                 jar is unowned (game base, carrier, library, a jar declaring no loader) or absent --
 	 *                 {@code ForbricClassLoader::familyOfResource}
 	 * @param mode     {@link Mode#OFF} makes this a no-op
 	 */

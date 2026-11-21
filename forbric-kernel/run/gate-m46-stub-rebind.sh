@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# M46 — a Fabric mod's injector that Mixin binds to a merge-added delegating stub reaches the body again.
+# M46 — a Fabric mod's injector that Mixin binds to a carrier-added delegating stub reaches the body again.
 #
 # Mixin binds a selector without a descriptor to the FIRST declared method of that name. A carrier that widened a vanilla
 # method kept vanilla's signature in front as a stub — Player.getDestroySpeed(BlockState) forwards to NeoForge's
@@ -10,7 +10,7 @@
 # A dedicated server with a Fabric mixin mod compiled against vanilla (canary/stub-rebind/fabric-mixins: a name-only
 # RETURN on getDestroySpeed capturing the state, sevenfold on sponge; a name-only HEAD on randomTeleport, cancelling for
 # a tagged entity), the unmodified fabric-entity-events-v1, and a NeoForge driver that calls the methods the way the
-# merged game does:
+# game itself does:
 #   dirt speed (control), sponge speed through the moved and wrapped injection; an untagged teleport (control), a tagged
 #   one cancelled through the moved injection; a language file read through vanilla's rewrite (control) and the mod's
 #   prefixed format kept through malilib's @ModifyArgs shape, whose stub passes a non-capturing lambda (a constant) to
@@ -27,6 +27,7 @@ set -uo pipefail
 
 SERVER_DIR="$KERNEL/run/server-stub-m46"
 RESULTS="$BUILD/verification/m46-stub-rebind"
+refuse_shared_rundir "$SERVER_DIR"
 FAIL=0
 REPAIRED="{'speed.rebound', 'teleport.rebound', 'language.rebound'}"
 rm -rf "$RESULTS"; mkdir -p "$RESULTS"
@@ -48,7 +49,7 @@ run_server() {
   seed_server_properties "$SERVER_DIR"
   printf 'level-name=world\nlevel-type=minecraft:flat\ngenerate-structures=false\nmax-tick-time=-1\npause-when-empty-seconds=0\nonline-mode=false\n' >> "$SERVER_DIR/server.properties"
   RUNDIR="$SERVER_DIR" FORBRIC_COMPAT_POLICY="$policy" \
-    FORBRIC_JVM="-Dforbric.stubProbe=$RESULTS/$phase.json -Dforbric.stubPhase=$phase -Dforbric.relaxMixinOverwrites=forbricstubmixins.mixins.json $extra" \
+    FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.stubProbe=$RESULTS/$phase.json -Dforbric.stubPhase=$phase -Dforbric.relaxMixinOverwrites=forbricstubmixins.mixins.json $extra" \
     "$KERNEL/run/launch-kernel-server.sh" < /dev/null > "$RESULTS/$phase.log" 2>&1 &
   pid=$!; record_server_pid "$SERVER_DIR" "$pid"
   await_server "$pid" "$RESULTS/$phase.log" 240 30

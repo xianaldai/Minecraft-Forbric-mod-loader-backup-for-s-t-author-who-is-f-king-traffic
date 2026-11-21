@@ -41,7 +41,7 @@ import org.objectweb.asm.Type;
 /**
  * The adapter must drop a guest mixin exactly when the members it names no longer exist on the merged target —
  * not because of who owns the target class. Targets and mixins are synthesized with ASM so the test does not depend
- * on a real fabric-api jar or a real merged base.
+ * on a real fabric-api jar or a real staged base.
  *
  * <p>The two cases that decide correctness, both measured on the real client set before being written down here:
  * the orphaned-{@code @Shadow} archetype MUST be caught ({@code GuiRenderer.pictureInPictureRenderers} — declared,
@@ -57,7 +57,7 @@ class KernelGuestMixinAdapterTest {
 	private static final String PKG = "net/example/mixin";
 	private static final String SHADOW = "Lorg/spongepowered/asm/mixin/Shadow;";
 
-	// --- synthetic merged-base targets -------------------------------------------------------------------------
+	// --- synthetic base targets -------------------------------------------------------------------------
 
 	/**
 	 * A target declaring {@code field} of type {@code Ljava/util/Map;}, assigned in {@code <init>} only when
@@ -750,22 +750,6 @@ class KernelGuestMixinAdapterTest {
 
 		assertTrue(KernelGuestMixinAdapter.unfitMixins("example.mixins.json",
 				config(PKG.replace('/', '.'), "ForeignMixin"), resolver(classes)).isEmpty());
-	}
-
-	@Test
-	void anOrphanPostMixinFixupsSeedsIsNotAHazard() {
-		// GuiRenderer.pictureInPictureRenderers IS orphaned in the merged base, but PostMixinFixups seeds it with an
-		// empty map, so the mixins that @Shadow it work. Suppressing them instead broke MaLiLib: its MixinGameRenderer
-		// read the same map through mod-owned state and NPE'd during Minecraft.<init>.
-		String gui = "net/minecraft/client/gui/render/GuiRenderer";
-		Map<String, byte[]> classes = new HashMap<>();
-		classes.put(gui + ".class", target(gui, "pictureInPictureRenderers", Opcodes.ACC_PRIVATE, false));
-		classes.put(PKG + "/GuiRendererMixin.class",
-				shadowingMixin("GuiRendererMixin", gui, "pictureInPictureRenderers"));
-
-		assertTrue(KernelGuestMixinAdapter.unfitMixins("example.mixins.json",
-				config(PKG.replace('/', '.'), "GuiRendererMixin"), resolver(classes)).isEmpty(),
-				"a field the repair pass seeds must not be reported as an orphan");
 	}
 
 	@ExpectCaught("could not parse mixin config x.json")

@@ -57,8 +57,10 @@ class MixinCallbackSelectorSpellingTest {
 		contracts.add(create("mixin/StructureTemplateMixin", (mixin, targets) -> MixinStructurePlacementAdapter.adapt(mixin, targets, NATIVE), 3));
 		for (String entry : CarpetMixinAdapterTest.NAMES)
 			contracts.add(new Contract(entry, () -> CarpetMixinAdapterTest.mixin(entry),
-					(mixin, targets) -> MixinPlayerWorldCallbackAdapter.adapt(mixin, targets) + MixinFluidReactionAdapter.adapt(mixin, targets),
-					entry.startsWith("Level_") || entry.endsWith("BlackstoneMixin") ? 2 : 1));
+					// Carpet's mixins are a Fabric mod's, as the service records them, under whatever name a case gives them.
+					(mixin, targets) -> { MixinStubRebind.noteEcosystem(mixin.name, net.forbric.api.Ecosystem.FABRIC);
+						return MixinPlayerWorldCallbackAdapter.adapt(mixin, targets) + MixinFluidReactionAdapter.adapt(mixin, targets); },
+					entry.startsWith("Level_") ? 2 : 1));
 		contracts.add(jar("sprite loader", "build/compat-inputs/player-loading/mods/continuity-3.0.1+26.2.jar",
 				"me/pepperbell/continuity/client/mixin/SpriteSourceListMixin", MixinSpriteLoaderCallbackAdapter::adapt, 1));
 		contracts.add(jar("GUI item", "build/sweep80-mac/v020-rounds/r3/mods/itemglintrelight-fabric-26.2-0.3.0+26.2.jar",
@@ -90,13 +92,9 @@ class MixinCallbackSelectorSpellingTest {
 	}
 	private static ClassNode copy(ClassNode node) { ClassNode copy = new ClassNode(); node.accept(copy); return copy; }
 
+	/** The pre-Mixin view, which already carries the compat repairs (the PiP bridge on GuiRenderer among them). */
 	private static ClassNode read(String name) {
-		ClassNode target = CarpetMixinAdapterTest.target(name);
-		if (name.equals("net/minecraft/client/gui/render/GuiRenderer")) {
-			byte[] bytes = new net.forbric.kernel.transform.ForbricMergedBaseCompatTransformer().transform(name.replace('/', '.'), CarpetMixinAdapterTest.bytes(target), null);
-			return MixinFit.parse(bytes);
-		}
-		return target;
+		return CarpetMixinAdapterTest.target(name);
 	}
 
 	/** Another package, another class name and other handler names, with self references and private delegates remapped. */

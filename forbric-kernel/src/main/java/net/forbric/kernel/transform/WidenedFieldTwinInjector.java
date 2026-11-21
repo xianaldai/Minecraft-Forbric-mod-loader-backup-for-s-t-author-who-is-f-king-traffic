@@ -34,7 +34,7 @@ import org.objectweb.asm.tree.VarInsnNode;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
- * Restores vanilla's field descriptor BESIDE the merged one for the fields the merge re-typed.
+ * Restores vanilla's field descriptor BESIDE the base's one for the fields the base re-typed.
  *
  * <p>A JVM field is identified by name AND descriptor. NeoForge widened {@code RangedBowAttackGoal.mob} from
  * {@code Monster} to {@code Mob} and re-typed {@code AttributeSupplier$Builder.builder} from
@@ -43,7 +43,7 @@ import net.forbric.kernel.util.ForbricLog;
  * {@code @Accessor} typed {@code ImmutableMap$Builder} cannot bind ({@code InvalidAccessorException} on every
  * fabric-api boot) and every Fabric mod loses the default-attribute registry path. One field cannot serve both
  * readers — a {@code HashMap} is never an {@code ImmutableMap.Builder} — so each row gets a public, non-final
- * TWIN with vanilla's descriptor, written where the merged field is written. Two write shapes:
+ * TWIN with vanilla's descriptor, written where the base's field is written. Two write shapes:
  * <ul>
  *   <li>NARROW ({@code mob}): after every {@code putfield mob:LMob;} fed by an {@code aload n}, the twin is written
  *       from the same slot through {@code KernelWidenedFields.asMonster} — the guarded cast, null when NeoForge's
@@ -72,7 +72,7 @@ public final class WidenedFieldTwinInjector implements ClassTransformer {
 	 * @param owner       the class (internal name)
 	 * @param name        the field name both descriptors share
 	 * @param vanillaDesc the descriptor a vanilla-compiled reader carries — the twin's
-	 * @param mergedDesc  the descriptor the merged base declares
+	 * @param mergedDesc  the descriptor the base declares
 	 */
 	record Row(String owner, String name, String vanillaDesc, String mergedDesc, Shape shape) {
 	}
@@ -84,18 +84,18 @@ public final class WidenedFieldTwinInjector implements ClassTransformer {
 					MAP_DESC, Shape.FRESH_DRAIN));
 
 	/**
-	 * A field the merge WIDENED to a supertype of vanilla's: javac names the field's static type as the owner of every
+	 * A field NeoForge WIDENED to a supertype of vanilla's: javac names the field's static type as the owner of every
 	 * call made through it, so each such call moved owner with it ({@code Monster.lookAt} became {@code Mob.lookAt}).
 	 *
 	 * @param owner       the class declaring the field (internal name)
 	 * @param name        the field
 	 * @param vanillaType the type vanilla declares it with (internal name)
-	 * @param mergedType  the wider type the merged base declares it with (internal name)
+	 * @param mergedType  the wider type the base declares it with (internal name)
 	 */
 	public record Narrowed(String owner, String name, String vanillaType, String mergedType) {
 	}
 
-	/** The {@link Shape#NARROW} rows, for MixinSubtypeOwnerRetarget: the merge widened these fields, nothing else. */
+	/** The {@link Shape#NARROW} rows, for MixinSubtypeOwnerRetarget: NeoForge widened these fields, nothing else. */
 	public static List<Narrowed> narrowed() {
 		List<Narrowed> out = new ArrayList<>();
 		for (Row row : ROWS) {
@@ -208,8 +208,8 @@ public final class WidenedFieldTwinInjector implements ClassTransformer {
 		for (Runnable edit : edits) edit.run();
 		node.fields.add(new FieldNode(Opcodes.ACC_PUBLIC, row.name(), row.vanillaDesc(), null, null));
 		twins++;
-		ForbricLog.info("[Forbric/WidenedFields] %s: vanilla-descriptor twin %s:%s beside the merged %s (%d write(s), %d "
-				+ "drain(s)) — the merge re-typed the field, and a JVM field is its name AND its descriptor", className,
+		ForbricLog.info("[Forbric/WidenedFields] %s: vanilla-descriptor twin %s:%s beside the base's %s (%d write(s), %d "
+				+ "drain(s)) — the base re-typed the field, and a JVM field is its name AND its descriptor", className,
 				row.name(), row.vanillaDesc(), row.mergedDesc(), writes, drains);
 
 		ClassWriter writer = new ClassWriter(0);

@@ -31,16 +31,16 @@ import net.forbric.kernel.util.Caught;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
- * Moves a mod's injector off a merge-added delegating stub onto the method that carries the body, when the mod was
+ * Moves a mod's injector off a carrier-added delegating stub onto the method that carries the body, when the mod was
  * compiled against a class where that signature was the body.
  *
  * <p>Mixin binds a selector without a descriptor to the FIRST declared method of that name (the selector's default
  * quantifier is one match; {@code TargetSelectors} stops there), and one with a descriptor to exactly that method. A
  * carrier that widened a vanilla method usually kept vanilla's signature in place as a stub —
- * {@code Player.getDestroySpeed(BlockState)} is {@code return getDestroySpeed(state, null)} on the merged base — and
+ * {@code Player.getDestroySpeed(BlockState)} is {@code return getDestroySpeed(state, null)} on NeoForge's base — and
  * put the body in the new overload after it. A Fabric mod was compiled against vanilla, where that one method IS the
  * body, so its injector lands on the stub: an anchor inside the body is simply missing, and a {@code HEAD} or
- * {@code RETURN} injection runs only when something calls the stub. Nothing on the merged base calls
+ * {@code RETURN} injection runs only when something calls the stub. Nothing on NeoForge's base calls
  * {@code getDestroySpeed(BlockState)}: architectury's and Collective's break-speed events never fired.
  *
  * <p>The injector's selector moves to the delegate. A handler that captures the target's arguments is wrapped: the
@@ -51,13 +51,13 @@ import net.forbric.kernel.util.ForbricLog;
  *       carrier's. Vanilla keeps stub-and-overload pairs of its own ({@code Minecraft.disconnect(Screen, boolean)}
  *       forwarding to the three-argument one) and a mod that chose the short one there meant it;</li>
  *   <li>only for a mod whose own platform ran that selector on code. A Fabric mod was compiled against vanilla, so
- *       it moves along every row. A MinecraftForge or NeoForge mod moves only where its carrier's own patched class
- *       has vanilla's signature as the body (or, for a name-only selector, only the widened overload) — the row's
- *       {@code forge=}/{@code neo=} column. Most rows are NeoForge's stubs over a signature MinecraftForge kept as the
- *       body: fusion's sprite capture on {@code ModelManager.loadModels} sat on the forwarding stub nothing calls,
- *       its static stayed null, and every block and item model on the client failed to bake. A mod whose carrier
- *       keeps the same stub itself (NeoForge mods on NeoForge's stubs) gets what it would get natively.
- *       {@code -Dforbric.mixinStubRebind.forgeFamily=off} moves Fabric mods' injectors only, as before;</li>
+ *       it moves along every row. A NeoForge mod moves only where NeoForge's own patched class has vanilla's
+ *       signature as the body (or, for a name-only selector, only the widened overload) — the row's {@code neo=}
+ *       column. On NeoForge's own base that is only where a vanilla twin made the stub (AxeItem's
+ *       {@code evaluateNewBlockState}); a NeoForge mod on NeoForge's own stubs gets what it gets natively. (While
+ *       Forbric loaded MinecraftForge mods a {@code forge=} column moved theirs: fusion's sprite capture on
+ *       {@code ModelManager.loadModels} sat on a forwarding stub nothing calls.)
+ *       {@code -Dforbric.mixinStubRebind.forgeFamily=off} moves Fabric mods' injectors only;</li>
  *   <li>only a PURE stub: loads, constants, fields, lambdas and method references (a constant when they capture
  *       nothing — NeoForge's {@code Language.loadFromJson(InputStream, BiConsumer)} passes a no-op component consumer;
  *       {@code EntityFluidInteraction.update(Entity, boolean)} wraps its flag in the {@code Predicate} its body takes)
@@ -94,7 +94,7 @@ import net.forbric.kernel.util.ForbricLog;
  *       int)} captures all three, the stub feeds the first two into a {@code Builder}, and moving it to
  *       {@code (Builder, int)} made MixinExtras reject the handler and the whole required mixin with it. It now
  *       stays on the stub, where it binds, and is reported SUSPECTED: it then runs only where something calls the
- *       stub. The merged dedicated server builds its fuel without calling it; the kernel's fuel bridge
+ *       stub. NeoForge's dedicated server builds its fuel without calling it; the kernel's fuel bridge
  *       ({@code KernelFabricFuel.throughVanillaReturnHooks}) now calls it there, so this one runs on both sides unless
  *       {@code -Dforbric.fabricFuel.returnHooks=off} ({@code -Dforbric.mixinStubRebind.stubFinding=off} drops the
  *       finding); puzzleslib's {@code getDestroySpeed(float, BlockState)} still moves,
@@ -104,7 +104,7 @@ import net.forbric.kernel.util.ForbricLog;
  *       type across a body the carrier widened), at {@code LOAD}/{@code STORE} with no slice, when the stub has no
  *       local of that name and the delegate's table has it in one slot of the handler's type, accessed while live more
  *       times than the {@code @At}'s ordinal. torrential's Conduit Power mining bonus names {@code speed} in
- *       {@code Player.getDestroySpeed}; the merged stub has no {@code speed}, the body is the overload the game calls,
+ *       {@code Player.getDestroySpeed}; the carrier's stub has no {@code speed}, the body is the overload the game calls,
  *       and the bonus silently never applied. One discriminated by {@code ordinal} alone moves only with the slot it
  *       reads pinned as its {@code index}: the native method's ordinal-picked local and exactly one non-added local of
  *       the delegate holding the same values ({@link #ordinalLocalPinned}) — puzzleslib's explosion hook spares entities
@@ -132,7 +132,10 @@ public final class MixinStubRebind {
 	public static final String SUGAR_BOUNDARY_PROPERTY = "forbric.mixinStubRebind.sugarBoundary";
 	/** {@code -Dforbric.mixinStubRebind.stubFinding=off}: a handler its captures keep on a stub is not reported. */
 	public static final String STUB_FINDING_PROPERTY = "forbric.mixinStubRebind.stubFinding";
-	/** {@code -Dforbric.mixinStubRebind.forgeFamily=off}: only Fabric mods' injectors move, as before the carrier columns. */
+	/**
+	 * {@code -Dforbric.mixinStubRebind.forgeFamily=off}: only Fabric mods' injectors move, as before the carrier column.
+	 * It gates NeoForge mods' moves only now; the name stays (D31), a rename is later naming work.
+	 */
 	public static final String FORGE_FAMILY_PROPERTY = "forbric.mixinStubRebind.forgeFamily";
 	/** {@code -Dforbric.mixinStubRebind.typedLocal=off}: a handler with a by-type-only {@code @Local} stays on the stub. */
 	public static final String TYPED_LOCAL_PROPERTY = "forbric.mixinStubRebind.typedLocal";
@@ -447,7 +450,7 @@ public final class MixinStubRebind {
 	/**
 	 * Whether {@code method} of {@code target} heads a carrier-stubs.txt row where a mod of {@code ecosystem} was compiled
 	 * against code, by either selector form: an injector of that mod attached only there runs just for callers of the
-	 * old signature, which on the merged base are often none (FinalMixinApplications reports it).
+	 * old signature, which on NeoForge's base are often none (FinalMixinApplications reports it).
 	 */
 	public static boolean isStubOverBody(ClassNode target, MethodNode method, Ecosystem ecosystem) {
 		if (target == null || method == null || ecosystem == null) return false;
@@ -528,7 +531,7 @@ public final class MixinStubRebind {
 					+ "would come first", mixin.name.replace('/', '.'), handler.name, target.name.replace('/', '.'), delegate.name, delegate.desc,
 					plan.variableIndex());
 		}
-		ForbricLog.info("[Forbric/Mixin] %s: %s now targets %s.%s%s — Mixin bound its selector to the merge-added stub %s, "
+		ForbricLog.info("[Forbric/Mixin] %s: %s now targets %s.%s%s — Mixin bound its selector to the carrier-added stub %s, "
 				+ "which only forwards to it%s%s", mixin.name.replace('/', '.'), handler.name, target.name.replace('/', '.'),
 				delegate.name, delegate.desc, stub.desc, captures ? "; the handler still receives the stub's arguments" : "",
 				ecosystem == Ecosystem.FABRIC ? "" : "; a " + ecosystem.displayName() + " mod, and " + ecosystem.displayName()
@@ -625,7 +628,7 @@ public final class MixinStubRebind {
 				String key = MixinFit.asString(MixinFit.value(share, "value"));
 				if (!sharedEnabled() || key == null || MixinFit.value(share, "namespace") != null) return null;
 				// A @Redirect that shares state with its siblings replaces the call as part of a takeover set up elsewhere
-				// in the method; on the merged body that call could be a carrier's own pipeline. It moves only where the
+				// in the method; on the current body that call could be a carrier's own pipeline. It moves only where the
 				// delegate makes each call it replaces exactly as often as the mod's own platform made it at that
 				// signature (replacesOnlyNativeCalls): the takeover then meets the calls it met natively, and none a
 				// carrier added. fabric-renderer-api's SectionCompilerMixin hands every block of a chunk section to the
@@ -816,7 +819,7 @@ public final class MixinStubRebind {
 		String config = CONFIGS.get(mixin.name);
 		String dotted = mixin.name.replace('/', '.');
 		String owner = target.name.replace('/', '.');
-		String detail = handler.name + " stays on " + owner + "." + stub.name + stub.desc + ", a stub the merged base "
+		String detail = handler.name + " stays on " + owner + "." + stub.name + stub.desc + ", a stub the base "
 				+ "added that only forwards to " + delegate.name + delegate.desc + ": the handler captures stub "
 				+ "arguments the body is not handed, so it cannot move. It runs only where the game calls the stub; "
 				+ "code that calls the body directly skips it (a side that never calls the stub never runs it)";
@@ -1187,7 +1190,7 @@ public final class MixinStubRebind {
 	 * to the delegate unchanged, as the argument the same rule picks there ({@link #argumentSurvives}).
 	 *
 	 * <p>On the stub the modifier runs before the forwarding call and changes what the delegate receives, so a caller of the
-	 * stub sees it on the delegate as well; but a caller of the delegate itself — the merged game's own — never reaches it.
+	 * stub sees it on the delegate as well; but a caller of the delegate itself — the game's own — never reaches it.
 	 * architectury's tooltip position event changes vanilla's {@code tooltip(Font, List, int, int, ClientTooltipPositioner,
 	 * Identifier)} x and y that way at its head, beside the HEAD callback that fires the event and fills the position the
 	 * modifiers read; that callback moved to the body, the modifiers stayed on the stub, and the deferred tooltip — drawn
@@ -1261,9 +1264,9 @@ public final class MixinStubRebind {
 	}
 
 	/**
-	 * What a mod of one Forge family was compiled against where a row's stub now stands: how that carrier's OWN patched
-	 * class binds the two selectors that land on the merged stub — vanilla's name alone, and vanilla's descriptor.
-	 * CarrierStubCensusTest reads it off patched-mc-forge and patched-mc-neoforge with {@link #of}.
+	 * What a NeoForge mod was compiled against where a row's stub now stands: how NeoForge's OWN patched class (the raw
+	 * base, before the vanilla twins) binds the two selectors that land on the stub — vanilla's name alone, and vanilla's
+	 * descriptor. CarrierStubCensusTest reads it off the raw base with {@link #of}.
 	 */
 	enum Shape {
 		/** Vanilla's signature is a body there, the first of its name: both selectors ran on code. */
@@ -1321,20 +1324,20 @@ public final class MixinStubRebind {
 		}
 	}
 
-	/** One row's columns: what a MinecraftForge and a NeoForge mod were compiled against at that stub. */
-	record Row(Shape forge, Shape neo) {
+	/** One row's column: what a NeoForge mod was compiled against at that stub. */
+	record Row(Shape neo) {
 		/** Whether a mod of {@code ecosystem} with a name-only ({@code byName}) or descriptor selector moves along this row. */
 		boolean moves(Ecosystem ecosystem, boolean byName) {
 			if (ecosystem == Ecosystem.FABRIC) return true;   // compiled against vanilla, where the row's signature is the body
 			if (!forgeFamilyEnabled()) return false;
-			Shape shape = ecosystem == Ecosystem.FORGE ? forge : ecosystem == Ecosystem.NEOFORGE ? neo : null;
+			Shape shape = ecosystem == Ecosystem.NEOFORGE ? neo : null;
 			return shape != null && shape.ranOnCode(byName);
 		}
 
 		/** Whether a selector of either form ran on code on {@code ecosystem}'s own platform, whatever the switches say. */
 		boolean ranOnCode(Ecosystem ecosystem) {
 			if (ecosystem == Ecosystem.FABRIC) return true;
-			Shape shape = ecosystem == Ecosystem.FORGE ? forge : ecosystem == Ecosystem.NEOFORGE ? neo : null;
+			Shape shape = ecosystem == Ecosystem.NEOFORGE ? neo : null;
 			return shape != null && (shape.ranOnCode(true) || shape.ranOnCode(false));
 		}
 	}
@@ -1350,12 +1353,12 @@ public final class MixinStubRebind {
 					if (line.isBlank() || line.startsWith("#")) continue;
 					String[] parts = line.trim().split(" ");
 					if (parts.length < 3 || !"->".equals(parts[1])) continue;
-					Shape forge = Shape.STUB, neo = Shape.STUB;
+					Shape neo = Shape.STUB;
 					for (int i = 3; i < parts.length; i++) {
-						if (parts[i].startsWith("forge=")) forge = java.util.Objects.requireNonNullElse(Shape.parse(parts[i].substring(6)), Shape.STUB);
+						// Other tokens are ignored: a forge= column from a table written while MinecraftForge mods loaded moves nobody.
 						if (parts[i].startsWith("neo=")) neo = java.util.Objects.requireNonNullElse(Shape.parse(parts[i].substring(4)), Shape.STUB);
 					}
-					loaded.put(parts[0] + " -> " + parts[2], new Row(forge, neo));
+					loaded.put(parts[0] + " -> " + parts[2], new Row(neo));
 				}
 			}
 		} catch (java.io.IOException unreadable) {
@@ -1380,7 +1383,7 @@ public final class MixinStubRebind {
 	 * A stub's delegate, and for each stub parameter the delegate position it reaches unchanged (-1: not directly).
 	 * {@code computed}: the stub works an argument out — a call, a field of an object, a lambda over what it captures —
 	 * rather than only loading, constructing and forwarding. Such a stub heads a row of {@code carrier-stubs.txt} only
-	 * where nothing in the merged game calls it (CarrierStubCensusTest): an injector there never runs. One the game
+	 * where nothing in the game calls it (CarrierStubCensusTest): an injector there never runs. One the game
 	 * still calls runs its injectors for every caller it has, and the delegate may have callers of its own the stub
 	 * never stood for — NeoForge's registry snapshot calls {@code MappedRegistry.register(int, …)} directly, where
 	 * fabric-registry-sync's add-entry callback on {@code register(ResourceKey, …)} has no business firing.
@@ -1613,7 +1616,7 @@ public final class MixinStubRebind {
 	 * back. A frame stands wherever one must — a jump, switch or handler target — so a target whose frame was not read
 	 * (MixinFit's read skips frames) is a frame of unknown type, which may drop it. An argument's slot is never lost: no
 	 * frame is sized below them. C2ME's watchdog report takes the dump's {@code StringBuilder} that way inside the thread
-	 * loop, whose head is an {@code APPEND} frame: Mixin keeps the builder there, natively and on the merged body.
+	 * loop, whose head is an {@code APPEND} frame: Mixin keeps the builder there, natively and on the current body.
 	 */
 	private static boolean loadedOrStoredSinceAFrame(MethodNode method, int slot, AbstractInsnNode anchor) {
 		if (slot < (Type.getArgumentsAndReturnSizes(method.desc) >> 2) - ((method.access & Opcodes.ACC_STATIC) != 0 ? 1 : 0)) return true;

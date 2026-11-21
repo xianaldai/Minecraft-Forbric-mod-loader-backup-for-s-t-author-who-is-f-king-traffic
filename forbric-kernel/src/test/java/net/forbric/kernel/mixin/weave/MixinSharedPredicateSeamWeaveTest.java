@@ -13,6 +13,7 @@ import org.objectweb.asm.tree.*;
 import net.fabricmc.api.EnvType;
 import net.forbric.api.Ecosystem;
 import net.forbric.kernel.mixin.*;
+import net.forbric.kernel.TestFixtures;
 
 /** Real Mixin execution of the actual API pair and the native-derived explicit-reference helpers.
  * Full native activation/final-token execution is separately covered by the physical fluid probe and scope tests. */

@@ -30,7 +30,7 @@ import net.forbric.api.Ecosystem;
 import net.forbric.kernel.TestFixtures;
 
 /**
- * {@link CarrierDefaultChains} on the unmodified upstream fabric-api sound mixin against the staged merged base and the native
+ * {@link CarrierDefaultChains} on the unmodified upstream fabric-api sound mixin against the staged base and the native
  * references it carries. Natively {@code SoundEngine.play} asks {@code soundBuffers.getStream(path, looping)} and fabric-api
  * redirects that; NeoForge asks the sound ({@code SoundInstance.getStream}), whose default asks the buffers. The redirect
  * moves onto the sound's call, its handler kept as written; the mechanism is given no name: the mixin renamed, with one more
@@ -48,15 +48,14 @@ class CarrierDefaultChainsStagedTest {
 	}
 
 	private static Path merged() {
-		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
-		TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(jar), "actual game required");
+		Path jar = TestFixtures.stagedBase();
+		TestFixtures.requireFile(TestFixtures.Fixture.STAGED, jar, "actual game required");
 		return jar;
 	}
 
-	/** Every class of the merged base and both carriers, as the mixin service hands them to the adapters. */
+	/** Every class of the staged base and the NeoForge carrier, as the mixin service hands them to the adapters. */
 	private static Function<String, ClassNode> game() {
-		List<Path> jars = List.of(merged(), TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar"),
-				TestFixtures.stagedRoot().resolve("merged-base/forge-runtime-interop.jar"));
+		List<Path> jars = List.of(merged(), TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR));
 		Map<String, ClassNode> read = new HashMap<>();
 		return owner -> read.computeIfAbsent(owner, name -> {
 			for (Path jar : jars) {
@@ -84,7 +83,7 @@ class CarrierDefaultChainsStagedTest {
 			} catch (Exception unreadable) {
 				return null;
 			}
-		});
+		}, null, TestFixtures.launchSources(jar));
 		return references::get;
 	}
 
@@ -207,7 +206,7 @@ class CarrierDefaultChainsStagedTest {
 	 * that. The modifier moves onto the call, as a redirect running the default with the modifier at the constant.
 	 */
 	@Test void aConstantsModifierMovesOntoTheCallWhoseDefaultPushesIt() throws Exception {
-		TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar")),
+		TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR)),
 				"the NeoForge carrier declares the default");
 		ClassNode mixin = aea();
 		MixinStubRebind.noteEcosystem(mixin.name, Ecosystem.FABRIC);

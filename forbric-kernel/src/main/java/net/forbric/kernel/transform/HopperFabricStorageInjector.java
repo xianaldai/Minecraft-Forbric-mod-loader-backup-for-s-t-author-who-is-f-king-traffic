@@ -20,7 +20,7 @@ import org.objectweb.asm.tree.VarInsnNode;
  * NeoForge's hopper asks Fabric's item storage lookup where its own found nothing.
  *
  * <p>fabric-transfer-api-v1's {@code HopperBlockEntityMixin} anchors after vanilla's {@code getAttachedContainer} and
- * {@code getSourceContainer}; the merged hopper is NeoForge's, which looks up a {@code ContainerOrHandler} instead and
+ * {@code getSourceContainer}; NeoForge's hopper looks up a {@code ContainerOrHandler} instead and
  * calls neither, so a Fabric storage NeoForge cannot see (unslotted, on a block without a block entity, or any with
  * the transfer bridge off) never saw a hopper. Two edits, both on NeoForge's "found nothing" branches:
  * <ul>
@@ -52,7 +52,7 @@ public final class HopperFabricStorageInjector implements ClassTransformer {
 	@Override public String name() { return "forbric:hopper-fabric-storage"; }
 
 	@Override public AnchorSet anchors() {
-		if (!enabled()) return AnchorSet.scanned("hoppers left as merged with -D" + PROPERTY + "=off");
+		if (!enabled()) return AnchorSet.scanned("hoppers left as the base has them with -D" + PROPERTY + "=off");
 		return AnchorSet.of(new AnchorSet.Anchor(HOPPER, AnchorSet.Severity.REQUIRED,
 				"hoppers ignore Fabric item storages NeoForge cannot see — unslotted, block-only, or all of them with the "
 						+ "transfer bridge off"));
@@ -65,7 +65,7 @@ public final class HopperFabricStorageInjector implements ClassTransformer {
 		String declined = repair(node);
 		if (declined != null) {
 			if (!declined.isEmpty()) {
-				ForbricLog.warn("[Forbric/Hopper] left HopperBlockEntity as merged: %s — hoppers ignore Fabric storages "
+				ForbricLog.warn("[Forbric/Hopper] left HopperBlockEntity as the base has it: %s — hoppers ignore Fabric storages "
 						+ "NeoForge cannot see", declined);
 			}
 			return bytes;

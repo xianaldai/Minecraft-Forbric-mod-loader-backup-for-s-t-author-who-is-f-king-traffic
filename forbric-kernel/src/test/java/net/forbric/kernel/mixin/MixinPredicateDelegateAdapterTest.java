@@ -11,6 +11,7 @@ import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 import net.forbric.api.Ecosystem;
 import net.forbric.kernel.boot.*;
+import net.forbric.kernel.TestFixtures;
 
 @ResourceLock("DefinedMethodContracts")
 class MixinPredicateDelegateAdapterTest {
@@ -115,11 +116,11 @@ class MixinPredicateDelegateAdapterTest {
     }
     private static Inputs inputs()throws Exception {
         Path api=Path.of(System.getProperty("forbric.fabricApi",net.forbric.kernel.TestFixtures.fabricApi().toString()));
-        Path base=Path.of(System.getProperty("forbric.predicateBase"));Path neo=net.forbric.kernel.TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
+        Path base=Path.of(System.getProperty("forbric.predicateBase"));Path neo=net.forbric.kernel.TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR);
         net.forbric.kernel.TestFixtures.require(net.forbric.kernel.TestFixtures.Fixture.STAGED,Files.isRegularFile(api)&&Files.isRegularFile(base)&&Files.isRegularFile(neo),"actual predicate inputs required");
         ClassNode guest=null;try(var jar=new java.util.zip.ZipFile(api.toFile())){var module=jar.stream().filter(e->e.getName().startsWith("META-INF/jars/fabric-rendering-v1-")).findFirst().orElseThrow();try(var nested=new java.util.zip.ZipInputStream(jar.getInputStream(module))){for(java.util.zip.ZipEntry entry;(entry=nested.getNextEntry())!=null;)if(entry.getName().equals("net/fabricmc/fabric/mixin/client/rendering/DebugOptionsScreenOptionListMixin.class")){guest=parse(nested.readAllBytes());break;}}}
         Map<String,ClassNode> nodes=new HashMap<>();ClassNode original;
-        try(var jar=new java.util.zip.ZipFile(base.toFile())){for(String owner:List.of("net/minecraft/client/gui/screens/debug/DebugOptionsScreen$OptionList","net/minecraft/client/gui/components/debug/DebugScreenEntries"))nodes.put(owner,parse(jar.getInputStream(jar.getEntry(owner+".class")).readAllBytes()));original=new NativeGameReferences(p->{try{var e=jar.getEntry(p);return e==null?null:jar.getInputStream(e).readAllBytes();}catch(Exception e){return null;}}).get(Ecosystem.FABRIC,"net/minecraft/client/gui/screens/debug/DebugOptionsScreen$OptionList");}
+        try(var jar=new java.util.zip.ZipFile(base.toFile())){for(String owner:List.of("net/minecraft/client/gui/screens/debug/DebugOptionsScreen$OptionList","net/minecraft/client/gui/components/debug/DebugScreenEntries"))nodes.put(owner,parse(jar.getInputStream(jar.getEntry(owner+".class")).readAllBytes()));original=new NativeGameReferences(p->{try{var e=jar.getEntry(p);return e==null?null:jar.getInputStream(e).readAllBytes();}catch(Exception e){return null;}},null,TestFixtures.launchSources(base)).get(Ecosystem.FABRIC,"net/minecraft/client/gui/screens/debug/DebugOptionsScreen$OptionList");}
         try(var jar=new java.util.zip.ZipFile(neo.toFile())){String owner="net/neoforged/neoforge/client/ClientHooks";nodes.put(owner,parse(jar.getInputStream(jar.getEntry(owner+".class")).readAllBytes()));}
         return new Inputs(guest,nodes,original);
     }

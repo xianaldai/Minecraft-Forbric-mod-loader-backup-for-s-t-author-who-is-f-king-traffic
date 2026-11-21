@@ -163,6 +163,36 @@ public final class DuplicateModArbiter {
 		return cached != null ? cached : Decision.none();
 	}
 
+	/**
+	 * The jar this boot loads that declares {@code modId} (spelling-normalised as arbitration compares ids), or
+	 * {@code null} when none does or arbitration has not run.
+	 *
+	 * <p>Asked about a refused MinecraftForge build. A refused jar claims nothing ({@link #claimOf}), so it never
+	 * becomes the losing duplicate of the NeoForge or Fabric build of the same mod beside it — which is exactly the
+	 * shape of a player who downloaded every file a mod page offered. Without this question its refusal was a
+	 * confirmed, required finding on the shared id: it stopped a dedicated server over a mod that loads, and marked the
+	 * row of the build that does load DEGRADED with "it is not loaded". With it, the refusal is a note naming the file
+	 * that supplies the mod.
+	 *
+	 * <p>Read from the whole-instance plan when there is one — nested candidates included, only what it selected —
+	 * and from the top-level claims otherwise; a suppressed or switched-off jar never answers.
+	 */
+	public static synchronized Path loadedClaimant(String modId) {
+		if (modId == null || modId.isBlank()) return null;
+		String wanted = JointCandidateSelector.key(modId);
+		Decision decision = current();
+		NestedCandidatePlan plan = wholeInstancePlan;
+		List<Claim> claims = plan != null ? plan.inventory().claims() : topLevelClaims;
+		for (Claim claim : claims) {
+			if (decision.suppressed(claim.jar())) continue;
+			if (plan != null && !plan.selected().contains(claim.jar())) continue;
+			for (String id : claim.modIds()) {
+				if (JointCandidateSelector.key(id).equals(wanted)) return claim.jar().toAbsolutePath();
+			}
+		}
+		return null;
+	}
+
 	/** Forgets the decision — for tests, and so a re-launch in one process re-arbitrates. */
 	public static synchronized void reset() {
 		DisabledMods.reset();
@@ -889,7 +919,12 @@ public final class DuplicateModArbiter {
 		if (csv == null || csv.isBlank()) return MultiLoaderArbiter.preference();
 
 		List<Ecosystem> order = new ArrayList<>();
+		boolean namedMinecraftForge = false;
 		for (String raw : csv.split(",")) {
+			if (ignoredMinecraftForge(raw, "-Dforbric.dupeIdPreference")) {
+				namedMinecraftForge = true;
+				continue;
+			}
 			Ecosystem parsed = Ecosystem.parse(raw);
 			if (parsed != null) {
 				order.add(parsed);
@@ -898,11 +933,11 @@ public final class DuplicateModArbiter {
 						raw.trim());
 			}
 		}
-		return order.isEmpty() ? MultiLoaderArbiter.preference() : order;
+		return order.isEmpty() && !namedMinecraftForge ? MultiLoaderArbiter.preference() : order;
 	}
 
 	/**
-	 * {@code -Dforbric.nestedDupePreference}, defaulting to NEOFORGE, then FABRIC, then traditional FORGE.
+	 * {@code -Dforbric.nestedDupePreference}, defaulting to NEOFORGE, then FABRIC.
 	 *
 	 * <p>Deliberately not the top-level order. A duplicate there is two builds of a mod the USER chose, and the
 	 * pack they built around it is the one whose glue is most likely intact. A nested jar is chosen by nobody: it
@@ -915,7 +950,7 @@ public final class DuplicateModArbiter {
 	 * the caller registers nothing, hears nothing, and dies much later somewhere else. Both defects below are
 	 * that same shape, and between them they fix the order:
 	 *
-	 * <p><b>FORGE loses to FABRIC.</b> Xaero's {@code xaerolib} is nested by a Fabric minimap and a
+	 * <p><b>FORGE lost to FABRIC</b> (while Forbric loaded MinecraftForge mods). Xaero's {@code xaerolib} is nested by a Fabric minimap and a
 	 * MinecraftForge world map. Its Fabric bootstrap sets {@code XaeroLib.client} from {@code onInitializeClient},
 	 * which the kernel runs inside {@code Minecraft.<init>} — before any tick. Its MinecraftForge bootstrap sets
 	 * the same field from {@code FMLClientSetupEvent}. Letting MinecraftForge win left the Fabric minimap's
@@ -945,7 +980,12 @@ public final class DuplicateModArbiter {
 		if (csv == null || csv.isBlank()) return NESTED_DEFAULT;
 
 		List<Ecosystem> order = new ArrayList<>();
+		boolean namedMinecraftForge = false;
 		for (String raw : csv.split(",")) {
+			if (ignoredMinecraftForge(raw, "-Dforbric.nestedDupePreference")) {
+				namedMinecraftForge = true;
+				continue;
+			}
 			Ecosystem parsed = Ecosystem.parse(raw);
 			if (parsed != null) {
 				order.add(parsed);
@@ -954,12 +994,29 @@ public final class DuplicateModArbiter {
 						raw.trim());
 			}
 		}
-		return order.isEmpty() ? NESTED_DEFAULT : order;
+		return order.isEmpty() && !namedMinecraftForge ? NESTED_DEFAULT : order;
+	}
+
+	/**
+	 * Whether {@code raw}, one entry of a preference order, names MinecraftForge — warned about, and read as if it were
+	 * not there. No jar is ever claimed by MinecraftForge now, so the entry could only rank a family nothing belongs to;
+	 * an old launch profile that names it is told why it stopped meaning anything, as
+	 * {@code -Dforbric.multiLoaderPreference} tells it.
+	 *
+	 * <p>An order that names nothing but MinecraftForge is still an order, and an empty one rather than none: it used to
+	 * rank only a family no claim has, so every claim tied and the first by path won. It still does; falling back to the
+	 * default order instead would have made NeoForge win where it never did.
+	 */
+	private static boolean ignoredMinecraftForge(String raw, String where) {
+		if (!Ecosystem.namesMinecraftForge(raw)) return false;
+		ForbricLog.warn("[Forbric/DupeId] ignoring '%s' in %s — Forbric no longer loads MinecraftForge mods; the order is "
+				+ "read as if it were not there", raw.trim(), where);
+		return true;
 	}
 
 	/** See {@link #nestedPreference()} — both halves of this order are a measured defect, one each way. */
 	private static final List<Ecosystem> NESTED_DEFAULT =
-			List.of(Ecosystem.NEOFORGE, Ecosystem.FABRIC, Ecosystem.FORGE);
+			List.of(Ecosystem.NEOFORGE, Ecosystem.FABRIC);
 
 	/** {@code -Dforbric.modOwner=sodium=fabric,lithostitched=neoforge} */
 	private static Ecosystem overrideFor(String modId) {
@@ -1043,9 +1100,10 @@ public final class DuplicateModArbiter {
 			StringBuilder out = new StringBuilder();
 			for (String line : MergeReport.overrideTemplateHeader()) out.append(line).append('\n');
 			for (Map.Entry<String, Path> e : decision.ownerByModId().entrySet()) {
-				Ecosystem owner = MultiLoaderArbiter.ownerOf(e.getValue());
+				// A winner is never a refused jar: a refused jar claims no id.
+				JarClaim claim = MultiLoaderArbiter.claimOf(e.getValue());
 				out.append("# ").append(e.getKey()).append(" = ")
-						.append(owner == null ? "fabric" : owner.configId())
+						.append(claim instanceof JarClaim.Owned owned ? owned.ecosystem().configId() : "fabric")
 						.append('\n');
 			}
 			Files.writeString(file, out.toString());
@@ -1059,12 +1117,18 @@ public final class DuplicateModArbiter {
 	/** Parses one ecosystem name, warning (and returning null) rather than throwing on anything unrecognised. */
 	private static Ecosystem ecosystem(String raw, String where) {
 		// The file this reads is the PLAYER'S. It has always spelled traditional Forge "minecraftforge", which is
-		// why parsing goes through Ecosystem.parse rather than valueOf — the constant is FORGE, but an override
-		// someone wrote months ago must still read back.
+		// why parsing goes through Ecosystem.parse rather than valueOf, and an override someone wrote months ago must
+		// still read back.
+		if (Ecosystem.namesMinecraftForge(raw)) {
+			// Still read — a line someone wrote months ago is told why it stopped working — and not obeyed: no jar is
+			// ever owned by MinecraftForge now, so the pin could only fail to apply further down, without a word.
+			ForbricLog.warn("[Forbric/DupeId] %s: '%s' is ignored — Forbric no longer loads MinecraftForge mods; use "
+					+ "fabric or neoforge", where, raw.trim());
+			return null;
+		}
 		Ecosystem parsed = Ecosystem.parse(raw);
 		if (parsed == null) {
-			ForbricLog.warn("[Forbric/DupeId] %s: '%s' is not a loader — use fabric, neoforge or minecraftforge",
-					where, raw.trim());
+			ForbricLog.warn("[Forbric/DupeId] %s: '%s' is not a loader — use fabric or neoforge", where, raw.trim());
 		}
 		return parsed;
 	}
@@ -1099,7 +1163,8 @@ public final class DuplicateModArbiter {
 			// Language/runtime bundles (notably kotlinforforge's -all jar) have JarJar metadata but no
 			// mod manifest. Keep their physical root in the plan so their declared children are discovered.
 			// An empty identity claims no mod id and cannot compete with a real mod or invent its presence.
-			if (claim == null && MultiLoaderArbiter.ownerOf(jar) == null) {
+			// Unowned, not merely without an owner: a refused jar's nested jars are not a library bundle's.
+			if (claim == null && MultiLoaderArbiter.claimOf(jar).unowned()) {
 				try (JarFile zip = new JarFile(jar.toFile())) {
 					if (zip.getEntry("META-INF/jarjar/metadata.json") != null) {
 						claim = new Claim(jar, Ecosystem.NEOFORGE, List.of(), Map.of());
@@ -1122,8 +1187,11 @@ public final class DuplicateModArbiter {
 	 * goes there.
 	 */
 	static Claim claimOf(ForbricModDiscoverer discoverer, Path jar, EnvType envType, List<Alias> aliasesOut) {
-		Ecosystem owner = MultiLoaderArbiter.ownerOf(jar);
-		if (owner == null) return null;
+		// Only an owned jar claims. A plain library has no identity; a refused MinecraftForge build claims nothing
+		// either: it cannot win an id from the NeoForge or Fabric build of the same mod beside it, have its nested jars
+		// inventoried as a mod's, or publish presence aliases from its fake halves. Its refusal is reported by discovery.
+		if (!(MultiLoaderArbiter.claimOf(jar) instanceof JarClaim.Owned owned)) return null;
+		Ecosystem owner = owned.ecosystem();
 		Map<String, String> versions = new LinkedHashMap<>();
 		List<String> ids = owner == Ecosystem.FABRIC
 				? fabricIds(jar, envType, versions)
@@ -1146,6 +1214,8 @@ public final class DuplicateModArbiter {
 		if (declared.size() < 2) return;
 
 		for (Ecosystem lost : declared) {
+			// declaredBy lists only the ecosystems Forbric loads: a MinecraftForge half is set aside, not lost to another
+			// family, and no MinecraftForge mod list exists for an alias to answer in.
 			if (lost == owner) continue;
 			Map<String, String> versions = new LinkedHashMap<>();
 			List<String> ids = lost == Ecosystem.FABRIC

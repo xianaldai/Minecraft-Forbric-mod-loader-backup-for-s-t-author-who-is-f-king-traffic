@@ -69,6 +69,7 @@ class MixinSharedResultTransportTest {
 
     /** A producer that shares something other than its receiver is not a pass-through: nothing is transported. */
     @Test void aProducerSharingAnotherValueIsNotAPassThrough() throws Exception {
+        assertTransportedUnperturbed();
         Inputs input = inputs("net/fabricmc/fabric/mixin/item/CraftingRecipeMixin", "net/minecraft/world/item/crafting/CraftingRecipe");
         MethodNode producer = method(input.mixin, "captureStack");
         for (var instruction : producer.instructions) {
@@ -87,6 +88,7 @@ class MixinSharedResultTransportTest {
     }
 
     @Test void transformedProducerReceiverOrAdditionalGroupSideEffectIsNotAccepted() throws Exception {
+        assertTransportedUnperturbed();
         Inputs input = inputs("net/fabricmc/fabric/mixin/item/CraftingRecipeMixin", "net/minecraft/world/item/crafting/CraftingRecipe");
         MethodNode producer = method(input.mixin, "captureStack");
         producer.instructions.insert(new InsnNode(Opcodes.POP));
@@ -95,6 +97,7 @@ class MixinSharedResultTransportTest {
     }
 
     @Test void closedGroupRequiresTheSameStackSourceAndNoPathBypassingItsProducer() throws Exception {
+        assertTransportedUnperturbed();
         Inputs input = inputs("net/fabricmc/fabric/mixin/item/CraftingRecipeMixin", "net/minecraft/world/item/crafting/CraftingRecipe");
         MethodNode current = method(input.current, "defaultCraftingReminder");
         MethodInsnNode live = resultCall(current);
@@ -119,53 +122,66 @@ class MixinSharedResultTransportTest {
         assertEquals(0, MixinSharedResultTransport.adapt(guarded.mixin, name -> guarded.current, name -> guarded.reference));
     }
 
-    @Test void actualSourceSharedSnapshotIsExecutedOnceAtTheConservedCarrierResultRegion() throws Exception {
-        Inputs input = inputs(); MethodNode original = method(input.mixin, "getCraftingRemainder");
-        String fingerprint = MixinInstructionFingerprint.hash(original);
-        assertEquals(1, MixinSharedResultTransport.adapt(input.mixin, name -> input.current, name -> input.reference));
-        MethodNode preserved = input.mixin.methods.stream().filter(m -> m.name.contains("$forbricsharedresult")).findFirst().orElseThrow();
-        assertEquals(fingerprint, MixinInstructionFingerprint.hash(preserved));
-        Runtime runtime = runtime(input.mixin);
-        Snapshot live = new Snapshot(1, "original-component");
-        AtomicReference<Object> shared = new AtomicReference<>(); Object reference = runtime.reference(shared);
-        runtime.copy.invoke(null, null, live, null, reference);
-        Snapshot copy = (Snapshot) shared.get(); assertNotSame(live, copy);
-        live.count = 0; live.component = "changed-component";
-        Remainder result = (Remainder) runtime.effect.invoke(null, live, reference);
-        assertSame(copy, result.receiver()); assertEquals(1, result.count()); assertEquals("original-component", result.component());
-        assertEquals(1, copy.reads); assertEquals(0, live.reads);
-        Remainder nativeControl = live.getCraftingRemainder();
-        assertSame(live, nativeControl.receiver()); assertEquals(0, nativeControl.count()); assertEquals("changed-component", nativeControl.component());
-        assertEquals(1, live.reads);
+    /**
+     * On the merged base the furnace's redirect moved onto the carrier's remainder call and ran its HEAD snapshot there.
+     * NeoForge's own consumeFuel asks the unshrunk stack (ItemStack.getCraftingRemainder before shrink) and makes no
+     * Item.getCraftingRemainder call, so the snapshot's purpose is native and nothing is transported; a Fabric item's
+     * stack-aware remainder reaches the fuel slot as written (regressprobe fuel.remainder.consumeFuel / furnace).
+     */
+    @Test void theFurnaceSnapshotHasNoRegionToMoveToOnNeoForgesBase() throws Exception {
+        Inputs input = inputs();
+        byte[] before = TransportSpellings.bytes(input.mixin);
+        assertEquals(0, MixinSharedResultTransport.adapt(input.mixin, name -> input.current, name -> input.reference));
+        assertArrayEquals(before, TransportSpellings.bytes(input.mixin));
+    }
+
+    /**
+     * The crafting group, the one the transport still moves on NeoForge's base: each rejection test first checks that an
+     * unperturbed copy of the same inputs IS transported, so its rejection is the perturbation's doing and the test cannot
+     * pass on an input the transport declines anyway (as the furnace group is declined on NeoForge's base).
+     */
+    private static Inputs crafting() throws Exception {
+        return inputs("net/fabricmc/fabric/mixin/item/CraftingRecipeMixin", "net/minecraft/world/item/crafting/CraftingRecipe");
+    }
+
+    private static void assertTransportedUnperturbed() throws Exception {
+        Inputs control = crafting();
+        assertEquals(2, MixinSharedResultTransport.adapt(control.mixin, name -> control.current, name -> control.reference),
+                "positive control: the unperturbed crafting group is transported");
     }
 
     @Test void usedOldInputOrAdditionalSourceEffectCannotBeTransported() throws Exception {
-        Inputs input = inputs(); MethodNode source = method(input.mixin, "getCraftingRemainder");
+        assertTransportedUnperturbed();
+        Inputs input = crafting(); MethodNode source = method(input.mixin, "getStackRemainder");
         source.instructions.insert(new InsnNode(Opcodes.POP)); source.instructions.insert(new VarInsnNode(Opcodes.ALOAD, 0));
         Inputs used = input;
-        assertEquals(0, MixinSharedResultTransport.adapt(used.mixin, name -> used.current, name -> used.reference));
-        input = inputs(); source = method(input.mixin, "getCraftingRemainder");
+        assertEquals(0, MixinSharedResultTransport.adapt(used.mixin, name -> used.current, name -> used.reference), "the consumer reads the old input");
+        input = crafting(); source = method(input.mixin, "getStackRemainder");
         source.instructions.insert(new InsnNode(Opcodes.POP));
         source.instructions.insert(new MethodInsnNode(Opcodes.INVOKESTATIC, "fixture/Effects", "touch", "()I", false));
         Inputs extra = input;
-        assertEquals(0, MixinSharedResultTransport.adapt(extra.mixin, name -> extra.current, name -> extra.reference));
+        assertEquals(0, MixinSharedResultTransport.adapt(extra.mixin, name -> extra.current, name -> extra.reference), "the consumer has an effect of its own");
     }
 
     @Test void ambiguousResultCallAndChangedConsumerBranchAreRejected() throws Exception {
-        Inputs input = inputs(); MethodNode host = method(input.current, "consumeFuel");
+        assertTransportedUnperturbed();
+        Inputs input = crafting(); MethodNode host = method(input.current, "defaultCraftingReminder");
         MethodInsnNode candidate = resultCall(host);
-        host.instructions.insert(new InsnNode(Opcodes.POP));
-        host.instructions.insert(new MethodInsnNode(candidate.getOpcode(), candidate.owner, candidate.name, candidate.desc, candidate.itf));
-        host.instructions.insert(new VarInsnNode(Opcodes.ALOAD, (host.access & Opcodes.ACC_STATIC) == 0 ? 2 : 1));
+        // A second remainder call on the same stack, just before the live one: which one the redirect stood for is a guess.
+        InsnList second = new InsnList();
+        second.add(new VarInsnNode(Opcodes.ALOAD, ((VarInsnNode) candidate.getPrevious()).var));
+        second.add(new MethodInsnNode(candidate.getOpcode(), candidate.owner, candidate.name, candidate.desc, candidate.itf));
+        second.add(new InsnNode(Opcodes.POP));
+        host.instructions.insertBefore(candidate.getPrevious(), second);
         Inputs duplicate = input;
-        assertEquals(0, MixinSharedResultTransport.adapt(duplicate.mixin, name -> duplicate.current, name -> duplicate.reference));
-        input = inputs(); host = method(input.current, "consumeFuel");
+        assertEquals(0, MixinSharedResultTransport.adapt(duplicate.mixin, name -> duplicate.current, name -> duplicate.reference), "two result calls");
+        input = crafting(); host = method(input.current, "defaultCraftingReminder");
         MethodInsnNode call = resultCall(host); LabelNode skip = new LabelNode();
         host.instructions.insert(call, skip);
         host.instructions.insert(call, new JumpInsnNode(Opcodes.IFEQ, skip));
         host.instructions.insert(call, new InsnNode(Opcodes.ICONST_1)); host.maxStack += 1;
         Inputs changed = input;
-        assertEquals(0, MixinSharedResultTransport.adapt(changed.mixin, name -> changed.current, name -> changed.reference));
+        assertEquals(0, MixinSharedResultTransport.adapt(changed.mixin, name -> changed.current, name -> changed.reference), "a branch on the consumer's path");
     }
 
     public static final class Snapshot {
@@ -185,7 +201,7 @@ class MixinSharedResultTransportTest {
         String api = System.getProperty("forbric.fabricApi");
         java.nio.file.Path apiPath = api == null ? net.forbric.kernel.TestFixtures.fabricApi() : java.nio.file.Path.of(api);
         java.nio.file.Path base = java.nio.file.Path.of(System.getProperty("forbric.predicateBase",
-                net.forbric.kernel.TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").toString()));
+                net.forbric.kernel.TestFixtures.stagedBase().toString()));
         net.forbric.kernel.TestFixtures.require(net.forbric.kernel.TestFixtures.Fixture.STAGED,
                 java.nio.file.Files.isRegularFile(apiPath) && java.nio.file.Files.isRegularFile(base), "actual API and indexed base required");
         ClassNode mixin = null;
@@ -202,7 +218,7 @@ class MixinSharedResultTransportTest {
             NativeGameReferences references = new NativeGameReferences(path -> {
                 try { var entry = jar.getEntry(path); return entry == null ? null : jar.getInputStream(entry).readAllBytes(); }
                 catch (java.io.IOException unavailable) { return null; }
-            });
+            }, null, net.forbric.kernel.TestFixtures.launchSources(base));
             reference = references.get(Ecosystem.FABRIC, owner);
         }
         net.forbric.kernel.TestFixtures.require(net.forbric.kernel.TestFixtures.Fixture.STAGED, reference != null, "hash-pinned original platform required");

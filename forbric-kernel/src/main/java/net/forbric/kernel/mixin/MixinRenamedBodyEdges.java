@@ -23,7 +23,7 @@ import net.forbric.api.Ecosystem;
 import net.forbric.kernel.util.ForbricLog;
 
 /**
- * Edges a body a carrier renamed on every path the merged game runs it by: a guest's edge injector — its method's start,
+ * Edges a body a carrier renamed on every path the game runs it by: a guest's edge injector — its method's start,
  * its end — stays on the method it names, and each method that runs the renamed body without passing through it, by
  * only forwarding to it, gets the same edge.
  *
@@ -97,13 +97,13 @@ public final class MixinRenamedBodyEdges {
 				else forwarders.add(other);
 			}
 			if (!INJECT.equals(injector.desc) || !takesExactly(handler, renamed)) {
-				ForbricLog.warn("[Forbric/Mixin] %s: %s's edge of %s.%s%s is not met when the merged game runs that body through %s — a carrier "
+				ForbricLog.warn("[Forbric/Mixin] %s: %s's edge of %s.%s%s is not met when the game runs that body through %s — a carrier "
 						+ "renamed it to %s%s, and this injector's kind or handler shape cannot be given to those callers", mixin.name.replace('/', '.'),
 						handler.name, target.name.replace('/', '.'), named.name, named.desc, describe(forwarders, unedged), renamed.name, renamed.desc);
 				continue;
 			}
 			if (!unedged.isEmpty()) {
-				ForbricLog.warn("[Forbric/Mixin] %s: %s's edge of %s.%s%s is not met when the merged game runs %s%s through %s, which do more than "
+				ForbricLog.warn("[Forbric/Mixin] %s: %s's edge of %s.%s%s is not met when the game runs %s%s through %s, which do more than "
 						+ "forward to it", mixin.name.replace('/', '.'), handler.name, target.name.replace('/', '.'), named.name, named.desc,
 						renamed.name, renamed.desc, unedged);
 			}

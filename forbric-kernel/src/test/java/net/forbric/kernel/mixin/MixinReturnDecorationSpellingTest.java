@@ -158,16 +158,16 @@ class MixinReturnDecorationSpellingTest {
 	}
 
 	private static Inputs inputs() throws Exception {
-		Path base = Path.of(System.getProperty("forbric.predicateBase", TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").toString()));
+		Path base = Path.of(System.getProperty("forbric.predicateBase", TestFixtures.stagedBase().toString()));
 		Path api = Path.of(System.getProperty("forbric.fabricApi", TestFixtures.fabricApi().toString()));
-		TestFixtures.requireFiles(TestFixtures.Fixture.STAGED, "native-indexed merged base and the actual Fabric API", base, api);
+		TestFixtures.requireFiles(TestFixtures.Fixture.STAGED, "native-indexed staged base and the actual Fabric API", base, api);
 		byte[] current, original;
 		try (ZipFile game = new ZipFile(base.toFile())) {
 			current = game.getInputStream(game.getEntry(HOST + ".class")).readAllBytes();
 			NativeGameReferences references = new NativeGameReferences(path -> {
 				try { var e = game.getEntry(path); return e == null ? null : game.getInputStream(e).readAllBytes(); }
 				catch (java.io.IOException unreadable) { throw new IllegalStateException(unreadable); }
-			});
+			}, null, TestFixtures.launchSources(base));
 			ClassNode node = references.get(Ecosystem.FABRIC, HOST);
 			TestFixtures.require(TestFixtures.Fixture.STAGED, node != null, "native-indexed vanilla ScreenEffectRenderer required");
 			original = CarpetMixinAdapterTest.bytes(node);

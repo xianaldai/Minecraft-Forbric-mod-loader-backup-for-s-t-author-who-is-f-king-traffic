@@ -32,7 +32,6 @@ import org.objectweb.asm.tree.MethodNode;
 import net.forbric.api.Ecosystem;
 import net.forbric.kernel.TestFixtures;
 import net.forbric.kernel.TestFixtures.Fixture;
-import net.forbric.kernel.transform.ForbricMergedBaseCompatTransformer;
 import net.forbric.kernel.transform.ItemUseOnInjector;
 
 /**
@@ -64,7 +63,6 @@ class AdapterPointSpellingTest {
 	private static final String LIVING = "net/minecraft/world/entity/LivingEntity";
 	private static final String PLAYER = "net/minecraft/server/level/ServerPlayer";
 	private static final String STACK = "net/minecraft/world/item/ItemStack";
-	private static final String CLIENT = "net/minecraft/client/Minecraft";
 	private static final String LOADER = "net/minecraft/resources/RegistryDataLoader";
 	private static final String BOOTSTRAP = "net/minecraft/server/Bootstrap";
 	private static final String STATE = "Lnet/minecraft/world/level/block/state/BlockState;";
@@ -76,7 +74,6 @@ class AdapterPointSpellingTest {
 	private static final Path POPULAR = Path.of("run/client-popular/mods");
 	private static final Path VIA = Path.of("../build/random100-20260929/downloads/dmLiENU0/ViaFabricPlus-5.0.2.jar");
 	private static final Path BCLIB = Path.of("build/compat-inputs/sweep90/mods/bclib-26.201.2.jar");
-	private static final Path FANCYMENU = Path.of("build/sweep80-mac/v020-rounds/r1/mods/fancymenu_neoforge_3.9.12_MC_26.2.jar");
 	private static final Path REGISTRY_SYNC = Path.of("build/compat-inputs/player-loading/api/fabric-registry-sync-v0-7.1.1+c7bd5b8e9e.jar");
 
 	@AfterEach void reset() {
@@ -127,7 +124,9 @@ class AdapterPointSpellingTest {
 						"Ljava/util/List;isEmpty()Z")))));
 		// CarrierDefaultChains: fabric-api's bed occupancy redirect, bound to the sleep start and the wake-up lambda, under
 		// unrelated names.
-		cases.add(new Case("fabric-api beds", () -> StagedFabricMixinFixture.mixin("fabric-entity-events-v1", root + "LivingEntityMixin"), true,
+		cases.add(new Case("fabric-api beds", () -> {
+					return StagedFabricMixinFixture.mixin("fabric-entity-events-v1", root + "LivingEntityMixin");
+				}, true,
 				Ecosystem.FABRIC, LIVING, CarrierDefaultChains::adapt, 1,
 				List.of("Lnet/minecraft/world/level/Level;setBlock(Lnet/minecraft/core/BlockPos;" + STATE + "I)Z"),
 				mixin -> assertTrue(atTargets(mixin).contains("Lnet/minecraft/world/level/block/state/BlockState;setBedOccupied(Lnet/minecraft/world/level/Level;"
@@ -152,7 +151,7 @@ class AdapterPointSpellingTest {
 				"Lnet/neoforged/neoforge/common/CommonHooks;canContinueUsing(L" + STACK + ";L" + STACK + ";)Z"));
 		cases.add(via("shovel path", via + "v1_8/item/MixinShovelItem", "net/minecraft/world/item/ShovelItem", "Ljava/util/Map;get(Ljava/lang/Object;)Ljava/lang/Object;",
 				STATE + "getToolModifiedState(Lnet/minecraft/world/item/context/UseOnContext;Lnet/neoforged/neoforge/common/ItemAbility;Z)" + STATE));
-		// MixinShearsRelay: BCLib's six wraps of is(Items.SHEARS).
+		// MixinShearsRelay: BCLib's wraps of is(Items.SHEARS) in the three blocks NeoForge rewrote.
 		for (MixinShearsRelay.Row row : MixinShearsRelay.ROWS) {
 			String name = row.target().substring(row.target().lastIndexOf('/') + 1);
 			cases.add(new Case("shears " + name, () -> jar(Fixture.THIRD_PARTY, BCLIB, "org/betterx/bclib/mixin/common/shears/" + name + "Mixin"), true,
@@ -164,11 +163,6 @@ class AdapterPointSpellingTest {
 				true, Ecosystem.FABRIC, STACK, MixinRelocatedCall::adapt, 1,
 				List.of("Lnet/minecraft/world/item/Item;useOn(Lnet/minecraft/world/item/context/UseOnContext;)Lnet/minecraft/world/InteractionResult;"),
 				mixin -> assertTrue(selectors(mixin).contains(ItemUseOnInjector.RELAY + ItemUseOnInjector.RELAY_DESC))));
-		// KernelClientHookMixinAnchors: FancyMenu's NeoForge client initializer hook.
-		cases.add(new Case("client hooks", () -> jar(Fixture.THIRD_PARTY, FANCYMENU, "de/keksuccino/fancymenu/mixin/mixins/neoforge/client/MixinMinecraft"), true,
-				Ecosystem.NEOFORGE, CLIENT, KernelClientHookMixinAnchors::adapt, 1,
-				List.of("Lnet/neoforged/neoforge/client/ClientHooks;initClientHooks(L" + CLIENT + ";Lnet/minecraft/server/packs/resources/ReloadableResourceManager;)V"),
-				mixin -> assertTrue(atTargets(mixin).stream().anyMatch(t -> t.startsWith("Lnet/forbric/kernel/runtime/KernelForgeClientInit;")))));
 		// FabricRegistryLoaderMixinAdapter: fabric-registry-sync's wrap and its companion on the dead loader.
 		cases.add(new Case("registry loader", () -> jar(Fixture.THIRD_PARTY, REGISTRY_SYNC, "net/fabricmc/fabric/mixin/registry/sync/RegistryDataLoaderMixin"), true,
 				Ecosystem.FABRIC, LOADER, FabricRegistryLoaderMixinAdapter::adapt, 2,
@@ -444,7 +438,18 @@ class AdapterPointSpellingTest {
 		return mixin;
 	}
 
-	private static final BiFunction<Ecosystem, String, ClassNode> STAGED = NativeCallTestEvidence.staged();
+	/**
+	 * The staged native references, read on first use rather than when the class loads: {@link NativeCallTestEvidence#staged()}
+	 * aborts without the staged base, and an abort in a static initializer fails every case of the class instead of letting
+	 * the fixture check skip them (the unstaged CI profile).
+	 */
+	private static BiFunction<Ecosystem, String, ClassNode> staged;
+	private static final BiFunction<Ecosystem, String, ClassNode> STAGED = (family, owner) -> staged().apply(family, owner);
+
+	private static BiFunction<Ecosystem, String, ClassNode> staged() {
+		if (staged == null) staged = NativeCallTestEvidence.staged();
+		return staged;
+	}
 	/** The class the mod was compiled against: staged native references, read once. */
 	private static final BiFunction<Ecosystem, String, ClassNode> NATIVES = STAGED::apply;
 
@@ -452,12 +457,12 @@ class AdapterPointSpellingTest {
 
 	/**
 	 * The merged class with code and local variable tables, a fresh node each time, with the kernel's own pre-mixin relays; a
-	 * class the merged base does not hold is read from the carriers' runtimes (NeoForge's extension interfaces), as the game's
+	 * class the staged base does not hold is read from the carriers' runtimes (NeoForge's extension interfaces), as the game's
 	 * class loader serves it to the adapters.
 	 */
 	static ClassNode merged(String name) {
 		byte[] bytes = MERGED.computeIfAbsent(name, n -> {
-			for (String jarName : List.of("merged-base/patched-mc-merged-26.2.jar", "neoforge-runtime/neoforge-runtime.jar", "merged-base/forge-runtime-interop.jar")) {
+			for (String jarName : List.of(TestFixtures.BASE_JAR, TestFixtures.NEO_CARRIER_JAR)) {
 				Path jar = TestFixtures.stagedRoot().resolve(jarName);
 				if (!Files.isRegularFile(jar)) continue;
 				try (ZipFile zip = new ZipFile(jar.toFile())) {
@@ -465,7 +470,6 @@ class AdapterPointSpellingTest {
 					if (entry == null) continue;
 					byte[] read = zip.getInputStream(entry).readAllBytes();
 					if (n.equals(STACK)) read = new ItemUseOnInjector().transform(n.replace('/', '.'), read, null);
-					if (n.equals(CLIENT)) read = new ForbricMergedBaseCompatTransformer().transform(n.replace('/', '.'), read, null);
 					return read;
 				} catch (Exception unreadable) {
 					return null;

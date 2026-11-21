@@ -20,7 +20,7 @@ class MixinLambdaThunkRetargetTest {
 		ClassNode target=target(),reference=reference(),mixin=mixin();MethodNode handler=mixin.methods.getFirst();
 		handler.invisibleParameterAnnotations=new List[4];handler.invisibleParameterAnnotations[3]=List.of(ann(MixinRetarget.LOCAL_SUGAR,"argsOnly",true));
 		handler.desc="(L"+OWNER+";I"+OPERATION+"I)V";AbstractInsnNode body=handler.instructions.getFirst();
-		for(Ecosystem family:List.of(Ecosystem.FABRIC,Ecosystem.FORGE,Ecosystem.NEOFORGE)){
+		for(Ecosystem family:List.of(Ecosystem.FABRIC,Ecosystem.NEOFORGE)){
 			MixinStubRebind.noteEcosystem(mixin.name,family);var plan=plan(mixin,target,reference);
 			assertEquals(2,plan.rewrites().size(),plan.describe());assertTrue(plan.rewrites().getFirst().why().contains("live method-reference thunk"));
 			assertTrue(plan.rewrites().stream().anyMatch(r->r.element()==MixinRetarget.Element.LOCAL_INDEX&&r.from().equals("3")&&r.to().equals("1")),plan.describe());
@@ -71,7 +71,7 @@ class MixinLambdaThunkRetargetTest {
 	}
 	private static ClassNode actualMixin(String module,String owner)throws Exception{
 		String configured=System.getProperty("forbric.fabricApi","");if(configured.isBlank())return StagedFabricMixinFixture.mixin(module,owner);
-		Path api=Path.of(configured);net.forbric.kernel.TestFixtures.require(net.forbric.kernel.TestFixtures.Fixture.STAGED,Files.isRegularFile(api),"configured Fabric API fixture required: "+api);
+		Path api=Path.of(configured);net.forbric.kernel.TestFixtures.requireFile(net.forbric.kernel.TestFixtures.Fixture.STAGED, api,"configured Fabric API fixture required: "+api);
 		try(ZipFile zip=new ZipFile(api.toFile())){var moduleEntry=zip.stream().filter(e->e.getName().startsWith("META-INF/jars/"+module+"-")).findFirst().orElseThrow();
 			try(ZipInputStream inner=new ZipInputStream(zip.getInputStream(moduleEntry))){for(ZipEntry entry;(entry=inner.getNextEntry())!=null;)if(entry.getName().equals(owner+".class"))return MixinFit.parse(inner.readAllBytes());}}
 		throw new AssertionError("configured upstream mixin absent: "+owner);

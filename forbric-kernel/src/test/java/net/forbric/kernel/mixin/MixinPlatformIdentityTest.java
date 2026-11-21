@@ -186,7 +186,6 @@ class MixinPlatformIdentityTest {
 
 	@Test void aModsCodeIsToldItsOwnPlatformsServiceNameHoweverItAsks() throws Throwable {
 		assertEquals(every("fabric", "fabric", "other", "Knot/Fabric"), asked(game(jar, Ecosystem.FABRIC)));
-		assertEquals(every("forge", "other", "other", "ModLauncher"), asked(game(jar, Ecosystem.FORGE)));
 		assertEquals(every("neoforge", "other", "neoforge", "FML"), asked(game(jar, Ecosystem.NEOFORGE)));
 	}
 
@@ -210,7 +209,7 @@ class MixinPlatformIdentityTest {
 
 	@Test void codeNoSingleModOwnsIsToldTheKernelsName() throws Throwable {
 		String unknown = every("unknown(Forbric)", "other", "other", "Forbric");
-		assertEquals(unknown, asked(game(jar)), "a jar no selected mod owns: the merged base, a carrier, a library");
+		assertEquals(unknown, asked(game(jar)), "a jar no selected mod owns: the staged base, a carrier, a library");
 		assertEquals(unknown, asked(game(jar, Ecosystem.FABRIC, Ecosystem.NEOFORGE)), "a jar two ecosystems claim");
 		assertEquals("Forbric", new ForbricMixinService().getName(), "the kernel's own call, and Mixin's");
 		assertEquals("Forbric", java.util.Optional.of(new ForbricMixinService()).map(IMixinService::getName).orElseThrow(),
@@ -228,7 +227,6 @@ class MixinPlatformIdentityTest {
 
 	@Test void eachEcosystemHasItsPlatformsOwnServiceName() {
 		assertEquals("Knot/Fabric", MixinPlatformIdentity.nativeServiceName(Ecosystem.FABRIC));
-		assertEquals("ModLauncher", MixinPlatformIdentity.nativeServiceName(Ecosystem.FORGE));
 		assertEquals("FML", MixinPlatformIdentity.nativeServiceName(Ecosystem.NEOFORGE));
 		assertNull(MixinPlatformIdentity.nativeServiceName(null));
 	}

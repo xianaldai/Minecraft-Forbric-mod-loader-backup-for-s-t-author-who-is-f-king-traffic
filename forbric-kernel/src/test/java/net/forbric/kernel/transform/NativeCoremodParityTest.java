@@ -25,8 +25,8 @@ import org.objectweb.asm.tree.analysis.BasicVerifier;
 @ResourceLock("system-properties")
 class NativeCoremodParityTest {
 	private static final Path STAGED = TestFixtures.stagedRoot();
-	private static final Path MERGED = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
-	private static final Path FORGE = STAGED.resolve("merged-base/forge-runtime-interop.jar");
+	private static final Path MERGED = STAGED.resolve(TestFixtures.BASE_JAR);
+	private static final Path NEO_RUNTIME = STAGED.resolve(TestFixtures.NEO_CARRIER_JAR);
 	private static final Path VANILLA = TestFixtures.vanillaJar();
 	/** tools/dev.py prepare downloads NeoForge's universal jar here; its coremods jar is nested inside. */
 	private static final Path NEO_DOWNLOADS = TestFixtures.minecraftDir().resolve(".forbric-build/dl");
@@ -35,6 +35,8 @@ class NativeCoremodParityTest {
 	private static final String POT = "net/minecraft/world/level/block/FlowerPotBlock";
 	private static final String BIOME = "net/minecraft/world/level/biome/Biome";
 	private static final String STRUCTURE = "net/minecraft/world/level/levelgen/structure/Structure";
+	private static final String LIQUID = "net/minecraft/world/level/block/LiquidBlock";
+	private static final String BUCKET = "net/minecraft/world/item/BucketItem";
 
 	@AfterEach void reset() {
 		for (String key : List.of(NativeCoremodParity.PROPERTY, NativeCoremodParity.FLOWER_POT, NativeCoremodParity.BIOME,
@@ -65,20 +67,21 @@ class NativeCoremodParityTest {
 
 	@Test void everyFinalizeSpawnInNeoForgesListIsRedirectedAndNothingElse() throws Exception {
 		int before = 0, after = 0;
-		for (String target : NativeCoremodParity.FINALIZE_TARGETS) {
+		// Sorted: the first class read decides a skip's reason, and the skip baselines compare reasons exactly.
+		for (String target : new TreeSet<>(NativeCoremodParity.FINALIZE_TARGETS)) {
 			ClassNode original = node(read(MERGED, target));
 			int raw = virtualFinalize(original), supers = specialFinalize(original);
-			assertTrue(raw >= 1, target + " has a finalizeSpawn call on the merged base");
+			assertTrue(raw >= 1, target + " has a finalizeSpawn call on the staged base");
 			ClassNode rewritten = node(NativeCoremodParity.apply(target, read(MERGED, target)));
 			assertEquals(0, virtualFinalize(rewritten), target);
-			assertEquals(raw, calls(rewritten, NativeCoremodParity.RUNTIME, "finalizeMobSpawn"), target);
+			assertEquals(raw, calls(rewritten, NativeCoremodParity.NEO_HOOKS, NativeCoremodParity.NEO_FINALIZE_HOOK), target);
 			assertEquals(supers, specialFinalize(rewritten), "super.finalizeSpawn in an override is not an event site: " + target);
 			verify(rewritten);
 			before += raw;
-			after += calls(rewritten, NativeCoremodParity.RUNTIME, "finalizeMobSpawn");
+			after += calls(rewritten, NativeCoremodParity.NEO_HOOKS, NativeCoremodParity.NEO_FINALIZE_HOOK);
 		}
 		assertEquals(before, after);
-		// The census: every such call in the merged game is in a listed class.
+		// The census: every such call in the patched game is in a listed class.
 		try (ZipFile zip = new ZipFile(MERGED.toFile())) {
 			Set<String> outside = new TreeSet<>();
 			for (ZipEntry entry : Collections.list(zip.entries())) {
@@ -91,74 +94,7 @@ class NativeCoremodParityTest {
 		}
 	}
 
-	@Test void theTrialSpawnersNeoForgeHookIsRoutedThroughBothFamilies() throws Exception {
-		ClassNode rewritten = rewritten(NativeCoremodParity.TRIAL_SPAWNER);
-		assertEquals(0, calls(rewritten, NativeCoremodParity.NEO_HOOKS, NativeCoremodParity.NEO_SPAWNER_HOOK));
-		assertEquals(1, calls(rewritten, NativeCoremodParity.RUNTIME, "finalizeTrialSpawner"));
-		verify(rewritten);
-	}
-
-	/** How {@link #trialSpawnerAsking} puts MinecraftForge's spawner hook beside NeoForge's. */
-	private enum Ask { SAME_MOB, NULL_MOB, OTHER_BRANCH }
-
-	/**
-	 * The staged trial spawner with MinecraftForge's own {@code onFinalizeSpawnSpawner} inserted in front of the statement
-	 * that calls NeoForge's hook: handed the mob NeoForge's call finalizes, handed null, or only on a branch.
-	 */
-	private static ClassNode trialSpawnerAsking(Ask ask) throws Exception {
-		ClassNode node = new ClassNode();
-		new ClassReader(read(MERGED, NativeCoremodParity.TRIAL_SPAWNER)).accept(node, 0);
-		for (MethodNode method : node.methods) for (AbstractInsnNode insn : method.instructions.toArray()) {
-			if (!(insn instanceof MethodInsnNode call) || !call.owner.equals(NativeCoremodParity.NEO_HOOKS)
-					|| !call.name.equals(NativeCoremodParity.NEO_SPAWNER_HOOK)) continue;
-			var frames = new org.objectweb.asm.tree.analysis.Analyzer<>(new org.objectweb.asm.tree.analysis.SourceInterpreter()).analyze(node.name, method);
-			var frame = frames[method.instructions.indexOf(call)];
-			int args = org.objectweb.asm.Type.getArgumentTypes(call.desc).length;
-			AbstractInsnNode mob = frame.getStack(frame.getStackSize() - args).insns.iterator().next();
-			AbstractInsnNode level = frame.getStack(frame.getStackSize() - args + 1).insns.iterator().next();
-			assertTrue(mob instanceof VarInsnNode && level instanceof VarInsnNode, "premise: NeoForge's call takes the mob and level from locals");
-			InsnList forge = new InsnList();
-			LabelNode skip = new LabelNode();
-			if (ask == Ask.OTHER_BRANCH) { forge.add(new InsnNode(Opcodes.ICONST_0)); forge.add(new JumpInsnNode(Opcodes.IFEQ, skip)); }
-			forge.add(ask == Ask.NULL_MOB ? new InsnNode(Opcodes.ACONST_NULL) : mob.clone(Map.of()));
-			forge.add(level.clone(Map.of()));
-			for (int i = 0; i < 4; i++) forge.add(new InsnNode(Opcodes.ACONST_NULL));
-			forge.add(new MethodInsnNode(Opcodes.INVOKESTATIC, SpawnerFinalizeInjector.FORGE, SpawnerFinalizeInjector.FORGE_HOOK,
-					SpawnerFinalizeInjector.FORGE_DESC, false));
-			forge.add(new InsnNode(Opcodes.POP));
-			if (ask == Ask.OTHER_BRANCH) forge.add(skip);
-			method.instructions.insertBefore(mob, forge);
-		}
-		return node;
-	}
-
-	/** A trial spawner method that already calls MinecraftForge's own spawner hook for the same mob keeps NeoForge's, not posting Forge's twice. */
-	@Test void aTrialSpawnerThatAlreadyPostsMinecraftForgesFinalizationIsLeftNative() throws Exception {
-		ClassNode node = trialSpawnerAsking(Ask.SAME_MOB);
-		assertEquals(0, NativeCoremodParity.routeTrialSpawner(node));
-		assertEquals(1, calls(node, NativeCoremodParity.NEO_HOOKS, NativeCoremodParity.NEO_SPAWNER_HOOK));
-	}
-
-	/** Near misses: MinecraftForge's hook handed another mob, or only on a branch, finalizes nothing NeoForge's does: routed. */
-	@Test void aTrialSpawnerWhoseMinecraftForgeCallFinalizesSomethingElseIsStillRouted() throws Exception {
-		for (Ask ask : List.of(Ask.NULL_MOB, Ask.OTHER_BRANCH)) {
-			ClassNode node = trialSpawnerAsking(ask);
-			assertEquals(1, NativeCoremodParity.routeTrialSpawner(node), ask.name());
-			assertEquals(0, calls(node, NativeCoremodParity.NEO_HOOKS, NativeCoremodParity.NEO_SPAWNER_HOOK), ask.name());
-		}
-	}
-
-	@Test void theTargetListIsNeoForgesAndMinecraftForgesLessTheTrialSpawner() throws Exception {
-		TestFixtures.requireFiles(Fixture.STAGED, "staged MinecraftForge carrier", FORGE);
-		try (ZipFile zip = new ZipFile(FORGE.toFile())) {
-			Set<String> forge = new TreeSet<>();
-			String json = new String(zip.getInputStream(zip.getEntry("coremods/finalize_spawn_targets.json")).readAllBytes());
-			var match = java.util.regex.Pattern.compile("\"class\"\\s*:\\s*\"([^\"]+)\"").matcher(json);
-			while (match.find()) forge.add(match.group(1));
-			Set<String> expected = new TreeSet<>(NativeCoremodParity.FINALIZE_TARGETS);
-			expected.add(NativeCoremodParity.TRIAL_SPAWNER);
-			assertEquals(expected, forge);
-		}
+	@Test void theTargetListIsNeoForges() throws Exception {
 		String json = neoForgeFinalizeTargets();
 		Set<String> listed = new TreeSet<>();
 		var match = java.util.regex.Pattern.compile("\"([a-zA-Z0-9_.$]+)\"").matcher(json);
@@ -199,6 +135,10 @@ class NativeCoremodParityTest {
 		TestFixtures.require(Fixture.MC_LIBRARIES, Files.isRegularFile(VANILLA), "vanilla 26.2 absent");
 		byte[] vanillaPot = read(VANILLA, POT);
 		assertSame(vanillaPot, NativeCoremodParity.apply(POT, vanillaPot), "vanilla's getter reads the field; nothing to route");
+		for (String owner : List.of(LIQUID, BUCKET)) {
+			byte[] merged = read(MERGED, owner);
+			assertSame(merged, NativeCoremodParity.apply(owner, merged), "NeoForge has no getter rule for " + owner);
+		}
 		for (String property : List.of(NativeCoremodParity.PROPERTY, NativeCoremodParity.FLOWER_POT)) {
 			System.setProperty(property, "off");
 			byte[] merged = read(MERGED, POT);

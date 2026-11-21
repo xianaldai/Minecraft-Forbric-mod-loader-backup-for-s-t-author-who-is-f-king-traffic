@@ -19,6 +19,11 @@ mkdir -p "$BUILD"
 
 [ -f "$RUNDIR/saves/$WORLD/level.dat" ] || { echo "[kernel] FATAL: no saved world at $RUNDIR/saves/$WORLD" >&2; exit 3; }
 [ -f "$RUNDIR/options.txt" ] || { echo "[kernel] FATAL: no options.txt; onboarding blocks quick-play" >&2; exit 3; }
+# The gate writes into its rundir, so it refuses the shared fixture itself and any link into it: run it on a clone
+# (`cp -c -R "$(cd run/client-merged-pack && pwd -P)" <dir>`), as gates-parallel.py does.
+# (After the missing-fixture check, so a machine without the fixture still gets that check's own words, as
+# gates-parallel.py expects when it leaves the rundir variable unset; nothing above writes into the rundir.)
+refuse_shared_rundir "$RUNDIR"
 MODS=$(find "$RUNDIR/mods" -maxdepth 1 -name '*.jar' -type f 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "the full 97-jar pack is staged" 97 "$MODS"
 [ "$FAIL" -eq 0 ] || exit "$FAIL"
@@ -34,7 +39,7 @@ Path(sys.argv[1]).write_text(str(time.time_ns()))
 PY
 
 step "capture a frame at world tick ${SHOT_TICKS:-<disabled>}"
-FORBRIC_JVM="-Dforbric.clientSmoke=true -Dforbric.clientSmokeWorld=$WORLD -Dforbric.clientSmokeReadyTicks=60 -Dforbric.clientSmokeScreenshots=$SHOT_TICKS -Dforbric.clientSmokeDisconnectTicks=160 ${M27_EXTRA_JVM:-}" \
+FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.clientSmoke=true -Dforbric.clientSmokeWorld=$WORLD -Dforbric.clientSmokeReadyTicks=60 -Dforbric.clientSmokeScreenshots=$SHOT_TICKS -Dforbric.clientSmokeDisconnectTicks=160 ${M27_EXTRA_JVM:-}" \
 RUNDIR="$RUNDIR" "$KERNEL/run/launch-kernel-client.sh" \
   --quickPlayPath "$RUNDIR/quickPlay/log.json" --quickPlaySingleplayer "$WORLD" > "$LOG" 2>&1 &
 CLIENT_PID=$!

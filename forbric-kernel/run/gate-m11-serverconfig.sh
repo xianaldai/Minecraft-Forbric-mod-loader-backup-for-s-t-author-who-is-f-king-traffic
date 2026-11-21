@@ -16,13 +16,15 @@
 # needs shogi + cookingforblockheads present to construct. fabric-api is here because the failure was first seen
 # on a mixed pack and this keeps the gate honest about that.
 #
-# TEETH: -Dforbric.earlyConfigs=off turns this gate RED (measured: getActive NPE x4, Done never reached).
+# TEETH: -Dforbric.earlyConfigs=off turns this gate RED (measured on the merged base: getActive NPE x4, Done never
+# reached; on the genuine base 2026-11-09: 6 checks red, the config-less getActive present x2, Done never reached).
 # GATE-PARALLEL: rundirs=server-config mem=2000
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 LOG="$BUILD/gate-m11-serverconfig-boot.log"; mkdir -p "$BUILD"
 RUNDIR="$KERNEL/run/server-config"
+refuse_shared_rundir "$RUNDIR"
 
 step "stage a config-driven NeoForge mod stack (waystones + balm) on a DEDICATED server"
 kernel_jar
@@ -32,7 +34,7 @@ mkdir -p "$RUNDIR/mods"
 for j in fabric-api-0.155.2+26.2.jar balm-neoforge-26.2-26.2.0.4.jar shogi-neoforge-26.2-26.2.0.3.jar \
          cookingforblockheads-neoforge-26.2-26.2.0.2.jar waystones-neoforge-26.2-26.2.0.5.jar; do
   src="$KERNEL/run/client-merged-pack/mods/$j"
-  [ -f "$src" ] || { echo "[kernel] FATAL: missing $j — this gate needs the merged pack staged" >&2; exit 3; }
+  [ -f "$src" ] || { echo "[kernel] FATAL: missing $j — this gate reads them from the client-merged-pack fixture" >&2; exit 3; }
   cp "$src" "$RUNDIR/mods/"
 done
 echo "[kernel] staged: $(ls "$RUNDIR/mods" | paste -sd' ' -)"
@@ -40,7 +42,7 @@ seed_server_properties "$RUNDIR"
 
 step "boot to Done and stop cleanly"
 : > "$LOG"
-( stop_when_ready "$LOG" 80 ) | FORBRIC_JVM="${M11_EXTRA_JVM:-}" RUNDIR="$RUNDIR" \
+( stop_when_ready "$LOG" 80 ) | FORBRIC_JVM="${FORBRIC_JVM:-} ${M11_EXTRA_JVM:-}" RUNDIR="$RUNDIR" \
   "$KERNEL/run/launch-kernel-server.sh" > "$LOG" 2>&1 &
 BOOTPID=$!
 record_server_pid "$RUNDIR" "$BOOTPID"

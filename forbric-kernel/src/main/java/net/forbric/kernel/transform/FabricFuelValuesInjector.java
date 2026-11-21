@@ -21,10 +21,10 @@ import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
 /**
- * A Fabric mod's fuels go into the fuel values the merged game builds.
+ * A Fabric mod's fuels go into the fuel values the game builds.
  *
  * <p>fabric-content-registries fires {@code FuelValueEvents.BUILD}/{@code EXCLUSIONS} from a wrap in vanilla's
- * {@code FuelValues.vanillaBurnTimes}; the merged server (and a client on a NeoForge connection) builds its fuels in
+ * {@code FuelValues.vanillaBurnTimes}; the server (and a client on a NeoForge connection) builds its fuels in
  * NeoForge's {@code DataMapHooks.populateFuelValues} instead and never calls it, so a Fabric mod's fuel could not go in a
  * furnace. Right before that method's one {@code Builder.build()}, the builder goes through {@code KernelFabricFuel.apply}
  * with the method's own registries and feature flags. Applied only when the method builds one builder from its two
@@ -73,7 +73,7 @@ public final class FabricFuelValuesInjector implements ClassTransformer {
 	static final String FUEL_VALUES = "net/minecraft/world/level/block/entity/FuelValues";
 	static final String BUILDER = "net/minecraft/world/level/block/entity/FuelValues$Builder";
 	static final String DESC = "(Lnet/minecraft/core/RegistryAccess;Lnet/minecraft/world/flag/FeatureFlagSet;)Lnet/minecraft/world/level/block/entity/FuelValues;";
-	/** The merge-added body the forwarding {@code vanillaBurnTimes(Provider, FeatureFlagSet, int)} calls. */
+	/** The carrier-added body the forwarding {@code vanillaBurnTimes(Provider, FeatureFlagSet, int)} calls. */
 	static final String BODY_DESC = "(L" + BUILDER + ";I)L" + FUEL_VALUES + ";";
 	static final String KERNEL_FUEL = "net/forbric/kernel/runtime/KernelFabricFuel";
 	static final String THROUGH_DESC = "(L" + BUILDER + ";L" + FUEL_VALUES + ";Lnet/minecraft/core/HolderLookup$Provider;"
@@ -103,7 +103,7 @@ public final class FabricFuelValuesInjector implements ClassTransformer {
 		if (returnHooksEnabled() || carryEnabled()) {
 			anchors.add(new AnchorSet.Anchor(FUEL_VALUES_CLASS, AnchorSet.Severity.REQUIRED,
 					"a mod's mixin on vanillaBurnTimes' return (torrential's Angling Table fuel) never reaches the fuel "
-							+ "values the merged server uses, or runs twice per native build on a client"));
+							+ "values the server uses, or runs twice per native build on a client"));
 		}
 		if (carryEnabled()) {
 			anchors.add(new AnchorSet.Anchor(BUILDER_CLASS, AnchorSet.Severity.REQUIRED,
@@ -126,12 +126,12 @@ public final class FabricFuelValuesInjector implements ClassTransformer {
 		node.accept(writer);
 		if ((inserted & APPLIED) != 0) {
 			ForbricLog.info("[Forbric/Fuel] DataMapHooks.populateFuelValues runs fabric-content-registries' fuel events before it "
-					+ "builds — the merged game builds its fuels there and never reached Fabric's hook in vanillaBurnTimes");
+					+ "builds — the game builds its fuels there and never reached Fabric's hook in vanillaBurnTimes");
 		}
 		if ((inserted & RETURN_HOOKED) != 0) {
 			ForbricLog.info("[Forbric/Fuel] DataMapHooks.populateFuelValues hands its builder to FuelValues.vanillaBurnTimes' "
 					+ "own build() and the table through its return — a mod's mixin at either (a wrap of the build that adds its "
-					+ "fuels, torrential's Angling Table) now reaches the fuels the merged server uses");
+					+ "fuels, torrential's Angling Table) now reaches the fuels the server uses");
 		}
 		return writer.toByteArray();
 	}
@@ -249,7 +249,7 @@ public final class FabricFuelValuesInjector implements ClassTransformer {
 		node.accept(writer);
 		ForbricLog.info("[Forbric/Fuel] FuelValues.%s%s builds the fuel builder populateFuelValues hands it at its own "
 				+ "build() instead of vanilla's, so what a mod puts at that build and the return hooks of both vanillaBurnTimes "
-				+ "run on the table the merged server uses", body.name, body.desc);
+				+ "run on the table the server uses", body.name, body.desc);
 		return writer.toByteArray();
 	}
 
@@ -262,7 +262,7 @@ public final class FabricFuelValuesInjector implements ClassTransformer {
 	 * <p>The remove call itself stays exactly as shipped, so a guest's {@code @At(INVOKE)} on it — the wrap that fires the
 	 * fuel events — matches it as before; the bracket only duplicates its receiver and argument ahead of it. Every such
 	 * site is bracketed: where a native facade was restored ({@code NativeConstructorFacadeRestorer}) the class holds
-	 * vanilla's body twice — the facade, where the guests bind, and the merge-added closure — and which of them a guest's
+	 * vanilla's body twice — the facade, where the guests bind, and the carrier-added closure — and which of them a guest's
 	 * wrap lands in is Mixin's business; each window lives for one call of the method it is in.
 	 */
 	static byte[] bracketTheNativePoint(byte[] bytes) {

@@ -65,14 +65,14 @@ class MixinNullableCompositeCallbackTest {
 	}
 	private static int adapt(Inputs input){return MixinNullableCompositeCallback.adapt(input.mixin,input.current,input.source,input.nativeSource,input.runtimeSource);}
 	private static Inputs inputs()throws Exception{
-		Path api=Path.of(System.getProperty("forbric.fabricApi",TestFixtures.fabricApi().toString())),base=Path.of(System.getProperty("forbric.predicateBase",TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar").toString())),neo=TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
+		Path api=Path.of(System.getProperty("forbric.fabricApi",TestFixtures.fabricApi().toString())),base=Path.of(System.getProperty("forbric.predicateBase",TestFixtures.stagedBase().toString())),neo=TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR);
 		TestFixtures.requireFiles(TestFixtures.Fixture.STAGED,"actual API/indexed base/runtime required",api,base,neo);
 		ClassNode mixin=null,reference;Map<String,ClassNode> classes=new HashMap<>();String owner="net/minecraft/world/level/block/entity/HopperBlockEntity";
 		try(ZipFile jar=new ZipFile(api.toFile())){var module=jar.stream().filter(e->e.getName().startsWith("META-INF/jars/fabric-transfer-api-v1-")).findFirst().orElseThrow();try(ZipInputStream nested=new ZipInputStream(jar.getInputStream(module))){for(var e=nested.getNextEntry();e!=null;e=nested.getNextEntry())if(e.getName().equals("net/fabricmc/fabric/mixin/transfer/HopperBlockEntityMixin.class"))mixin=parse(nested.readAllBytes());}}
-		try(ZipFile jar=new ZipFile(base.toFile())){classes.put(owner,parse(jar.getInputStream(jar.getEntry(owner+".class")).readAllBytes()));reference=new NativeGameReferences(p->{try{var e=jar.getEntry(p);return e==null?null:jar.getInputStream(e).readAllBytes();}catch(Exception failed){return null;}}).get(Ecosystem.FABRIC,owner);}
+		try(ZipFile jar=new ZipFile(base.toFile())){classes.put(owner,parse(jar.getInputStream(jar.getEntry(owner+".class")).readAllBytes()));reference=new NativeGameReferences(p->{try{var e=jar.getEntry(p);return e==null?null:jar.getInputStream(e).readAllBytes();}catch(Exception failed){return null;}},null,TestFixtures.launchSources(base)).get(Ecosystem.FABRIC,owner);}
 		try(ZipFile jar=new ZipFile(neo.toFile())){String record="net/neoforged/neoforge/transfer/item/ContainerOrHandler";classes.put(record,parse(jar.getInputStream(jar.getEntry(record+".class")).readAllBytes()));}
 		var raw=(java.util.function.Function<String,byte[]>)(path->{try(ZipFile jar=new ZipFile(base.toFile())){var entry=jar.getEntry(path);return entry==null?null:jar.getInputStream(entry).readAllBytes();}catch(Exception e){throw new IllegalStateException(e);}});
-		NativeGameReferences originals=new NativeGameReferences(raw);
+		NativeGameReferences originals=new NativeGameReferences(raw,null,TestFixtures.launchSources(base));
 		var runtime=(java.util.function.Function<String,ClassNode>)(name->{try(ZipFile jar=new ZipFile(neo.toFile())){var entry=jar.getEntry(name+".class");return entry==null?null:parse(jar.getInputStream(entry).readAllBytes());}catch(Exception e){throw new IllegalStateException(e);}});
 		var current=(java.util.function.Function<String,ClassNode>)(name->classes.computeIfAbsent(name,n->{byte[] bytes=raw.apply(n+".class");return bytes==null?runtime.apply(n):parse(bytes);}));
 		assertNotNull(mixin);assertNotNull(reference);return new Inputs(mixin,classes,reference,current,n->originals.get(Ecosystem.FABRIC,n),n->originals.get(Ecosystem.NEOFORGE,n),runtime);

@@ -371,8 +371,8 @@ class DeclarationReaderModListInjectorTest {
 	}
 
 	static Path carrier() {
-		Path carrier = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), "the staged NeoForge carrier is absent");
+		Path carrier = TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR);
+		TestFixtures.requireFile(Fixture.STAGED, carrier, "the staged NeoForge carrier is absent");
 		return carrier;
 	}
 

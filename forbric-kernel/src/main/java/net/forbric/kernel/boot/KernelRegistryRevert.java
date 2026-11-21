@@ -22,7 +22,7 @@ import java.util.Set;
 
 import net.forbric.api.Ecosystem;
 import net.forbric.api.ForeignType;
-import net.forbric.kernel.transform.RegistrySyncParityInjector;
+import net.forbric.kernel.transform.RegistryRemapContracts;
 import net.forbric.kernel.util.Caught;
 import net.forbric.kernel.util.ForbricLog;
 
@@ -39,8 +39,7 @@ import net.forbric.kernel.util.ForbricLog;
  *
  * <p>This class takes NeoForge's snapshot itself — {@code RegistryManager.takeSnapshot(SYNC_TO_CLIENT)}, the
  * public API the server uses to build the sync — the first time a connection's remap begins, and
- * {@code revertToFrozen()} now applies it back: plain registries through NeoForge's own {@code applySnapshot}
- * loop, the Forge-wrapped ones through the staged path that loop already goes through on connect, and a remap
+ * {@code revertToFrozen()} now applies it back through NeoForge's own {@code applySnapshot} loop, with a remap
  * contract's undo (fabric-api's {@code unmap}) first, so the mod's own bookkeeping is left the way it would leave it
  * and its own call at the end of the disconnect finds nothing left to undo. A snapshot whose ids all still match is not applied at all — the common
  * case, and one where every registry would otherwise be torn down and rebuilt for nothing.
@@ -48,7 +47,6 @@ import net.forbric.kernel.util.ForbricLog;
 public final class KernelRegistryRevert {
 	private static final String REGISTRY_MANAGER = ForeignType.REGISTRY_MANAGER.binary(Ecosystem.NEOFORGE);
 	private static final String SNAPSHOT_TYPE = REGISTRY_MANAGER + "$SnapshotType";
-	private static final String WRAPPER = "net.minecraftforge.registries.NamespacedWrapper";
 
 	/** {@code Map<Identifier, RegistrySnapshot>} of every synced registry as it was before the connection remapped it. */
 	private static volatile Map<?, ?> originals;
@@ -127,28 +125,20 @@ public final class KernelRegistryRevert {
 	}
 
 	/**
-	 * The undo of every remap contract a mixin adds to the registries ({@link RegistrySyncParityInjector.RemapContract}:
+	 * The undo of every remap contract a mixin adds to the registries ({@link RegistryRemapContracts.RemapContract}:
 	 * fabric-api's {@code unmap()} is one) on every plain registry that carries it, so the mod's own bookkeeping is left
-	 * the way its disconnect would leave it before NeoForge's snapshot goes back. The Forge-wrapped registries are
-	 * skipped: their ids live in the delegate, and the NeoForge pass that follows restores those through
-	 * {@link KernelForgeWrapperSync}. Without such a contract there is nothing to do. The contract is found by what the
-	 * mixin does, so its interface and method are called whatever the mod calls them.
+	 * the way its disconnect would leave it before NeoForge's snapshot goes back. Without such a contract there is
+	 * nothing to do. The contract is found by what the mixin does, so its interface and method are called whatever the
+	 * mod calls them.
 	 */
 	private static int unmapFabricPlainRegistries(ClassLoader cl) {
 		java.util.Map<String, String> undos = new java.util.LinkedHashMap<>();
-		for (var contract : RegistrySyncParityInjector.discoveredContracts()) {
+		for (var contract : RegistryRemapContracts.discoveredContracts()) {
 			if (contract.undo() != null) undos.putIfAbsent(contract.owner().replace('/', '.') + "." + contract.undo(), contract.owner());
 		}
 		if (undos.isEmpty()) return 0;
 		int done = 0;
 		try {
-			Class<?> wrapper = null;
-			try {
-				wrapper = Class.forName(WRAPPER, false, cl);
-			} catch (ClassNotFoundException noForge) {
-				// no wrappers to skip
-				Caught.expected(noForge);
-			}
 			Object root = Class.forName("net.minecraft.core.registries.BuiltInRegistries", false, cl).getField("REGISTRY").get(null);
 			for (var undo : undos.entrySet()) {
 				Class<?> owner;
@@ -161,7 +151,7 @@ public final class KernelRegistryRevert {
 				}
 				Method method = owner.getMethod(undo.getKey().substring(undo.getKey().lastIndexOf('.') + 1));
 				for (Object registry : (Iterable<?>) root) {
-					if (!owner.isInstance(registry) || (wrapper != null && wrapper.isInstance(registry))) continue;
+					if (!owner.isInstance(registry)) continue;
 					try {
 						method.invoke(registry);
 						done++;

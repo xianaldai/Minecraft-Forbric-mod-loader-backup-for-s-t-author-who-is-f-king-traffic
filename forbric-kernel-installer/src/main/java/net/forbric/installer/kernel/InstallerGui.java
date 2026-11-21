@@ -90,7 +90,7 @@ final class InstallerGui {
 		JPanel panel = new JPanel();
 		panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
 		panel.setBorder(BorderFactory.createEmptyBorder(12, 12, 0, 12));
-		JLabel title = new JLabel("Forbric — Fabric, MinecraftForge and NeoForge mods in one game");
+		JLabel title = new JLabel(InstallerText.title());
 		title.setFont(title.getFont().deriveFont(title.getFont().getSize2D() + 3f));
 		// BoxLayout positions a child by its own alignmentX, and these two did not agree: the title floated
 		// while the paragraph below it sat left, which is why the heading appeared shoved to one side.
@@ -130,8 +130,8 @@ final class InstallerGui {
 		// Said on the label itself, not only in a tooltip: a tooltip is what nobody hovers over before typing.
 		addRow(panel, c, row, "Built artifacts (leave empty)", artifacts, this::chooseArtifacts,
 				"<html>Leave this empty: the installer downloads and builds the game files it needs.<br>"
-						+ "Only for developers who already built Forbric's merged game base and both Forge<br>"
-						+ "runtimes from source, to skip that build.</html>");
+						+ "Only for developers who already built NeoForge's patched game and the NeoForge<br>"
+						+ "runtime for Forbric, to skip that build.</html>");
 		return panel;
 	}
 
@@ -192,7 +192,7 @@ final class InstallerGui {
 	}
 
 	private void chooseArtifacts() {
-		choose(artifacts, "Developers only: the directory holding a merged game base and both runtimes you built");
+		choose(artifacts, "Developers only: the directory holding NeoForge's patched game and the NeoForge runtime you built");
 	}
 
 	private void choose(JTextField field, String title) {

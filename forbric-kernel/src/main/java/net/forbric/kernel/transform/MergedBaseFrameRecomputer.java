@@ -10,7 +10,18 @@ import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 
 /** Recomputes an incompatible reference frame from the actual resource hierarchy, without loading classes.
- * No ecosystem, mod name, lost-ancestor list or future transformer superclass is predicted. */
+ * No ecosystem, mod name, lost-ancestor list or future transformer superclass is predicted.
+ *
+ * <p>Where a join cannot be inferred because a class file it needs is not here, {@code java/lang/Object} stands in for
+ * that one join. Object is above every answer the join could have had, so the frames inferred with it are never narrower
+ * than the true ones: they can show that nothing needs repair, never that something does, and they are never returned.
+ * When every declared reference frame was compared and accepts what was inferred for it (where the stand-in reached a
+ * frame, that frame is declared as Object, as an interface, as an array of one of those, or not as a reference there),
+ * the input is returned and nothing is reported. When one declared frame does not, or one declared reference frame could
+ * not be compared (its method's instructions changed, or the inference gives no frame where it stands), the input is
+ * returned and the report is made. A declared type that is itself unreadable and has to be asked about (the inference
+ * names something else there), a looping hierarchy and one past the walk's bound are not stood in for: nothing was
+ * judged, and that is reported as before. */
 public final class MergedBaseFrameRecomputer implements ClassTransformer {
     private final Function<String, byte[]> classBytes;
     private final Map<String, String[]> hierarchy = new ConcurrentHashMap<>();
@@ -25,24 +36,43 @@ public final class MergedBaseFrameRecomputer implements ClassTransformer {
             if (original.methods.stream().noneMatch(MergedBaseFrameRecomputer::hasReferenceFrame)) return input;
             // The current definition wins over a raw resource for this class while it is being transformed.
             hierarchy.put(original.name, new String[] {original.superName, (original.access & Opcodes.ACC_INTERFACE) != 0 ? "1" : "0"});
+            // What this one judgment asked for and no class file gave. Local on purpose: absence is not a hierarchy fact,
+            // the next class asks again, and transform runs on several threads at once.
+            Map<String, NoClassFile> unread = new LinkedHashMap<>();
             ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES) {
-                @Override protected String getCommonSuperClass(String a, String b) { return commonSuperClass(a, b); }
+                @Override protected String getCommonSuperClass(String a, String b) {
+                    try { return commonSuperClass(a, b); }
+                    catch (NoClassFile absent) { Caught.expected(absent); unread.putIfAbsent(absent.typeName(), absent); return "java/lang/Object"; }
+                }
             };
             // A reader-sharing writer silently copies Code/StackMapTable and never recomputes those methods.
             new ClassReader(input).accept(writer, ClassReader.SKIP_FRAMES);
             byte[] computed = writer.toByteArray();
             ClassNode current = node(computed);
-            Set<String> incompatible = new LinkedHashSet<>();
+            // A method whose instructions the frame computation changed (it rewrites unreachable code) has no frame that
+            // lines up with the original's, and a declared frame where nothing branches to has no inferred frame at all:
+            // either way a declared reference frame went uncompared. Kept by class, not by method: ASM asks for each pair
+            // of types once per class, so which method a stand-in went into is not known.
+            Set<String> incompatible = new LinkedHashSet<>(), uncompared = new LinkedHashSet<>();
             for (MethodNode before : original.methods) {
                 MethodNode after = current.methods.stream().filter(m -> m.name.equals(before.name) && m.desc.equals(before.desc)).findFirst().orElse(null);
-                if (after == null || !opcodes(before).equals(opcodes(after))) continue;
+                if (after == null || !opcodes(before).equals(opcodes(after))) { if (hasReferenceFrame(before)) uncompared.add(before.name + before.desc); continue; }
                 Map<Integer, FrameNode> actual = frames(after);
                 for (var entry : frames(before).entrySet()) {
                     FrameNode inferred = actual.get(entry.getKey());
-                    if (inferred == null) continue;
+                    if (inferred == null) { if (referenceFrame(entry.getValue())) uncompared.add(before.name + before.desc); continue; }
                     compare(slots(entry.getValue().local), slots(inferred.local), incompatible);
                     compare(entry.getValue().stack, inferred.stack, incompatible);
                 }
+            }
+            if (!unread.isEmpty()) {
+                // Frames inferred over a stand-in are never emitted, and are no proof where a declared frame went uncompared.
+                if (incompatible.isEmpty() && uncompared.isEmpty()) {
+                    if (ForbricLog.debugEnabled()) ForbricLog.debug("[Forbric/Frames] %s: no class file gives %s; java/lang/Object stood in for the merges that need it, and every declared frame that was compared accepts that, so there is nothing to repair", className, unread.keySet());
+                    return input;
+                }
+                Caught.warn(unread.values().iterator().next(), "[Forbric/Frames] cannot prove a frame repair for %s; preserving its original bytes: no class file gives %s, so the inference used java/lang/Object in place of the merges that need it; declared frame types that do not accept what was inferred: %s; methods whose frames could not be compared: %s", className, unread.keySet(), incompatible, uncompared);
+                return input;
             }
             if (incompatible.isEmpty()) return input;
             ForbricLog.info("[Forbric/Frames] recomputed %s: reference frames %s disagree with the actual hierarchy", className, incompatible);
@@ -76,10 +106,11 @@ public final class MergedBaseFrameRecomputer implements ClassTransformer {
         List<Integer> out = new ArrayList<>(); for (AbstractInsnNode instruction : method.instructions) if (instruction.getOpcode() >= 0) out.add(instruction.getOpcode()); return out;
     }
     private static boolean hasReferenceFrame(MethodNode method) {
-        for (AbstractInsnNode instruction : method.instructions) if (instruction instanceof FrameNode frame) {
-            if (frame.local != null && frame.local.stream().anyMatch(String.class::isInstance) || frame.stack != null && frame.stack.stream().anyMatch(String.class::isInstance)) return true;
-        }
+        for (AbstractInsnNode instruction : method.instructions) if (instruction instanceof FrameNode frame && referenceFrame(frame)) return true;
         return false;
+    }
+    private static boolean referenceFrame(FrameNode frame) {
+        return frame.local != null && frame.local.stream().anyMatch(String.class::isInstance) || frame.stack != null && frame.stack.stream().anyMatch(String.class::isInstance);
     }
     private static ClassNode node(byte[] bytes) { ClassNode node = new ClassNode(); new ClassReader(bytes).accept(node, ClassReader.EXPAND_FRAMES); return node; }
     private static int majorVersion(byte[] bytes) { return ((bytes[6] & 255) << 8) | (bytes[7] & 255); }
@@ -108,6 +139,9 @@ public final class MergedBaseFrameRecomputer implements ClassTransformer {
         String element = array.substring(1);
         return element.startsWith("[") ? element : element.startsWith("L") && element.endsWith(";") ? element.substring(1, element.length() - 1) : null;
     }
+    /** The join of two types in the resource hierarchy. Throws {@link TypeNotPresentException} when a class file it needs
+     * is not here: a caller that writes the answer into bytes must take that as "cannot be computed" and never stand
+     * anything in for it. */
     public String commonSuperClass(String first, String second) {
         if (first.equals(second)) return first;
         if (first.startsWith("[") || second.startsWith("[")) {
@@ -134,10 +168,12 @@ public final class MergedBaseFrameRecomputer implements ClassTransformer {
         return out;
     }
     private boolean isInterface(String type) { return header(type)[1].equals("1"); }
+    /** {@link #header}'s answer for a type no class file here gives; nothing else throws it. */
+    private static final class NoClassFile extends TypeNotPresentException { NoClassFile(String type) { super(type, null); } }
     private String[] header(String type) {
         return hierarchy.computeIfAbsent(type, name -> {
             if (name.equals("java/lang/Object")) return new String[] {null, "0"};
-            byte[] bytes = classBytes.apply(name + ".class"); if (bytes == null) throw new TypeNotPresentException(name, null);
+            byte[] bytes = classBytes.apply(name + ".class"); if (bytes == null) throw new NoClassFile(name);
             ClassReader reader = new ClassReader(bytes); return new String[] {reader.getSuperName(), (reader.getAccess() & Opcodes.ACC_INTERFACE) != 0 ? "1" : "0"};
         });
     }

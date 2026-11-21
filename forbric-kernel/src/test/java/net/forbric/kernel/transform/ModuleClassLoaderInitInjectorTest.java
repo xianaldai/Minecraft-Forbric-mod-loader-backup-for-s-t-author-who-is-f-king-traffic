@@ -61,7 +61,7 @@ import net.forbric.kernel.mixin.MixinWeaverSlot;
  */
 @ExecutesInjector(ModuleClassLoaderInitInjector.class)
 class ModuleClassLoaderInitInjectorTest {
-	private static final Path CARRIER = TestFixtures.stagedRoot().resolve("neoforge-runtime/neoforge-runtime.jar");
+	private static final Path CARRIER = TestFixtures.stagedRoot().resolve(TestFixtures.NEO_CARRIER_JAR);
 	private static final String INTERNAL = "net/neoforged/fml/classloading/ModuleClassLoader";
 	/** The guarded lookup the repair keys on: it catches three reflective failures, not the module system's refusal. */
 	private static final String STAND_IN = """
@@ -198,7 +198,7 @@ class ModuleClassLoaderInitInjectorTest {
 	}
 
 	private static byte[] carrierClass() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(CARRIER), "NeoForge carrier not staged");
+		TestFixtures.requireFile(Fixture.STAGED, CARRIER, "NeoForge carrier not staged");
 		try (ZipFile zip = new ZipFile(CARRIER.toFile());
 				InputStream in = zip.getInputStream(zip.getEntry("net/neoforged/fml/classloading/ModuleClassLoader.class"))) {
 			return in.readAllBytes();

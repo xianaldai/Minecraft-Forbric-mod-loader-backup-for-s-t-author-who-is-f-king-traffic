@@ -154,7 +154,13 @@ public final class KernelLoadReport {
 			}
 			// Noticed and not proved. Notes, not failures: they mark no mod and never stop the success line.
 			List<CompatibilityFinding> suspected = CompatibilityFindings.suspected();
-			String rendered = render(chinese(), failures, unattributed, suspected, disabled);
+			java.util.Set<String> unsupported = new java.util.HashSet<>();
+			for (net.forbric.kernel.discovery.MetadataFailures.Lost lost : net.forbric.kernel.discovery.MetadataFailures.lost()) {
+				if (lost.kind() == net.forbric.kernel.discovery.MetadataFailures.Kind.UNSUPPORTED) {
+					unsupported.add(String.valueOf(lost.jar().getFileName()));
+				}
+			}
+			String rendered = render(chinese(), failures, unattributed, suspected, disabled, unsupported, RegistrationStop.stopped());
 			synchronized (KernelLoadReport.class) {
 				if (rendered.equals(lastRendered)) return;
 				if (lastRendered != null && !rewriteEnabled()) return;
@@ -243,6 +249,30 @@ public final class KernelLoadReport {
 	/** @param disabled the jars {@link DisabledMods} switched off this boot, by file name */
 	static String render(boolean zh, List<ModCatalog.Entry> failures, List<CompatibilityFinding> unattributed,
 			List<CompatibilityFinding> suspected, List<String> disabled) {
+		return render(zh, failures, unattributed, suspected, disabled, java.util.Set.of());
+	}
+
+	/**
+	 * @param unsupported the file names of the jars refused as MinecraftForge mods ({@code MetadataFailures}). Their
+	 *                    rows say so, and what to get instead, in the report's language through {@code DialogLang}
+	 *                    rather than "did not finish loading": none of them started. The general advice below — a
+	 *                    wrong Minecraft version, a missing dependency, "their classes did load" — is not true of
+	 *                    them, so a report whose every failure is a refusal leaves it out.
+	 */
+	static String render(boolean zh, List<ModCatalog.Entry> failures, List<CompatibilityFinding> unattributed,
+			List<CompatibilityFinding> suspected, List<String> disabled, java.util.Set<String> unsupported) {
+		return render(zh, failures, unattributed, suspected, disabled, unsupported, false);
+	}
+
+	/**
+	 * @param stopped whether this boot stopped on a mod's failure ({@link RegistrationStop#stopped}): since D82 a mod that
+	 *                throws while the game loads stops the game as its own loader does, whatever the compatibility policy.
+	 *                The advice and the note then say that, and not that Forbric carried on without the mod — which is what
+	 *                they said after every stop until lane STOP's review (A-1).
+	 */
+	static String render(boolean zh, List<ModCatalog.Entry> failures, List<CompatibilityFinding> unattributed,
+			List<CompatibilityFinding> suspected, List<String> disabled, java.util.Set<String> unsupported, boolean stopped) {
+		net.forbric.kernel.ui.DialogLang lang = zh ? net.forbric.kernel.ui.DialogLang.ZH_CN : net.forbric.kernel.ui.DialogLang.EN;
 		StringBuilder sb = new StringBuilder();
 		boolean headline = !failures.isEmpty() || (unattributed.isEmpty() && suspected.isEmpty() && disabled.isEmpty());
 		if (zh) {
@@ -266,6 +296,11 @@ public final class KernelLoadReport {
 			if (!e.modId().equals(e.name())) sb.append("  (").append(e.modId()).append(')');
 			sb.append('\n');
 			if (!e.jar().isEmpty()) sb.append("    ").append(e.jar()).append('\n');
+			if (unsupported.contains(e.jar())) {
+				sb.append("    ").append(lang.get("report.unsupported.what")).append('\n');
+				sb.append("    ").append(lang.get("report.unsupported.fix", e.name(), e.jar())).append("\n\n");
+				continue;
+			}
 			String what = e.status() == ModCatalog.Status.FAILED
 					? (zh ? "没有完成加载" : "did not finish loading")
 					: (zh ? "有一部分没有跑起来" : "partly did not run");
@@ -317,8 +352,17 @@ public final class KernelLoadReport {
 			sb.append('\n');
 		}
 		// The advice below is about mods that did not finish; with none, it would only send the reader to remove
-		// something that is not the problem.
+		// something that is not the problem. A boot that stopped says so whatever the rows: a stop no mod row carries (a
+		// NeoForge registration step, say) left only the findings above, which describe the state before the stop.
 		if (failures.isEmpty()) {
+			if (stopped) {
+				sb.append(zh ? "游戏在一个 mod 加载出错时停下了，就像它自己的加载器会做的那样；具体的报错在 logs/latest.log 和 crash-reports\n"
+						+ "文件夹里的崩溃报告里。上面这些记录的是停下之前的情况。\n"
+						: "The game stopped at a mod's error while it loaded, as that mod's own loader stops it; the error is in\n"
+								+ "logs/latest.log and in the crash report in the crash-reports folder. What is listed above is the\n"
+								+ "state before it stopped.\n");
+				return sb.toString();
+			}
 			if (!unattributed.isEmpty()) {
 				sb.append(zh ? "在 logs/latest.log 里搜上面的编号，那里有具体的报错；证据在 .forbric-kernel/compatibility-report.json。\n"
 						: "Search logs/latest.log for the ids above for the actual error; the evidence is in\n"
@@ -326,7 +370,36 @@ public final class KernelLoadReport {
 			}
 			return sb.toString();
 		}
+		boolean anyRefused = failures.stream().anyMatch(e -> unsupported.contains(e.jar()));
+		if (anyRefused) sb.append(lang.get("report.unsupported.advice")).append("\n\n");
+		if (anyRefused && failures.stream().allMatch(e -> unsupported.contains(e.jar()))) return sb.toString();
 
+		if (stopped) {
+			if (zh) {
+				sb.append("怎么办\n");
+				sb.append("------\n");
+				sb.append("游戏在上面这个 mod 的报错处停下了，就像它自己的加载器（NeoForge 或 Fabric）会做的那样。\n");
+				sb.append("具体的报错在 logs/latest.log 里，也在 crash-reports 文件夹里的崩溃报告里。\n");
+				sb.append("常见原因是这个 mod 是给别的 Minecraft 版本做的，或者它需要的另一个 mod 没装。\n");
+				sb.append("把它从 mods 文件夹里拿出来，游戏的其余部分就能启动。\n\n");
+				sb.append("说明\n");
+				sb.append("----\n");
+				sb.append("mod 在游戏加载时出错，游戏就会停下，不管兼容性怎么选。这份报告记录停下之前的加载结果。\n");
+			} else {
+				sb.append("What to do\n");
+				sb.append("----------\n");
+				sb.append("The game stopped at this mod's error, as the mod's own loader (NeoForge or Fabric) stops it.\n");
+				sb.append("The error is in logs/latest.log and in the crash report in the crash-reports folder.\n");
+				sb.append("The usual reasons are that the mod was built for a different Minecraft version, or that\n");
+				sb.append("something it needs is not installed. Taking it out of the mods folder lets the rest of the\n");
+				sb.append("game start.\n\n");
+				sb.append("Note\n");
+				sb.append("----\n");
+				sb.append("A mod that fails while the game loads stops the game, whatever the compatibility setting. This\n");
+				sb.append("records what had loaded before it stopped.\n");
+			}
+			return sb.toString();
+		}
 		if (zh) {
 			sb.append("怎么办\n");
 			sb.append("------\n");

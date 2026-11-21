@@ -1,63 +1,80 @@
 #!/usr/bin/env bash
-# M24 expected-failure policy gate — continuation is explicit and failure evidence never turns green.
+# M24 broken-mod gate — a mod that fails while the game loads stops the boot as its own loader stops it, and is named.
 #
 # WHY THIS EXISTS. Every other gate here asserts that NO mod failed: gate-m4 and gate-m7 each carry a
-# check_absent "no @Mod construction failure". That is the right assertion for those gates and it is the exact
-# opposite of this one. Nothing anywhere proved the other half.
+# check_absent "no @Mod construction failure". This one stages mods that fail on purpose and asserts what then happens.
 #
-# And the other half is the cost of Forbric's whole posture. Real loaders stop and show an error screen; Forbric
-# deliberately loads as much as it can and carries on (DependencyAudit and KernelLifecycle both say so in as many
-# words). The price of that trade is that a failure must not spread, and must not vanish — for most of this
-# project's life a failed mod was one WARN line in a ten-thousand-line log, and the README's own advice was to
-# remove half your mods and try again.
-#
-# So: stage a mod that fails on purpose next to two healthy ones, and assert all three halves — the healthy mods
-# still load under explicit continue, and the broken one remains a confirmed necessary failure in the report.
-# Strict policy must stop the same broken pack before Done. A final clean control must start under strict.
+# Until Stage 4 C5 that was Forbric's own posture: load as much as it can and carry on, the failing mod contained and
+# attributed, the compatibility policy deciding (continue went on, strict stopped with exit 78). Owner ruling D82 ("stop
+# like native") reversed it for NeoForge's registration (lane K3c) and D87 everywhere (lane STOP): a mod that throws while
+# the game loads stops the boot as native NeoForge 26.2.0.93 / native Fabric Loader stops it, whatever the policy, with
+# the native error:
+#   * a Fabric main entrypoint (the Fabric broken canary): Fabric Loader's "Could not execute entrypoint stage 'main' due
+#     to errors, provided by '<mod>'", "Failed to start the minecraft server", no NeoForge mod-loading report, exit 1;
+#   * the register-stop canary, one NeoForge phase per boot (-Dforbric.registerstop): its RegisterEvent listener
+#     (listener) and a throw inside GameData.postRegisterEvents' try (try) — NeoForge's roll-back; its constructor
+#     (construct) and @EventBusSubscriber class (ebs) — "Mod Construction"; an attribute event in postRegisterEvents'
+#     tail (tail); common setup (common) and its deferred work (deferred); RegisterCapabilitiesEvent (regevents);
+#     payload registration (network); its DataPackRegistryEvent.NewRegistry listener (datapackreg). Each: NeoForge's
+#     "Failed to wait for future <task>, 1 errors found", the kernel's stop line, the crash-*-fml.txt report naming the
+#     cause, Forbric's crash analysis naming the mod, "Failed to start the minecraft server", no world, exit status 1
+#     (FML's launcher, finding no server thread).
+# Every stop that leaves a load report must say the game stopped, and never the carry-on note ("Forbric does not stop at
+# the first mod…"), which it said after every stop until lane STOP's review (A-1).
+# The phases left out (constructevent, newregistry, sided, imc, complete) take the same code paths as ones above and have
+# unit tests (NeoSetupPhaseStopStagedTest); the lane's evidence ran every mode once on Forbric and on native NeoForge.
+# The same register-stop jar with =off is in the clean control. The old continue and strict boots of the Fabric broken
+# canary asserted the containment D87 retired (the continue boot reached Done and wrote a load report; strict exited 78).
 # GATE-PARALLEL: rundirs=server-brokenmod mem=1500
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 LOG="$BUILD/gate-m24-brokenmod.log"
 CONTROL="$BUILD/gate-m24-control.log"
-STRICT="$BUILD/gate-m24-strict.log"
 RUNDIR="$KERNEL/run/server-brokenmod"
+refuse_shared_rundir "$RUNDIR"
 REPORT="$RUNDIR/.forbric-kernel/load-report.txt"
+REGSTOP="$KERNEL/run/canary/forbricregisterstop.jar"
+STOP_LISTENER="$BUILD/gate-m24-registerstop-listener.log"
+STOP_TRY="$BUILD/gate-m24-registerstop-try.log"
+STOP_LOG() { echo "$BUILD/gate-m24-registerstop-$1.log"; }
 COMPAT="$RUNDIR/.forbric-kernel/compatibility-report.json"
 BROKEN="$KERNEL/run/canary/forbricbrokencanary.jar"
 FABRIC="$KERNEL/run/canary/forbricfabriclive.jar"
-NEO="$RUN_OLD/neoforge-runtime/forbricneolive.jar"
+NEO="$NEOLIVE"
 mkdir -p "$BUILD"
 
 step "stage the broken mod and two healthy ones"
 "$KERNEL/run/build-broken-canary.sh" >"$BUILD/gate-m24-canary.log" 2>&1
 "$KERNEL/run/build-fabric-canary.sh" >>"$BUILD/gate-m24-canary.log" 2>&1
-for jar in "$BROKEN" "$FABRIC" "$NEO"; do
+"$KERNEL/run/build-register-stop-canary.sh" >>"$BUILD/gate-m24-canary.log" 2>&1
+for jar in "$BROKEN" "$FABRIC" "$NEO" "$REGSTOP"; do
   [ -f "$jar" ] || { echo "[kernel] FAIL missing canary: $jar (see $BUILD/gate-m24-canary.log)"; exit 1; }
 done
 
-stage() { # stage <include-broken>
+stage() { # stage <include-broken> [include-register-stop]
   reap_stale_server "$RUNDIR"
-  rm -rf "$RUNDIR/world" "$RUNDIR/mods" "$RUNDIR/.forbric-kernel" 2>/dev/null
+  rm -rf "$RUNDIR/world" "$RUNDIR/mods" "$RUNDIR/.forbric-kernel" "$RUNDIR/crash-reports" 2>/dev/null
   mkdir -p "$RUNDIR/mods"
   cp "$FABRIC" "$NEO" "$RUNDIR/mods/"
   [ "$1" = "yes" ] && cp "$BROKEN" "$RUNDIR/mods/"
+  [ "${2:-no}" = "yes" ] && cp "$REGSTOP" "$RUNDIR/mods/"
   seed_server_properties "$RUNDIR"
   echo "[kernel] staged: $(ls -1 "$RUNDIR/mods" | tr '\n' ' ')"
 }
 
-boot() { # boot <log> <policy> [expect-policy-stop]
-  local log="$1" policy="$2" mode="${3:-normal}"
+boot() { # boot <log> <policy> [expect-policy-stop|expect-stop] [register-stop-mode]
+  local log="$1" policy="$2" mode="${3:-normal}" regstop="${4:-}"
   : > "$log"
   rm -f "$log.exit"
   (
     launch() {
       RUNDIR="$RUNDIR" FORBRIC_COMPAT_POLICY="$policy" \
-        FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.compatibilityPolicy=$policy" \
+        FORBRIC_JVM="${FORBRIC_JVM:-} -Dforbric.compatibilityPolicy=$policy${regstop:+ -Dforbric.registerstop=$regstop}" \
         "$KERNEL/run/launch-kernel-server.sh"
     }
-    if [ "$mode" = "expect-policy-stop" ]; then
-      # No sleeping stdin feeder may outlive an early policy stop and look like a leaked server process.
+    if [ "$mode" = "expect-policy-stop" ] || [ "$mode" = "expect-stop" ]; then
+      # No sleeping stdin feeder may outlive an early stop and look like a leaked server process.
       launch </dev/null
     else
       ( stop_when_ready "$log" 30 ) | launch
@@ -71,97 +88,166 @@ boot() { # boot <log> <policy> [expect-policy-stop]
   await_server "$pid" "$log" 130
 }
 
-required_finding() {
-  if python3 - "$COMPAT" <<'PY'
-import json, sys
-with open(sys.argv[1], encoding="utf-8") as stream:
-    report = json.load(stream)
-required = [f for f in report["findings"] if f["confidence"] == "CONFIRMED" and f["required"]]
-assert report["confirmedRequired"] == 1 and len(required) == 1, required
-finding = required[0]
-assert finding["modId"] == "forbricbrokencanary", finding
-assert finding["id"] == "initialization:entrypoint:main", finding
-assert "ModCatalog.Status.FAILED" in finding["evidence"], finding
-assert finding["source"] == "KernelFabricEcosystem main entrypoint", finding
-PY
-  then
-    echo "[kernel] PASS the intentional entrypoint failure remains CONFIRMED and required"
+# The modes whose failing mod gets a row (the kernel marks it FAILED), so a load report must be there to read.
+REPORT_REQUIRED=" construct ebs common deferred fabric "
+
+stop_report() { # stop_report <log> <mode> — a stop's load report says the game stopped, never that Forbric carried on
+  local log="$1" mode="$2" report="$RUNDIR/.forbric-kernel/load-report.txt"
+  rm -f "$log.load-report.txt"
+  if [ -f "$report" ]; then
+    cp "$report" "$log.load-report.txt"
+    check "$mode: the load report says the game stopped" "The game stopped at (this|a) mod's error|游戏在上面这个 mod 的报错处停下了|游戏在一个 mod 加载出错时停下了" "$log.load-report.txt"
+    check_absent "$mode: and not that Forbric carried on" \
+      "does not stop at the first mod|不会因为一个 mod 出问题就停下来|depends on the compatibility decision|是否继续由兼容性选择决定" "$log.load-report.txt"
+  elif [[ "$REPORT_REQUIRED" == *" $mode "* ]]; then
+    echo "[kernel] FAIL $mode: no load report, though the failing mod has a row ($report)"; FAIL=1
   else
-    echo "[kernel] FAIL missing or misclassified necessary initialization evidence"; FAIL=1
+    echo "[kernel] PASS $mode: no load report was written (no mod row)"
   fi
 }
 
 stage yes
-step "explicit continue with one mod that fails on purpose"
-boot "$LOG" continue
-check "explicit continue exited normally" "^0$" "$LOG.exit"
-
-step "the broken mod really did fail, and really did run (must PASS)"
-# Both halves: a mod that never ran would also produce no failure, and would satisfy every assertion below about
-# the OTHER mods while proving nothing at all.
-check "the broken mod reached its entrypoint" "ForbricBrokenCanary\] reached onInitialize" "$LOG"
-check "and it failed there"                   "main entrypoint of forbricbrokencanary failed" "$LOG"
-
-step "the other mods loaded anyway, and the server still works (this is the whole point)"
-check "the Fabric canary still initialised"   "\[ForbricFabricLive\] onInitialize"  "$LOG"
-check "the NeoForge canary still constructed" "\[ForbricNeoLive\]"                  "$LOG"
-check "server reached Done"                   "Done \("                             "$LOG"
-# "Stopping the server" is the /stop command's OWN feedback (commands.stop.stopping in en_us), and the console
-# queue is drained only by tickConnection(), which runs only inside tickServer() — so that line cannot exist
-# unless the tick loop ran and was still running when this gate fed it "stop" on stdin. Bare "Stopping server"
-# is stopServer(), which runServer() reaches on EVERY exit path including ones that never ticked at all (see
-# the GATE_PORT note in lib.sh): evidence that shutdown began, not that the server ticked and not that it
-# finished — await_server is what fails a server that cannot finish. The alternation covers a merged base that
-# lost en_us and renders the raw key. Dedicated-server gates only: an integrated server prints the bare line
-# and never the command's, so this pair must not be copied into a client gate.
-check "server ticked (the stop command ran)"  "Stopping the server|commands\.stop\.stopping" "$LOG"
-check "shutdown began"                        "Stopping server"                     "$LOG"
-check_absent "no crash report was written"    "Preparing crash report"              "$LOG"
-
-step "and the failure is attributed, not merely logged (must PASS)"
-# One WARN in a ten-thousand-line log is what this gate exists to stop being the whole answer. The count is
-# pinned at exactly one: a report naming every mod would satisfy a looser pattern and would be useless.
-check "the load summary names the broken mod" \
-  "Forbric/Load\] 1 mod\(s\) did not finish loading: forbricbrokencanary" "$LOG"
-check_absent "and does not name the healthy ones" \
-  "did not finish loading:.*(forbricfabriclive|forbricneolive)" "$LOG"
-
-if [ -f "$REPORT" ]; then
-  echo "[kernel] PASS the load report was written ($REPORT)"
-  check "the report names the broken mod"   "forbricbrokencanary"     "$REPORT"
-  check "the report names its jar"          "forbricbrokencanary.jar" "$REPORT"
-  # The file is in the system language (the log lines above are always English), so on a Chinese host these two
-  # read the Chinese wording. KernelLoadReportTest pins each language's words where it names the language.
-  check "the report says what happened"     "did not finish loading|没有完成加载"  "$REPORT"
-  # The wording carries a claim that is easy to get wrong and expensive when it is: a withdrawn mod's classes ARE
-  # loaded and its mixins ARE applied, so telling a player it is absent sends them to reinstall what is there.
-  check        "the report says the mod is still partly present" "still partly present|还有一部分留在游戏里" "$REPORT"
-  check_absent "and never claims the mod is not running"         "is not running"       "$REPORT"
+step "a Fabric main entrypoint that throws takes the server down, as native Fabric Loader does (D87; must PASS)"
+# Under explicit continue: the compatibility policy no longer decides an entrypoint that threw — natively the game is down.
+boot "$LOG" continue expect-stop
+check "fabric: exited with status 1"                     "^1$"                                          "$LOG.exit"
+check "fabric: the broken mod reached its entrypoint"   "ForbricBrokenCanary\] reached onInitialize"   "$LOG"
+check "fabric: and failed there"                         "main entrypoint of forbricbrokencanary failed" "$LOG"
+check "fabric: Fabric Loader's stage error names the mod" \
+  "Could not execute entrypoint stage 'main' due to errors, provided by 'forbricbrokencanary'" "$LOG"
+check "fabric: the kernel stops the boot as native Fabric does, naming the stage and the mod" \
+  "the Fabric entrypoint stage 'main' failed in mod 'forbricbrokencanary' — the boot stops here, as native Fabric Loader stops it" "$LOG"
+# Natively the game's Main prints Fabric Loader's stage error once, with its trace; the kernel's own line does not repeat it.
+check_exactly "fabric: Fabric Loader's stage error is printed once, as natively" \
+  "Could not execute entrypoint stage 'main' due to errors" "$LOG" 1
+check "fabric: the game's Main gave up on it"            "Failed to start the minecraft server"         "$LOG"
+check "fabric: and the launcher exits 1"                 "the server did not start .*exiting with status 1" "$LOG"
+check "fabric: the NeoForge mod was constructed before it" "\[ForbricNeoLive\]"                        "$LOG"
+check_absent "fabric: no server came up"                 "Done \("                                     "$LOG"
+check_absent "fabric: no NeoForge mod-loading error around a Fabric failure" "Failed to wait for future" "$LOG"
+check_absent "fabric: no compatibility decision was asked for it" "Forbric/Compatibility\] launch stopped" "$LOG"
+if ls "$RUNDIR"/crash-reports/crash-*-fml.txt >/dev/null 2>&1; then
+  echo "[kernel] FAIL fabric: NeoForge's mod-loading crash report was written for a Fabric failure"; FAIL=1
 else
-  echo "[kernel] FAIL no load report at $REPORT"; FAIL=1
+  echo "[kernel] PASS fabric: no NeoForge mod-loading crash report (native Fabric writes none)"
 fi
-required_finding
-[ ! -f "$COMPAT" ] || cp "$COMPAT" "$BUILD/gate-m24-continue-compatibility.json"
+if [ -d "$RUNDIR/world" ]; then echo "[kernel] FAIL fabric: a world directory was created"; FAIL=1
+else echo "[kernel] PASS fabric: no world was created or loaded"; fi
+stop_report "$LOG" fabric
 
-step "strict negative control: the same broken pack stops before a usable world"
-stage yes
-boot "$STRICT" strict expect-policy-stop
-check "strict exited with the policy stop code" "^78$" "$STRICT.exit"
-check "strict reached the actual failing entrypoint" "main entrypoint of forbricbrokencanary failed" "$STRICT"
-check "strict made an explicit compatibility decision" "Forbric/Compatibility\] launch stopped:" "$STRICT"
-check_absent "strict did not expose a running server" "Done \(" "$STRICT"
-check_absent "strict did not write a game crash report" "Preparing crash report" "$STRICT"
-required_finding
-[ ! -f "$COMPAT" ] || cp "$COMPAT" "$BUILD/gate-m24-strict-compatibility.json"
+neo_stop() { # neo_stop <log> <mode> <NeoForge init task> — what every NeoForge stop shows
+  local log="$1" mode="$2" task="$3"
+  check "$mode: exited with NeoForge's launcher status 1"        "^1$"                                "$log.exit"
+  check "$mode: NeoForge's ModLoader ended its task"             "Failed to wait for future $task, 1 errors found" "$log"
+  check "$mode: the kernel stops the boot as native does"        "the boot stops here, as native NeoForge stops it" "$log"
+  check "$mode: the game's Main gave up on the error"            "Failed to start the minecraft server" "$log"
+  check "$mode: and the launcher exits as NeoForge's does"       "the server did not start .*exiting with status 1" "$log"
+  local report
+  report=$(ls "$RUNDIR"/crash-reports/crash-*-fml.txt 2>/dev/null | head -1)
+  if [ -n "$report" ]; then
+    echo "[kernel] PASS $mode: NeoForge's mod-loading crash report was written ($(basename "$report"))"
+    cp "$report" "$log.crash-fml.txt"
+    check "$mode: the crash report says mod loading failed"      "Mod loading has failed"             "$report"
+    check "$mode: the crash report names the cause"              "forbricregisterstop('s|:) .* fails on purpose" "$report"
+  else
+    echo "[kernel] FAIL $mode: no crash-reports/crash-*-fml.txt (NeoForge's ServerModLoader writes one)"; FAIL=1
+  fi
+  # The player's answer to "which mod?": NeoForge's report names the mod only below the walkthrough divider, in its
+  # "-- Mod loading issue for: <id> --" section (or the issue's own trace), which Forbric's crash analysis must read.
+  local suspects="$RUNDIR/.forbric-kernel/crash-suspects.json"
+  cp "$suspects" "$log.suspects.json" 2>/dev/null || : > "$log.suspects.json"
+  if python3 - "$suspects" <<'PY2'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    report = json.load(stream)
+ids = [s["modId"] for s in report["suspects"]]
+assert ids[:1] == ["forbricregisterstop"], ids
+PY2
+  then
+    echo "[kernel] PASS $mode: Forbric's crash analysis names the mod that failed"
+  else
+    echo "[kernel] FAIL $mode: Forbric's crash analysis does not name forbricregisterstop ($log.suspects.json)"; FAIL=1
+  fi
+  check_absent "$mode: and does not tell the player no installed mod is in the crash" \
+    "No mod you installed appears in this crash|这次崩溃里没有出现任何一个你装的 mod" "$log"
+  check_absent "$mode: no server came up"                        "Done \("                           "$log"
+  if [ -d "$RUNDIR/world" ]; then
+    echo "[kernel] FAIL $mode: a world directory was created after the stop"; FAIL=1
+  else
+    echo "[kernel] PASS $mode: no world was created or loaded"
+  fi
+  stop_report "$log" "$mode"
+}
 
-step "negative control: the same instance without the broken mod"
-stage no
-boot "$CONTROL" strict
+registration_stop() { # registration_stop <log> <mode listener|try>
+  local log="$1" mode="$2"
+  neo_stop "$log" "$mode" "Registry initialization"
+  check "$mode: NeoForge rolled every registry back to vanilla"  "Rolling back to VANILLA state"      "$log"
+  check_absent "$mode: no Fabric main ran after the roll-back"   "\[ForbricFabricLive\] onInitialize" "$log"
+  # Natively freezeData never runs after the roll-back; the clean control below shows the line on a boot that froze.
+  check_absent "$mode: the registries were not frozen after the roll-back" "froze the registries NeoForge-first" "$log"
+}
+
+step "a NeoForge mod whose RegisterEvent listener throws stops the boot as native NeoForge does (D82; must PASS)"
+# Under explicit continue: the compatibility policy does not decide this one, as nothing can run on registries NeoForge
+# has rolled back to vanilla.
+stage no yes
+boot "$STOP_LISTENER" continue expect-stop listener
+check "listener: the listener really ran and threw"  "\[ForbricRegisterStop\] reached RegisterEvent for minecraft:item, mode=listener" "$STOP_LISTENER"
+check "listener: the kernel names the mod that ended the registry's dispatch" \
+  "a NeoForge mod's RegisterEvent listener failed on .*minecraft:item.* — forbricregisterstop ends that registry's dispatch" "$STOP_LISTENER"
+check "listener: NeoForge's error names the mod and the event" \
+  "\(forbricregisterstop\) encountered an error while dispatching the net\.neoforged\.neoforge\.registries\.RegisterEvent event" "$STOP_LISTENER"
+registration_stop "$STOP_LISTENER" listener
+
+step "a throw inside NeoForge's per-registry try, outside any listener, stops the boot as native NeoForge does (D82; must PASS)"
+stage no yes
+boot "$STOP_TRY" continue expect-stop try
+check "try: the mixin really ran and threw" "\[ForbricRegisterStop\] mixin after minecraft:item's dispatch, about to fail on purpose" "$STOP_TRY"
+check "try: NeoForge's error names the uncaught error" "An uncaught parallel processing error has occurred" "$STOP_TRY"
+registration_stop "$STOP_TRY" try
+
+step "every other phase of NeoForge's mod loading in which a mod throws stops the boot as native NeoForge does (D87; must PASS)"
+for spec in "construct:Mod Construction" "ebs:Mod Construction" "tail:Registry initialization" "common:Common setup" \
+            "deferred:Common setup: Deferred Queue" "regevents:Registration events" "network:Network registry lock" \
+            "datapackreg:Registry initialization"; do
+  mode="${spec%%:*}"; task="${spec#*:}"; log="$(STOP_LOG "$mode")"
+  stage no yes
+  boot "$log" continue expect-stop "$mode"
+  check "$mode: the canary really reached its failing point" "\[ForbricRegisterStop\] .* is about to fail on purpose, mode=$mode" "$log"
+  neo_stop "$log" "$mode" "$task"
+  case "$mode" in
+    construct|ebs)
+      check "$mode: NeoForge's issue names the mod"              "Mod loading issue for: forbricregisterstop" "$log.crash-fml.txt"
+      check_absent "$mode: construction stops before any registry event" "\[ForbricRegisterStop\] reached RegisterEvent" "$log"
+      check_absent "$mode: and before the Fabric mains"          "\[ForbricFabricLive\] onInitialize" "$log"
+      check_absent "$mode: and nothing was frozen"               "froze the registries NeoForge-first" "$log" ;;
+    tail)
+      check_absent "$mode: the tail is outside the roll-back"    "Rolling back to VANILLA state" "$log"
+      check_absent "$mode: and nothing was frozen"               "froze the registries NeoForge-first" "$log" ;;
+    datapackreg)
+      # Natively RegistryManager.postNewRegistryEvent posts it before RegisterEvent and the freeze; a dedicated server here
+      # declares after the registry window (and its Fabric mains), as it always has (step 3a) — open item, not asserted.
+      check "$mode: NeoForge's issue names the mod and the event" \
+        "encountered an error while dispatching the net\.neoforged\.neoforge\.registries\.DataPackRegistryEvent.NewRegistry event" "$log.crash-fml.txt"
+      check_absent "$mode: outside the roll-back"                "Rolling back to VANILLA state" "$log" ;;
+    *)
+      check "$mode: NeoForge's issue names the mod"              "Mod loading issue for: forbricregisterstop|-- Mod loading issue --" "$log.crash-fml.txt"
+      check "$mode: the registry phase had finished"             "froze the registries NeoForge-first" "$log" ;;
+  esac
+done
+
+step "negative control: the same instance without the broken mod, the register-stop canary in it with =off"
+stage no yes
+boot "$CONTROL" strict normal off
 check "healthy strict control exited normally" "^0$" "$CONTROL.exit"
 
 check "the control booted"                      "Done \("                    "$CONTROL"
+check "the control froze the registries (what the stops above must not do)" "froze the registries NeoForge-first" "$CONTROL"
+check "the register-stop canary ran and threw nothing" \
+  "\[ForbricRegisterStop\] reached RegisterEvent for minecraft:item, mode=off" "$CONTROL"
 check "every mod finished loading"              "Forbric/Load\] every mod finished loading" "$CONTROL"
-check_absent "nothing was reported as failing"  "did not finish loading"     "$CONTROL"
+check_absent "nothing was reported as failing"  "Forbric/Load\] [0-9]+ mod\(s\) did not finish loading"     "$CONTROL"
 if [ -f "$REPORT" ]; then
   echo "[kernel] FAIL a load report was written for a clean boot: $REPORT"; FAIL=1
 else
@@ -183,8 +269,8 @@ fi
 
 step "M24 result"
 if [ "$FAIL" -eq 0 ]; then
-  echo "[kernel] ✅ M24 EXPECTED-FAILURE POLICY GATE GREEN — continue/strict decisions proved; the broken fixture remains incompatible"
+  echo "[kernel] ✅ M24 BROKEN-MOD GATE GREEN — a mod that throws while the game loads stops the boot as its own loader does, and is named"
 else
-  echo "[kernel] ❌ M24 GATE RED — continue $LOG / strict $STRICT / healthy $CONTROL"
+  echo "[kernel] ❌ M24 GATE RED — fabric $LOG / register-stop $BUILD/gate-m24-registerstop-*.log / healthy $CONTROL"
 fi
 exit "$FAIL"

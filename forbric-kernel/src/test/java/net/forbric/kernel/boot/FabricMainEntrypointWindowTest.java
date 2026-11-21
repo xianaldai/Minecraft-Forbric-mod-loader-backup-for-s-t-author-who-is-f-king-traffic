@@ -63,13 +63,23 @@ class FabricMainEntrypointWindowTest {
 	 * The pre-{@code Minecraft} registration window ({@code registerNeoForgeContent}, the unfrozen span
 	 * {@code driveNativeRegistration} opens) may still run them — a dedicated server has no {@code Minecraft} to wait
 	 * for, and the switch puts the client back here — but never without asking first. An unguarded call is the
-	 * state this fix replaced.
+	 * state this fix replaced. Since K3 the window's mains run from {@code runFabricMainsInTheWindow}, the step NeoForge's
+	 * own {@code GameData.postRegisterEvents} reaches where its dispatch loop ends, which registerNeoForgeContent hands
+	 * to {@code dispatchRegisterEvents}.
 	 */
 	@Test
 	void theRegistrationWindowAsksBeforeRunningMain() throws Exception {
-		MethodNode window = method("registerNeoForgeContent");
+		MethodNode content = method("registerNeoForgeContent");
+		assertTrue(content != null && content.instructions.toArray().length > 0
+				&& java.util.Arrays.stream(content.instructions.toArray()).anyMatch(i -> i instanceof MethodInsnNode c
+						&& "dispatchRegisterEvents".equals(c.name)),
+				"KernelLifecycle.registerNeoForgeContent must hand its Fabric step to dispatchRegisterEvents");
+		assertEquals(List.of("runFabricMainsInTheWindow"), RegistrationWindowFabricStep.calls(),
+				"the Fabric step registerNeoForgeContent hands to dispatchRegisterEvents must be runFabricMainsInTheWindow, "
+						+ "or a dedicated server runs no Fabric main");
+		MethodNode window = method("runFabricMainsInTheWindow");
 		assertTrue(window != null,
-				"KernelLifecycle.registerNeoForgeContent not found in the compiled src/main classes, which exist "
+				"KernelLifecycle.runFabricMainsInTheWindow not found in the compiled src/main classes, which exist "
 						+ "before any test runs");
 
 		boolean callsMain = false;

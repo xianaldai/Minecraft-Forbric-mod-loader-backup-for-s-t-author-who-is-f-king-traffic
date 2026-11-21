@@ -45,13 +45,13 @@ import net.forbric.kernel.TestFixtures;
 import net.forbric.kernel.TestFixtures.Fixture;
 
 /**
- * Verifies against the REAL merged-base bytecode that {@link LifecycleHookInjector} excises the genuine
+ * Verifies against the REAL staged-base bytecode that {@link LifecycleHookInjector} excises the genuine
  * FancyModLoader server-loading trigger from {@code net.minecraft.server.Main.main} — the kernel owns the
  * lifecycle, no genuine loader runs.
  */
 @ExecutesInjector(LifecycleHookInjector.class)
 class LifecycleHookInjectorTest {
-	private static final Path MERGED_BASE = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path MERGED_BASE = TestFixtures.stagedBase();
 
 	private final LifecycleHookInjector injector = new LifecycleHookInjector();
 

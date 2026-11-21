@@ -31,13 +31,13 @@ import org.objectweb.asm.tree.VarInsnNode;
 /**
  * The merged {@code Holder.Reference.getData} answers "no data" for a value not registered yet, on the staged game's
  * own bytes: the edit, the JVM running it, and the census that makes this one method the sink of every holder-based
- * data-map lookup in the merged base and NeoForge.
+ * data-map lookup in the staged base and NeoForge.
  */
 @ResourceLock("system-properties")
 class UnboundHolderDataInjectorTest {
 	private static final Path RUN = TestFixtures.stagedRoot();
-	private static final Path MERGED = RUN.resolve("merged-base/patched-mc-merged-26.2.jar");
-	private static final Path NEO = RUN.resolve("neoforge-runtime/neoforge-runtime.jar");
+	private static final Path MERGED = RUN.resolve(TestFixtures.BASE_JAR);
+	private static final Path NEO = RUN.resolve(TestFixtures.NEO_CARRIER_JAR);
 	private static final String REFERENCE = UnboundHolderDataInjector.OWNER;
 
 	@AfterEach void reset() { System.clearProperty(UnboundHolderDataInjector.PROPERTY); }
@@ -147,7 +147,7 @@ class UnboundHolderDataInjectorTest {
 	}
 
 	/**
-	 * Every {@code getData(DataMapType)} body in the merged base and NeoForge either hands the call to another one or
+	 * Every {@code getData(DataMapType)} body in the base and NeoForge either hands the call to another one or
 	 * answers {@code null} — except {@code Holder.Reference}'s, the only one that reaches a registry by key. So the
 	 * guard there covers each lookup NeoForge put where vanilla read its own maps (oxidation, waxing, stripping,
 	 * compostables, parrots, vibrations, villagers). A second sink would turn this red.
@@ -177,7 +177,10 @@ class UnboundHolderDataInjectorTest {
 			}
 		}
 		assertEquals(new TreeSet<>(List.of(REFERENCE)), sinks);
-		assertTrue(delegates > 100 && nulls >= 1, "the census read the jars: " + delegates + " delegates, " + nulls + " null answers");
+		// That the scan read the jars at all: on the genuine pair the delegating bodies are NeoForge's own interface
+		// defaults in the carrier (2) and one answers null. The merged base's floor (> 100) counted the defaults its merge
+		// had copied into every implementing class (261 classes there name the descriptor; 10 in the genuine base).
+		assertTrue(delegates >= 2 && nulls >= 1, "the census read the jars: " + delegates + " delegates, " + nulls + " null answers");
 	}
 
 	/** The boot-side classes, where the guard's report lives: the game reaches them through its parent, here directly. */

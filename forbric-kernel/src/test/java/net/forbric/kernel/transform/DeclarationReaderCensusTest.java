@@ -44,9 +44,8 @@ class DeclarationReaderCensusTest {
 	@Test
 	void noPlatformClassIsEdited() throws IOException {
 		Path run = TestFixtures.stagedRoot();
-		List<Path> platform = List.of(run.resolve("merged-base/patched-mc-merged-26.2.jar"),
-				run.resolve("neoforge-runtime/neoforge-runtime.jar"), run.resolve("forge-runtime/forge-runtime.jar"));
-		for (Path jar : platform) TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar), jar + " is absent");
+		List<Path> platform = List.of(run.resolve(TestFixtures.BASE_JAR), run.resolve(TestFixtures.NEO_CARRIER_JAR));
+		for (Path jar : platform) TestFixtures.requireFile(Fixture.STAGED, jar, jar + " is absent");
 		TreeSet<String> edited = new TreeSet<>();
 		int classes = 0;
 		for (Path jar : platform) classes += scan(jar.getFileName().toString(), Files.readAllBytes(jar), edited, 0);
@@ -103,13 +102,12 @@ class DeclarationReaderCensusTest {
 		Path compiled = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
 		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(compiled), "the game side is not compiled");
 		java.util.Map<net.forbric.api.Ecosystem, Path> carriers = java.util.Map.of(
-				net.forbric.api.Ecosystem.NEOFORGE, run.resolve("neoforge-runtime/neoforge-runtime.jar"),
-				net.forbric.api.Ecosystem.FORGE, run.resolve("forge-runtime/forge-runtime.jar"));
+				net.forbric.api.Ecosystem.NEOFORGE, run.resolve(TestFixtures.NEO_CARRIER_JAR));
 		List<String> missing = new ArrayList<>();
 		int checked = 0;
 		for (DeclarationReaderModListInjector.Family family : DeclarationReaderModListInjector.FAMILIES) {
 			Path carrier = carriers.get(family.ecosystem());
-			TestFixtures.require(Fixture.STAGED, Files.isRegularFile(carrier), carrier + " is absent");
+			TestFixtures.requireFile(Fixture.STAGED, carrier, carrier + " is absent");
 			org.objectweb.asm.tree.ClassNode modList = node(classIn(Files.readAllBytes(carrier), family.modList() + ".class"));
 			org.objectweb.asm.tree.ClassNode hook = node(Files.readAllBytes(compiled.resolve(family.hook() + ".class")));
 			for (var member : family.members().entrySet()) {
@@ -121,7 +119,7 @@ class DeclarationReaderCensusTest {
 					continue;
 				}
 				boolean isStatic = (declared.get(0).access & org.objectweb.asm.Opcodes.ACC_STATIC) != 0;
-				if (isStatic != family.staticList()) missing.add(family.modList() + "." + member.getKey() + " static=" + isStatic);
+				if (isStatic) missing.add(family.modList() + "." + member.getKey() + " is static; the redirect rewrites instance calls only");
 				String desc = DeclarationReaderModListInjector.hookDesc(declared.get(0).desc, family);
 				boolean present = hook.methods.stream().anyMatch(m -> m.name.equals(member.getKey()) && m.desc.equals(desc)
 						&& (m.access & org.objectweb.asm.Opcodes.ACC_STATIC) != 0
@@ -131,7 +129,7 @@ class DeclarationReaderCensusTest {
 			}
 		}
 		assertEquals(List.of(), missing);
-		assertEquals(14, checked, "seven ModList members in each of the two families");
+		assertEquals(7, checked, "seven ModList members in NeoForge's family");
 	}
 
 	private static org.objectweb.asm.tree.ClassNode node(byte[] bytes) {

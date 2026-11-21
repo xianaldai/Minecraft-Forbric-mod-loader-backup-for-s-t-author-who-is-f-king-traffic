@@ -51,8 +51,8 @@ import net.forbric.kernel.TestFixtures.Fixture;
  */
 class MergedBaseFabricConditionsTest {
 	private static final Path STAGED = TestFixtures.stagedRoot();
-	private static final Path NEO_CARRIER = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
-	private static final Path MERGED_BASE = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
+	private static final Path NEO_CARRIER = STAGED.resolve(TestFixtures.NEO_CARRIER_JAR);
+	private static final Path MERGED_BASE = STAGED.resolve(TestFixtures.BASE_JAR);
 	private static final String ENTRY = "net/neoforged/neoforge/common/conditions/ConditionalOps.class";
 	private static final String BINARY = "net.neoforged.neoforge.common.conditions.ConditionalOps";
 	private static final String KERNEL = "net/forbric/kernel/runtime/KernelFabricConditions";
@@ -111,7 +111,7 @@ class MergedBaseFabricConditionsTest {
 	 */
 	@Test
 	void everyConsumerInTheMergedBaseGoesThroughConditionalOps() throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE), "staged merged base absent");
+		TestFixtures.requireFile(Fixture.STAGED, MERGED_BASE, "staged base absent");
 		Set<String> consumers = new LinkedHashSet<>();
 		try (ZipFile zip = new ZipFile(MERGED_BASE.toFile())) {
 			var entries = zip.entries();
@@ -138,7 +138,7 @@ class MergedBaseFabricConditionsTest {
 		}
 		assertTrue(consumers.size() >= 5,
 				"only " + consumers.size() + " consumer(s) of the conditional codec found — the scan did not run, "
-						+ "or the merged base stopped using it: " + consumers);
+						+ "or the staged base stopped using it: " + consumers);
 	}
 
 	@Test

@@ -327,6 +327,52 @@ class ModFileScannerTest {
 		assertEquals(link.toAbsolutePath().normalize(), ModFileScanner.cacheKey(link));
 	}
 
+	/**
+	 * {@code -Dforbric.neoScanData=off} is the RED demonstration gate-m21 uses for the NeoForge canary's scan checks, so
+	 * it has to take out BOTH readers' index: {@code scan} and {@code scanShared} build nothing, and never so much as ask
+	 * the game loader for the builder — an index that was built anyway and dropped would leave the gate's control
+	 * proving a different thing from what it says.
+	 */
+	@Test
+	void neoScanDataOffBuildsNoNeoForgeIndexForEitherReader(@TempDir Path dir) throws Exception {
+		Path jar = dir.resolve("mod.jar");
+		try (OutputStream out = Files.newOutputStream(jar); ZipOutputStream zip = new ZipOutputStream(out)) {
+			ClassWriter cw = new ClassWriter(0);
+			cw.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "com/example/Plugin", null, "java/lang/Object", null);
+			cw.visitAnnotation(INVISIBLE, false).visitEnd();
+			cw.visitEnd();
+			write(zip, "com/example/Plugin.class", cw.toByteArray());
+		}
+		List<String> asked = new ArrayList<>();
+		ClassLoader recording = new ClassLoader(null) {
+			@Override
+			protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+				asked.add(name);
+				throw new ClassNotFoundException(name);
+			}
+		};
+		assertTrue(ModFileScanner.neoIndexEnabled(), "on unless switched off");
+		System.setProperty(ModFileScanner.NEO_INDEX_PROPERTY, "off");
+		String[] log = new String[1];
+		try {
+			assertTrue(!ModFileScanner.neoIndexEnabled());
+			ModFileScanner.forgetNeoIndexOffReport();
+			net.forbric.kernel.GateLogContract.capture(() -> {
+				assertNull(ModFileScanner.scan(jar, recording));
+				assertNull(ModFileScanner.scanShared(jar, recording));
+				return null;
+			}, log);
+			assertEquals(List.of(), asked, "an index that is switched off must not be built and then dropped");
+		} finally {
+			System.clearProperty(ModFileScanner.NEO_INDEX_PROPERTY);
+			ModFileScanner.forgetNeoIndexOffReport();
+		}
+		// The switch says so, by name, once: two jars' worth of asks (scan and scanShared) is still one line. Before
+		// this, an empty NeoForge index with the switch off had no line explaining it at all.
+		assertEquals(1, log[0].split("NeoForge scan index DISABLED \\(-Dforbric\\.neoScanData=off\\)", -1).length - 1,
+				log[0]);
+	}
+
 	private interface JarBody {
 		void fill(ZipOutputStream zip) throws Exception;
 	}

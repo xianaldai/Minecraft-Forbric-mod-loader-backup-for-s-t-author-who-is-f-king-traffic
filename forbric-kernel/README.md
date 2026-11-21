@@ -106,17 +106,17 @@ onwards as unfinished long after their gates were passing — so the scripts the
 | `gate-m0` | build + the whole unit suite (asserted from the JUnit XML, not gradle's exit code) + discovery vs an independent parser |
 | `gate-m1` / `gate-m3` | merged base boots to Done with zero mods; both Forge-family baselines + a real `@Mod`, natively |
 | `gate-m2` / `gate-m2b` | a real Fabric mod, then full fabric-api, with no Fabric Loader anywhere |
-| `gate-m4` / `gate-m4-canary` / `gate-m7-neo` | real third-party mods of all three families in one server; pure NeoForge |
+| `gate-m4` / `gate-m4-canary` / `gate-m7-neo` | real third-party Fabric and NeoForge mods in one server, on the carrier that still holds MinecraftForge; pure NeoForge |
 | `gate-m9-client` | the client half: a 97-jar pack into a world, the unified Mods screen, a clean exit |
-| `gate-m12` … `gate-m16` | multiplayer over a real socket, an anti-cheat's opinion, a pure Fabric server, both Forge families' networking |
+| `gate-m12` … `gate-m16` | multiplayer over a real socket, an anti-cheat's opinion, a pure Fabric server (with a Forge+Fabric universal jar that must load as Fabric), a universal jar's channel on its NeoForge half, NeoForge's configuration-phase config sync |
 | `gate-m17` | the installer, resolved and launched the way a launcher does it |
 | `gate-m24` | a mod that fails on purpose: the others still load and the failure is attributed |
 | `gate-m24c` | a jar listed in `forbric-disabled.txt` is loaded by nobody and named in `load-report.txt`; the control loads it |
-| `gate-m25-worldgen` | biome modifier canaries of both Forge families leave distinct blocks in saved regions |
-| `gate-m26-forgeclient` | the Forge client receives key, renderer, tint, tooltip, geometry-loader and creative-tab registration events, and the CLIENT_INIT/REGISTRATION bridge inventory reports complete |
+| `gate-m25-worldgen` | NeoForge's biome and structure modifiers leave the canary's blocks in saved regions, and its block and interaction events come back untouched |
+| `gate-m26-forgeclient` | the NeoForge and Fabric client canaries receive their registration events and read them back from the live tables; a MinecraftForge-only mod on a client is refused and asked about in the game |
 | `gate-m27-frame` | the 97-jar client produces a fresh, non-black Minecraft screenshot |
-| `gate-m28-forgeconfig` | Forge COMMON configs load once, then its native watcher reads a live file edit; dedicated servers never open CLIENT configs |
-| `gate-m29-forgecaps` | MinecraftForge capabilities on the merged base: the item-handler capability of a zombie and a furnace, with the lost field initializers replayed |
+| `gate-m28-forgeconfig` | NeoForge COMMON configs load once, then its native watcher reads a live file edit; dedicated servers never open CLIENT configs |
+| `gate-m29-forgecaps` | a MinecraftForge-only jar (the canary, and a real build whose Fabric and NeoForge halves are fake) is refused by name, in English and Chinese, as a CONFIRMED required finding with a FAILED row, and a strict server stops on it; the NeoForge canary alone reaches Done |
 | `gate-m30-attribution` | a mod that loses PART of itself — a mixin left out or failing at world creation, a subscriber that cannot register, a listener on a dead event, a throwing deferred task, a jar compiled against another NeoForge — is named with the reason in the log, on the Mods screen and in `load-report.txt`, which is rewritten once the world is up |
 | `gate-m31-vanilla-parity` | with zero mods and the same seed, a Forbric overworld carries the same biomes and the same structure starts as a pure-vanilla 26.2 server generating beside it |
 
@@ -143,7 +143,30 @@ now names the port); `gate-m1`/`m2`/`m3` share `run/server-kernel` and `gate-m9`
 `run/client-merged-pack`; and every kernel JVM is launched without `-Xmx`, so each one inherits an ergonomic
 quarter-of-RAM ceiling. The scheduler hands every concurrent slot its own port block, never co-schedules gates
 that name the same rundir, and keeps the running set inside a memory budget. **A gate with no
-`# GATE-PARALLEL:` line runs alone** and the run says so on stderr — a new gate is slow, not silently broken.
+`# GATE-PARALLEL:` line runs alone** and the run says so on stderr — a new gate is slow, not silently broken. A
+gate whose verdict is a timing adds the bare word `alone` to its line and runs alone too: gate-m12's late-tick ceiling
+and `check_kept_up` (m12, m16) count a neighbour's CPU as the server falling behind, and `GatesAllTest` fails on
+a gate that uses either without saying `alone`. Any other word on the line, or a line with none, stops the sweep before a gate runs (a
+misspelt `alon` used to be skipped in silence); a note goes after ` # ` on the same line.
+
+Four things keep verification short (`gates-all.sh --help` has the switches, `run/compat/gate_cache.py` the reasoning):
+
+- **Longest first.** With more than one slot the gates start in the order of their last measured duration,
+  longest first (`run/compat/gate-durations.tsv` is the prior). In numerical order `gate-m58`, the longest gate,
+  started last and then ran alone for twelve minutes.
+- **One build per sweep.** `gates-all.sh` builds the jar and resolves the boot classpath once and hands them to every
+  launch (`FORBRIC_PREBUILT_*`); the launchers skip their own two Gradle runs while the jar is unchanged.
+- **A verdict cache.** A gate whose inputs are identical to a run that went GREEN is reported `GREEN (…; cached: …)`
+  with that run's log instead of being run again. The inputs are every non-prose file in the repository, the gate's own
+  script (for a gate that runs the unit tests, every gate script and the prose outside `run/compat/reports/` too,
+  because the tests read them), every jar under the staged/game directories and under `run/` except `run/canary/`
+  (the canary builders' output, whose sources are keyed instead), by entry CRC, not timestamp, the inherited
+  `FORBRIC_*`/`MC_*`/`JAVA_*` environment, the launchers' `BASE`/`NEO_RT`/`NATIVE_REF`/`VANILLA_*` knobs and the
+  JVM. The cache is shared by all worktrees; `--release` never reads
+  it; `--no-cache` turns it off, which you need after hand-editing a fixture world.
+- **No Chinese run.** Only the load report, merge report, crash analysis and dialogs follow the language, and every
+  log line a gate asserts on is English in any locale. The unit suite forces zh_CN and English on each component that
+  reads the locale and asserts both texts, so neither the suite nor a sweep is run again in Chinese.
 
 Portable Windows baseline collection and the negative controls are described in
 [the compatibility protocol](run/compat/PROTOCOL.md).
@@ -153,8 +176,8 @@ had not been run for a day when that was last measured, and one of them had been
 why `gate-m0` now refuses to report on a test task that did not execute.
 
 The old `forbric-loader` is kept runnable as the **differential oracle**, and still builds the shared game
-artifacts the kernel consumes. It cannot certify removed mutable ancestors: a base declaring
-`required-ancestor-compositions.tsv` must use the kernel with registered composition proofs.
+artifacts the kernel consumes. It refuses a merged base that declares removed mutable ancestors
+(`required-ancestor-compositions.tsv`); the kernel runs on NeoForge's own base, which declares none.
 
 ## Generic compatibility and protocol extensions
 
@@ -162,9 +185,9 @@ Mixin suppression, contributed interfaces, call relocation and local capture fol
 
 A mod's declarations to other mods cross ecosystems (`CrossEcosystemDeclarations`). A Fabric mod's `custom` values appear in its `[modproperties]` table, as FML's TOML reader would type them. The class names it declares under a namespaced entrypoint key appear there too, but only under a key some reader's own bytecode reads as a `String` and none reads as anything else. A Forge-family mod's namespaced properties that name classes its own jar defines are Fabric entrypoints of that key; any other value stays a property only. A class that reads `getModProperties()` out of a Forge-family `ModList` sees, in that class only, the Fabric mods that declare something (`DeclarationReaderModListInjector`). If adding them fails, that class gets the native answer and a `SUSPECTED` finding names it. Other `ModList` readers, such as the Mods screen, the handshake and version checks, keep the native list.
 
-Optional SDKs publish independent adapters through `META-INF/services/net.forbric.api.ProtocolExtension`, with one registry per game loader. Providers can offer absent APIs, register transforms, receive configuration lifecycle events and provide configuration screens. A merged artifact records removed stateful ancestors in `required-ancestor-compositions.tsv`; an `AncestorComposition` must prove that the final definition retains the state protocol or loading fails explicitly.
+Optional SDKs publish independent adapters through `META-INF/services/net.forbric.api.ProtocolExtension`, with one registry per game loader. Providers can offer absent APIs, register transforms, receive configuration lifecycle events and provide configuration screens.
 
-The shared API also exposes `VirtualGetters` for public getters selected by their full JVM return type and `VirtualProperties` for mutable storage witnessed by a defined public getter. These work for any declaring class and preserve virtual dispatch; property writes require the actual getter/field proof before effects run. Extension providers must avoid linking game classes during construction and resolve game objects through `Context.gameLoader()`, as described in `ProtocolExtension`.
+The shared API also exposes `VirtualProperties` for mutable storage witnessed by a defined public getter. It works for any declaring class and preserve virtual dispatch; property writes require the actual getter/field proof before effects run. Extension providers must avoid linking game classes during construction and resolve game objects through `Context.gameLoader()`, as described in `ProtocolExtension`.
 
 ## Build & run
 

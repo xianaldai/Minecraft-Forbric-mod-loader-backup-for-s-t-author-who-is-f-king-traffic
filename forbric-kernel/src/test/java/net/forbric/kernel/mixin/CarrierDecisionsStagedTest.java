@@ -31,7 +31,7 @@ import net.forbric.api.Ecosystem;
 import net.forbric.kernel.TestFixtures;
 
 /**
- * {@link CarrierDecisions} on unmodified upstream fabric-api mixins against the staged merged base and the native references
+ * {@link CarrierDecisions} on unmodified upstream fabric-api mixins against the staged base and the native references
  * it carries: what fabric-api's mining, enchanting and effect handlers become, read as Mixin will read them, and the mining
  * handler pair executed. The mechanism is given no name: the same handlers renamed, with one more instruction, still move;
  * a {@code @Group} or the switch leaves them as compiled.
@@ -47,8 +47,8 @@ class CarrierDecisionsStagedTest {
 
 	/** The merged class with its local variable tables, as the mixin service hands it to the adapters. */
 	private static ClassNode game(String owner) throws Exception {
-		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
-		TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(jar), "actual game required");
+		Path jar = TestFixtures.stagedBase();
+		TestFixtures.requireFile(TestFixtures.Fixture.STAGED, jar, "actual game required");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			ClassNode node = new ClassNode();
 			new org.objectweb.asm.ClassReader(zip.getInputStream(zip.getEntry(owner + ".class")).readAllBytes()).accept(node, 0);
@@ -57,8 +57,8 @@ class CarrierDecisionsStagedTest {
 	}
 
 	private static BiFunction<Ecosystem, String, ClassNode> natives() {
-		Path jar = TestFixtures.stagedRoot().resolve("merged-base/patched-mc-merged-26.2.jar");
-		TestFixtures.require(TestFixtures.Fixture.STAGED, Files.isRegularFile(jar), "actual game required");
+		Path jar = TestFixtures.stagedBase();
+		TestFixtures.requireFile(TestFixtures.Fixture.STAGED, jar, "actual game required");
 		NativeGameReferences references = new NativeGameReferences(path -> {
 			try (ZipFile zip = new ZipFile(jar.toFile())) {
 				var entry = zip.getEntry(path);
@@ -66,7 +66,7 @@ class CarrierDecisionsStagedTest {
 			} catch (Exception unreadable) {
 				return null;
 			}
-		});
+		}, null, TestFixtures.launchSources(jar));
 		return references::get;
 	}
 

@@ -64,10 +64,9 @@ import net.forbric.kernel.transform.ModelFormatFunnelInjector;
 @org.junit.jupiter.api.parallel.ResourceLock("system-properties")
 class KernelModelFormatsTest {
 	private static final Path STAGED = TestFixtures.stagedRoot();
-	private static final Path MERGED_BASE = STAGED.resolve("merged-base/patched-mc-merged-26.2.jar");
-	private static final Path NEO_CARRIER = STAGED.resolve("neoforge-runtime/neoforge-runtime.jar");
-	/** The merged base names MinecraftForge types in signatures, so reflecting on it needs this carrier too. */
-	private static final Path FORGE_CARRIER = STAGED.resolve("forge-runtime/forge-runtime.jar");
+	private static final Path MERGED_BASE = STAGED.resolve(TestFixtures.BASE_JAR);
+	/** NeoForge's base names NeoForge types in signatures, so reflecting on it needs this carrier too. */
+	private static final Path NEO_CARRIER = STAGED.resolve(TestFixtures.NEO_CARRIER_JAR);
 	/** The fabric-api jar build.gradle compiles the game side's transfer bridge against, found the same way. */
 	private static final Path FABRIC_API = TestFixtures.fabricApi();
 	private static final Path RUNTIME = Path.of(System.getProperty("forbric.testRuntimeClasses", "build/classes/java/runtime"));
@@ -236,15 +235,14 @@ class KernelModelFormatsTest {
 	}
 
 	private Game game(boolean funnelled, boolean fabricApi) throws Exception {
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(MERGED_BASE) && Files.isRegularFile(NEO_CARRIER)
-				&& Files.isRegularFile(FORGE_CARRIER), "staged game jars absent");
+		TestFixtures.requireFiles(Fixture.STAGED, "staged game jars absent", MERGED_BASE, NEO_CARRIER);
 		TestFixtures.require(Fixture.GAME_SIDE, Files.isDirectory(RUNTIME.resolve("net/forbric/kernel/runtime")), "game side not compiled");
 		TestFixtures.require(Fixture.THIRD_PARTY, Files.isRegularFile(FABRIC_API), "staged fabric-api absent at " + FABRIC_API);
 		byte[] shipped = TestFixtures.requireEntry(Fixture.STAGED, NEO_CARRIER, TARGET + ".class");
 		byte[] bytes = funnelled ? new ModelFormatFunnelInjector().transform(DESERIALIZER, shipped, null) : shipped;
 
 		List<URL> urls = new ArrayList<>(List.of(RUNTIME.toUri().toURL(), MERGED_BASE.toUri().toURL(),
-				NEO_CARRIER.toUri().toURL(), FORGE_CARRIER.toUri().toURL()));
+				NEO_CARRIER.toUri().toURL()));
 		if (fabricApi) urls.add(modelLoadingModule().toUri().toURL());
 		urls.addAll(minecraftLibraries());
 		return new Game(new FunnelLoader(urls.toArray(URL[]::new), getClass().getClassLoader(), bytes), fabricApi);

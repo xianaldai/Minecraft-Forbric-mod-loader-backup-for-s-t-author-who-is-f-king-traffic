@@ -23,17 +23,16 @@ class WorldgenCanaryDataTest {
 	static final Path STAGED = TestFixtures.stagedRoot();
 
 	@Test
-	void theTwoCarriersPlaceDifferentNonOverworldBlocks() throws Exception {
-		String forge = inspect("forge", "forbriclive", "livemod-src", "forge-runtime");
+	void theNeoForgeCanaryPlacesItsOwnNonOverworldBlock() throws Exception {
 		String neo = inspect("neoforge", "forbricneolive", "livemod-src-neoforge", "neoforge-runtime");
-		assertEquals("minecraft:end_stone", forge);
 		assertEquals("minecraft:purpur_block", neo);
-		assertNotEquals(forge, neo, "one family's success must never satisfy the other's probe");
+		// The refused MinecraftForge canary's marker was minecraft:end_stone; the NeoForge probe must never be it.
+		assertNotEquals("minecraft:end_stone", neo, "the NeoForge probe is its own block");
 	}
 
 	static String inspect(String family, String namespace, String source, String runtime) throws Exception {
 		Path jar = STAGED.resolve(runtime + "/" + namespace + ".jar");
-		TestFixtures.require(Fixture.STAGED, Files.isRegularFile(jar),
+		TestFixtures.requireFile(Fixture.STAGED, jar,
 				"build canaries with forbric-loader/run/build-testmods.sh");
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			String base = "data/" + namespace + "/";

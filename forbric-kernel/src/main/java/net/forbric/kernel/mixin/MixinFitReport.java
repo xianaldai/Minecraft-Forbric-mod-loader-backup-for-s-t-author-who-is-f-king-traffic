@@ -45,16 +45,16 @@ import net.forbric.kernel.util.Caught;
 
 /**
  * Offline driver for {@link MixinFit}: reports what every guest mixin in a mods directory would be judged as,
- * against a merged base, without booting the game.
+ * against the base (NeoForge's patched game), without booting the game.
  *
  * <p>This exists because the runtime path cannot enumerate. {@code run/mixin-inventory.sh} boots iteratively for one
  * finding per round, because under {@code -Dforbric.mixinDiagnostics} an {@code InjectionError} escapes as a fatal
  * {@code MixinTransformerError} that {@code required:false} does not catch. A static pass over the same inputs
  * produces the whole table in seconds and cannot break anything.
  *
- * <p>Usage: {@code MixinFitReport <merged-base.jar> <mods-dir> [--verbose]}
+ * <p>Usage: {@code MixinFitReport <base.jar> <mods-dir> [--verbose]}
  *
- * <p><b>Known divergence from runtime:</b> this resolves against RAW merged-jar bytes, whereas the kernel resolves
+ * <p><b>Known divergence from runtime:</b> this resolves against RAW base-jar bytes, whereas the kernel resolves
  * against post-transform-chain bytes ({@code getPreMixinClassBytes}). The chain both adds members (the
  * {@code KeyMapping.MAP} initializer) and removes them (the interface-default shadowing overrides), so a handful of
  * verdicts here can differ from the live ones. The orphaned-field rule matches writes by exact owner and descriptor,
@@ -70,14 +70,14 @@ public final class MixinFitReport {
 
 	public static void main(String[] args) throws IOException {
 		if (args.length < 2) {
-			System.err.println("usage: MixinFitReport <merged-base.jar> <mods-dir> [--verbose]");
+			System.err.println("usage: MixinFitReport <base.jar> <mods-dir> [--verbose]");
 			System.exit(2);
 		}
 		boolean verbose = args.length > 2 && args[2].contains("verbose");
 
 		Map<String, byte[]> merged = readJar(Path.of(args[0]));
-		System.out.printf("[fit] merged base: %d classes from %s%n", merged.size(), Path.of(args[0]).getFileName());
-		// The jar given here serves every class, as the merged base does at runtime: one digest for all of them.
+		System.out.printf("[fit] base: %d classes from %s%n", merged.size(), Path.of(args[0]).getFileName());
+		// The jar given here serves every class, as the base does at runtime: one digest for all of them.
 		String members = NativeAbsentTargets.membersDigest(merged);
 		Function<String, String> base = owner -> members;
 
@@ -180,20 +180,21 @@ public final class MixinFitReport {
 
 	/**
 	 * The ecosystem a unit's manifest declares, or null when it declares none or more than one (a universal jar, whose
-	 * running ecosystem the boot's arbitration decides): then no injector target is judged absent from a platform.
+	 * running ecosystem the boot's arbitration decides): then no injector target is judged absent from a platform. A
+	 * MinecraftForge {@code mods.toml} declares no platform: Forbric loads no MinecraftForge mod, so a Fabric jar that
+	 * also carries one is judged as the Fabric jar it runs as.
 	 */
 	static Ecosystem platformOf(Map<String, byte[]> content) {
 		List<Ecosystem> declared = new ArrayList<>();
 		if (content.containsKey("fabric.mod.json")) declared.add(Ecosystem.FABRIC);
-		if (content.containsKey("META-INF/mods.toml")) declared.add(Ecosystem.FORGE);
 		if (content.containsKey("META-INF/neoforge.mods.toml")) declared.add(Ecosystem.NEOFORGE);
 		return declared.size() == 1 ? declared.get(0) : null;
 	}
 
 	/**
 	 * The one mod a unit's manifest declares for {@code platform}, as discovery reads it, or null when it declares none
-	 * or several (a MinecraftForge toml listing two mods shares one config list between them, which the boot leaves
-	 * unowned) or the manifest cannot be read: then no injector target is judged absent from that platform's game.
+	 * or several (a toml listing two mods shares one config list between them, which the boot leaves unowned) or the
+	 * manifest cannot be read: then no injector target is judged absent from that platform's game.
 	 */
 	static DiscoveredMod modOf(Map<String, byte[]> content, Ecosystem platform, String source) {
 		if (platform == null) return null;
@@ -202,7 +203,7 @@ public final class MixinFitReport {
 				byte[] json = content.get("fabric.mod.json");
 				return json == null ? null : FabricModJsonReader.read(new ByteArrayInputStream(json), source);
 			}
-			byte[] toml = content.get(platform == Ecosystem.FORGE ? "META-INF/mods.toml" : "META-INF/neoforge.mods.toml");
+			byte[] toml = content.get("META-INF/neoforge.mods.toml");
 			if (toml == null) return null;
 			List<DiscoveredMod> mods = ForgeMetadataMapper.toDiscoveredMods(ModsTomlParser.parse(new ByteArrayInputStream(toml)),
 					"0", source, List.of(), List.of(), config -> true, platform);
