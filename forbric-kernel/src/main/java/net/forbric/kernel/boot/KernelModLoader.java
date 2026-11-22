@@ -151,6 +151,9 @@ public final class KernelModLoader {
 		// sort by dependency before they construct anything.
 		List<String> modOrder = dependencyOrder();
 		claimed = orderByDependency(claimed, modOrder);
+		// Phase 1c — the @Mod classes of ONE mod in the order NeoForge constructs them, which is not the class-name
+		// order the scanner hands back. See nativeClassOrder.
+		claimed = nativeClassOrder(claimed);
 
 		// Phase 2 — build every NeoForge mod's identity. They are PUBLISHED below, before phase 3, because a mod's constructor may ask its family's ModList about ITSELF, and against the kernel's
 		// empty ModList that is fatal to that mod (Bookshelf: "Could not find mod 'bookshelf'" from getModBus;
@@ -267,8 +270,8 @@ public final class KernelModLoader {
 			here.add(i);
 		}
 		// Each on NeoForge's own modloading-worker pool, as soon as the mods it waits for are constructed, the way
-		// ModLoader.constructMods runs them (NeoParallelDispatch); one mod's classes one after another, as
-		// FMLModContainer.constructMod constructs them. It ran on the caller's thread, one mod after another: main on a
+		// ModLoader.constructMods runs them (NeoParallelDispatch); one mod's classes one after another, in the order
+		// nativeClassOrder put them in, as FMLModContainer.constructMod constructs them. It ran on the caller's thread, one mod after another: main on a
 		// server, the render thread on a client.
 		java.util.concurrent.atomic.AtomicReferenceArray<ConstructedMod> constructed =
 				new java.util.concurrent.atomic.AtomicReferenceArray<>(claimed.size());
@@ -630,6 +633,61 @@ public final class KernelModLoader {
 		return entry != null && entry.jar().equals(jar) ? entry.mod() : null;
 	}
 
+	/** {@code -Dforbric.modClassOrder=off}: one mod's {@code @Mod} classes in class-name order again. */
+	static final String CLASS_ORDER_SWITCH = "forbric.modClassOrder";
+
+	/**
+	 * Within each mod id, its {@code @Mod} classes in the order NeoForge constructs them; every class keeps the slot of
+	 * the list it had, so the order between mods is untouched.
+	 *
+	 * <p><b>What native NeoForge does</b> (FML 11.0.16, {@code FMLJavaModLanguageProvider.loadMod}, from its bytecode):
+	 * it takes the mod file's {@code @Mod} classes naming this mod id, keeps those whose {@code dist} includes this side,
+	 * and sorts them with {@code Comparator.comparingInt(depends.size()).thenComparingInt(-getSides(dist).size())},
+	 * a stable sort over the order the scan found them in. {@code FMLModContainer} loads them into its
+	 * {@code modClasses} list in that order and {@code constructMod} constructs them one after another, in that order, in
+	 * the one task the container has. So a class that depends on fewer mods comes first, and of two that depend on as
+	 * many, the one that belongs to more sides: a mod's common class ({@code dist} not declared, so both sides) is
+	 * constructed before its {@code dist = CLIENT} class, whatever their names.
+	 *
+	 * <p>The kernel took them in the scanner's class-name order. A mod whose client class sorts first by name and asks
+	 * for the instance its common class's constructor publishes (Paraglider: {@code ParagliderClientMod} calls
+	 * {@code ParagliderMod.instance()}, which throws "Mod instance not ready yet") had its client class constructed
+	 * before the common one, on every client, and the boot stopped on it.
+	 *
+	 * <p>Ties keep the order they came in, as natively; there the scan order breaks them, here the class name does.
+	 */
+	static List<ModAnnotationScanner.ModClassInfo> nativeClassOrder(List<ModAnnotationScanner.ModClassInfo> claimed) {
+		if ("off".equalsIgnoreCase(System.getProperty(CLASS_ORDER_SWITCH, "on"))) return claimed;
+
+		Map<String, List<Integer>> slots = new LinkedHashMap<>();
+		for (int i = 0; i < claimed.size(); i++) {
+			ModAnnotationScanner.ModClassInfo info = claimed.get(i);
+			if (info == null || info.modId == null) continue;
+			slots.computeIfAbsent(info.modId, k -> new ArrayList<>()).add(i);
+		}
+		List<ModAnnotationScanner.ModClassInfo> ordered = new ArrayList<>(claimed);
+		List<String> moved = new ArrayList<>();
+		for (Map.Entry<String, List<Integer>> mod : slots.entrySet()) {
+			List<Integer> at = mod.getValue();
+			if (at.size() < 2) continue;
+			List<ModAnnotationScanner.ModClassInfo> classes = new ArrayList<>(at.size());
+			for (int i : at) classes.add(claimed.get(i));
+			List<ModAnnotationScanner.ModClassInfo> sorted = new ArrayList<>(classes);
+			// List.sort is stable, as Stream.sorted on NeoForge's ordered stream is.
+			sorted.sort(java.util.Comparator.<ModAnnotationScanner.ModClassInfo>comparingInt(info -> info.depends.size())
+					.thenComparingInt(info -> -info.sideCount()));
+			if (sorted.equals(classes)) continue;
+			for (int k = 0; k < at.size(); k++) ordered.set(at.get(k), sorted.get(k));
+			moved.add(mod.getKey() + " " + sorted.stream().map(info -> info.className).toList());
+		}
+		if (!moved.isEmpty()) {
+			ForbricLog.info("[Forbric/ModLoader] %d mod(s) have several @Mod classes, constructed in the order NeoForge "
+					+ "constructs them — fewest depends first, then the class that belongs to more sides — not in "
+					+ "class-name order (-D%s=off to go back): %s", moved.size(), CLASS_ORDER_SWITCH, moved);
+		}
+		return ordered;
+	}
+
 	/**
 	 * The claimed {@code @Mod} classes in dependency order.
 	 *
@@ -788,6 +846,8 @@ public final class KernelModLoader {
 			publishModInfos(cl, modListCls, modList, containers);
 			ForbricLog.info("[Forbric/ModLoader] published %d NeoForge mod(s) into ModList %s — mods that resolve "
 					+ "their own container (event bus, config) now find themselves", containers.size(), neo.keySet());
+			// Natively gatherAndInitializeMods fills the list and THEN hands it to ModLoader, before constructMods.
+			bindModLoaderModList(cl);
 		} catch (ClassNotFoundException absent) {
 			// NeoForge ModList not present — nothing to publish
 			Caught.expected(absent);
@@ -795,6 +855,60 @@ public final class KernelModLoader {
 			Caught.warn(t, "[Forbric/ModLoader] could not publish NeoForge ModList "
 					+ "(mods that look themselves up will fail)");
 		}
+	}
+
+	/**
+	 * Hands NeoForge's {@code ModLoader} the live {@code ModList}, the one piece of static state it keeps that the
+	 * kernel's lifecycle replaces.
+	 *
+	 * <p>{@code javap} on FML 11.0.16's {@code ModLoader}: its statics are {@code LOGGER}, {@code loadingIssues} (final,
+	 * built in {@code <clinit>}) and {@code modList}, which only {@code gatherAndInitializeMods} writes — to the
+	 * {@code ModList} it just filled, right before {@code constructMods} — and only {@code clear()} resets. The kernel
+	 * never runs {@code gatherAndInitializeMods}, so the field stayed null for the whole game. Every
+	 * {@code ModLoader} entry point that reads {@code ModList.get()} ({@code postEvent}, {@code runEventGenerator},
+	 * {@code postEventWrapContainerInModOrder}) worked; the two that read the FIELD did not:
+	 * {@code dispatchParallelTask} ({@code modList.size()} on its first instruction) and so
+	 * {@code dispatchParallelEvent}, and {@code waitForFuture}'s {@code cancelLoading(modList)}. Natively a mod may
+	 * call {@code dispatchParallelEvent} at any time after loading — AE2 posts its own parallel event from a client
+	 * reload listener — and on Forbric that NPE'd inside the first resource reload, Minecraft dropped every pack and
+	 * the client never left the loading overlay.
+	 *
+	 * <p>{@code ModList.get()} is the one instance the kernel seeds and then fills in place, so binding it here keeps
+	 * the field and {@code ModList.get()} the same object, as natively. Idempotent; a carrier without NeoForge's
+	 * {@code ModLoader} is left alone.
+	 */
+	public static void bindModLoaderModList(ClassLoader cl) {
+		try {
+			Class<?> modListCls = Class.forName(ForeignType.MOD_LIST.binary(Ecosystem.NEOFORGE), false, cl);
+			Object modList = modListCls.getMethod("get").invoke(null);
+			if (modList == null) return;
+			if (bindModList(Class.forName(MOD_LOADER, false, cl), modList)) {
+				// The wording avoids ModLoader's dispatch method names: gate-m1 asserts they never appear in a log, as the
+				// trace of a genuine FancyModLoader lifecycle running.
+				ForbricLog.debug("[Forbric/ModLoader] ModLoader.modList now names the published ModList — "
+						+ "NeoForge's parallel event and task dispatch walk it as natively");
+			}
+		} catch (ClassNotFoundException absent) {
+			// No NeoForge ModList/ModLoader on this carrier — nothing holds the field.
+			Caught.expected(absent);
+		} catch (Throwable t) {
+			Caught.warn(t, "[Forbric/ModLoader] could not hand NeoForge's ModLoader the published ModList — a mod "
+					+ "calling ModLoader.dispatchParallelEvent will NPE on ModLoader.modList");
+		}
+	}
+
+	private static final String MOD_LOADER = "net.neoforged.fml.ModLoader";
+
+	/**
+	 * The reflective half of {@link #bindModLoaderModList}: points {@code loader}'s static {@code modList} at
+	 * {@code modList}. Returns whether it changed.
+	 */
+	static boolean bindModList(Class<?> loader, Object modList) throws ReflectiveOperationException {
+		java.lang.reflect.Field field = loader.getDeclaredField("modList");
+		field.setAccessible(true);
+		if (field.get(null) == modList) return false;
+		field.set(null, modList);
+		return true;
 	}
 
 	/**

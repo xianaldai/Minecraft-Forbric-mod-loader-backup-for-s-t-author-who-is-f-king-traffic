@@ -794,6 +794,9 @@ public final class KernelLifecycle {
 				if (!side.isClient() && !RegistrationStop.stopped()) fabricFreezePoint(cl, FabricFreezePointInjector.HEAD_HOOK);
 			}
 		} finally {
+			// A server's Fabric freeze point: from here a write to a frozen built-in registry fails, as on Fabric
+			// (FabricRegistryWindow). A client's comes after its client entrypoints (onClientEntrypoints).
+			if (!side.isClient()) FabricRegistryWindow.close();
 			rootRegistry(cl, false);
 		}
 	}
@@ -840,6 +843,9 @@ public final class KernelLifecycle {
 		synchronized void runAfterDispatch() {
 			if (afterDispatchRan) return;
 			afterDispatchRan = true;
+			// Every registry's RegisterEvent has been dispatched: the block state caches held back during it are computed
+			// now, before the Fabric mains, whose own blocks have theirs computed on add as on Fabric.
+			net.forbric.kernel.util.KernelDeferredStateCaches.close(true);
 			try {
 				afterDispatch.run();
 			} catch (Throwable t) {
@@ -873,12 +879,20 @@ public final class KernelLifecycle {
 		if (!seam) publishModBusDelivery(cl);
 		int registries = ((java.util.Collection<?>) gameData.getMethod("getRegistrationOrder").invoke(null)).size();
 		registerEventsWindow = window;
+		// A block state's cache asked for inside the dispatch waits for its end, where NeoForge computes its mods' block
+		// caches (KernelDeferredStateCaches): fabric-api's add callback asked while a block's siblings were still unbound.
+		net.forbric.kernel.util.KernelDeferredStateCaches.open();
+		boolean dispatched = false;
 		try {
 			gameData.getMethod("postRegisterEvents").invoke(null);
+			dispatched = true;
 		} catch (java.lang.reflect.InvocationTargetException failed) {
 			throw failed.getCause() instanceof Exception e ? e : failed;
 		} finally {
 			registerEventsWindow = null;
+			// Already closed where the dispatch loop ended (runAfterDispatch); here when the seam never got there. After a
+			// failure NeoForge has rolled every registry back, and what was held belongs to blocks no longer registered.
+			net.forbric.kernel.util.KernelDeferredStateCaches.close(dispatched);
 		}
 		ForbricLog.info("[Forbric/Lifecycle] fired RegisterEvent in NeoForge's registration order — NeoForge's own "
 				+ "GameData.postRegisterEvents walked %d registr(ies), every mixin on it applied%s", registries,
@@ -1240,6 +1254,10 @@ public final class KernelLifecycle {
 		ForbricLog.info("[Forbric/Lifecycle] NeoForge mod-bus delivery covers %d container(s) — baseline + every "
 				+ "loaded mod (ModLoader.postEvent fans out over this list, and the Mods screen lists it)",
 				containers.size());
+		// ModLoader.dispatchParallelEvent walks ModLoader's own modList field, not ModList.get(). The publish pass binds
+		// it when there are NeoForge mods to publish; with none it returns early, and natively the field is set all
+		// the same (gatherAndInitializeMods always runs), so bind it here too.
+		KernelModLoader.bindModLoaderModList(cl);
 	}
 
 	/**
@@ -1303,7 +1321,12 @@ public final class KernelLifecycle {
 			ForbricLog.info("[Forbric/Lifecycle] posted datapack-registry declaration to %d bus(es) — %d declared "
 					+ "(%s), %d total", dataPackRegistryBuses, now.size() - before, added, now.size());
 
-			mirrorIntoFabricDynamicRegistries(cl, now.subList(before, now.size()));
+			// The whole of NeoForge's list, not only what this event added: a mod may process a NewRegistry event of its own
+			// before this one (Cold Sweat does, while mod loading runs), and natively that is a declaration like any other —
+			// but its registries were never carried into Fabric's list, which is the one worlds load with fabric-api, and
+			// the world stopped on "Missing registry: cold_sweat:world/temp_region". What Fabric already lists — vanilla's
+			// own registries, a Fabric mod's — is skipped by key.
+			mirrorIntoFabricDynamicRegistries(cl, now);
 			// Before the Fabric mirror: that one would also carry these across, but as bare (key, codec) copies.
 			reconcileLoaderRegistriesIntoNeoForge(cl, hooksCls);
 			mirrorFabricDynamicRegistriesIntoNeoForge(cl, eventCls, hooksCls);
@@ -1440,24 +1463,59 @@ public final class KernelLifecycle {
 							throw new IllegalStateException(e);
 						}
 					}, copy::add, null);
-			if (added.isEmpty()) return;
-			try {
-				synced.addAll(added);
-			} catch (UnsupportedOperationException unmodifiable) {
-				Caught.expected(unmodifiable);
-				syncedField.setAccessible(true);
-				syncedField.set(null, copy);
+			if (!added.isEmpty()) {
+				try {
+					synced.addAll(added);
+				} catch (UnsupportedOperationException unmodifiable) {
+					Caught.expected(unmodifiable);
+					syncedField.setAccessible(true);
+					syncedField.set(null, copy);
+				}
+				java.util.List<String> keys = new java.util.ArrayList<>();
+				for (Object data : added) keys.add(String.valueOf(key.invoke(data)));
+				ForbricLog.info("[Forbric/Lifecycle] put %d NeoForge-synced datapack registr(ies) back into "
+						+ "RegistryDataLoader.SYNCHRONIZED_REGISTRIES — fabric-api had replaced that live view with a copy "
+						+ "before NeoForge's declaration, so the server would not send them and the client would not build "
+						+ "them: %s", keys.size(), keys);
 			}
-			java.util.List<String> keys = new java.util.ArrayList<>();
-			for (Object data : added) keys.add(String.valueOf(key.invoke(data)));
-			ForbricLog.info("[Forbric/Lifecycle] put %d NeoForge-synced datapack registr(ies) back into "
-					+ "RegistryDataLoader.SYNCHRONIZED_REGISTRIES — fabric-api had replaced that live view with a copy "
-					+ "before NeoForge's declaration, so the server would not send them and the client would not build "
-					+ "them: %s", keys.size(), keys);
+			// Elements alone are half of a synced registry: its tags travel only for a networkable one, and the list the
+			// kernel just mended is not where that is asked.
+			restoreNetworkableRegistries(cl, (java.util.List<?>) syncedField.get(null), key);
 		} catch (Throwable t) {
 			Caught.warn(t, "[Forbric/Lifecycle] could not check NeoForge's synced datapack registries against "
 					+ "RegistryDataLoader.SYNCHRONIZED_REGISTRIES — a NeoForge mod's synced registry may be missing on "
 					+ "the client");
+		}
+	}
+
+	/**
+	 * The other half of {@link #reconcileSynchronizedRegistries}: every registry in the synced list is networkable too,
+	 * so its tags travel with its elements. fabric-api's {@code addSyncedRegistry} had also replaced
+	 * {@code RegistrySynchronization.NETWORKABLE_REGISTRIES} with a copy lacking NeoForge's synced registries; their
+	 * elements were sent and their tags were not, and an element naming such a tag left it unbound on the client — the
+	 * join ended in "Network Protocol Error" ({@link DatapackRegistryDeclaration#restoreNetworkable} says why). Read
+	 * here, after the declaration: if this read is what initialises {@code RegistrySynchronization}, its initialiser
+	 * derives the set from the complete list, as it does natively.
+	 */
+	private static void restoreNetworkableRegistries(ClassLoader cl, java.util.List<?> synced, Method key) {
+		try {
+			Class<?> syncCls = Class.forName("net.minecraft.core.RegistrySynchronization", true, cl);
+			java.util.List<Object> added = DatapackRegistryDeclaration.restoreNetworkable(
+					syncCls.getDeclaredField("NETWORKABLE_REGISTRIES"), synced, data -> {
+						try {
+							return key.invoke(data);
+						} catch (ReflectiveOperationException e) {
+							throw new IllegalStateException(e);
+						}
+					});
+			if (added.isEmpty()) return;
+			ForbricLog.info("[Forbric/Lifecycle] made %d synced datapack registr(ies) networkable again — fabric-api had "
+					+ "replaced RegistrySynchronization's networkable set with a copy before NeoForge's declaration, so "
+					+ "their tags would not travel with their elements and a tag an element names would stay unbound on "
+					+ "the client: %s", added.size(), added);
+		} catch (Throwable t) {
+			Caught.warn(t, "[Forbric/Lifecycle] could not check RegistrySynchronization's networkable set against the "
+					+ "synced datapack registries — a synced registry's tags may not reach the client");
 		}
 	}
 
@@ -1642,7 +1700,14 @@ public final class KernelLifecycle {
 				// registry in BOTH synced sets, and the client's configuration-phase collector then reads it twice
 				// and dies on "Duplicate key ResourceKey[minecraft:root / bagus_lib:dialog]" inside
 				// ImmutableRegistryAccess — a join failure reported only as "Network Protocol Error".
-				register.invoke(null, registryKey, elementCodec.invoke(data));
+				try {
+					register.invoke(null, registryKey, elementCodec.invoke(data));
+				} catch (java.lang.reflect.InvocationTargetException refused) {
+					// One registry Fabric refuses (a vanilla key it does not list, say) costs that one, not every one after it.
+					Caught.warn(refused.getCause(), "[Forbric/Lifecycle] Fabric's DynamicRegistries refused %s — it may be "
+							+ "missing at world load", registryKey);
+					continue;
+				}
 				mirrored.add(String.valueOf(registryKey));
 			}
 			if (!mirrored.isEmpty()) {
@@ -2448,6 +2513,9 @@ public final class KernelLifecycle {
 			// BuiltInRegistries.freeze() that FabricFreezeHookMixinAdapter moved run around the freeze that closes
 			// this window — the HEAD half while it is still open, the TAIL half once it is frozen. Not after a stage
 			// that threw: Fabric's startClient throws before its freeze, and nothing of a mod runs after it.
+			// A client's Fabric freeze point either way: from here a write to a frozen built-in registry fails, as on
+			// Fabric (FabricRegistryWindow); one a too-early write reopened is frozen again just below.
+			FabricRegistryWindow.close();
 			if (!RegistrationStop.stopped()) {
 				fabricFreezePoint(cl, FabricFreezePointInjector.HEAD_HOOK);
 				if (reopened) closeClientEntrypointWindow(cl);
